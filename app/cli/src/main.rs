@@ -15,25 +15,14 @@ use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
 use tta_launcher::{backend, launch, resolve, socket};
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum Backend {
     #[cfg(feature = "native")]
+    #[default]
     Native,
     #[cfg(feature = "cli")]
+    #[cfg_attr(not(feature = "native"), default)]
     Cli,
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        #[cfg(feature = "native")]
-        {
-            Self::Native
-        }
-        #[cfg(all(not(feature = "native"), feature = "cli"))]
-        {
-            Self::Cli
-        }
-    }
 }
 
 #[derive(Debug, Parser)]
