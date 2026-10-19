@@ -512,6 +512,11 @@ impl Fixture {
     }
 
     fn environment(&self, command: &mut Command) {
+        for (key, _) in std::env::vars_os() {
+            if key.as_encoded_bytes().starts_with(b"TTA_") || key == "PROJECTS_DIR" {
+                command.env_remove(key);
+            }
+        }
         command
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
@@ -523,6 +528,11 @@ impl Fixture {
     }
 
     fn terminal_environment(&self, command: &mut CommandBuilder) {
+        for (key, _) in std::env::vars_os() {
+            if key.as_encoded_bytes().starts_with(b"TTA_") || key == "PROJECTS_DIR" {
+                command.env_remove(key);
+            }
+        }
         command.env("TMUX", "");
         command.env("TMUX_PANE", "");
         command.env("TERM", "xterm-256color");

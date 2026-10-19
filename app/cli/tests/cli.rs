@@ -6,6 +6,11 @@ use std::process::Command;
 
 fn tta() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tta"));
+    for (key, _) in std::env::vars_os() {
+        if key.as_encoded_bytes().starts_with(b"TTA_") || key == "PROJECTS_DIR" {
+            command.env_remove(key);
+        }
+    }
     command.env_remove("TMUX").env_remove("TMUX_PANE");
     command
 }
@@ -150,4 +155,211 @@ fn cli_backend_can_emit_a_cold_server_plan_without_starting_it() {
     assert!(printed.stderr.is_empty());
     assert!(String::from_utf8_lossy(&printed.stdout).contains("new-session"));
     assert!(!socket.exists());
+}
+
+fn assert_plan(command: &mut Command) -> String {
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn environment_roots_layer_without_changing_their_path_meaning() {
+    let temp = tempfile::tempdir().unwrap();
+    for root in ["src", "legacy", "env", "cli"] {
+        std::fs::create_dir_all(temp.path().join(root).join("project")).unwrap();
+    }
+    let cwd = temp.path().join("cwd");
+    std::fs::create_dir(&cwd).unwrap();
+    let socket = temp.path().join("socket");
+    for (tta_root, projects, cli_root, expected) in [
+        ("", "", None, "src"),
+        ("", "legacy", None, "legacy"),
+        ("../env", "legacy", None, "env"),
+        ("../env", "legacy", Some("../cli"), "cli"),
+    ] {
+        let mut command = tta();
+        command
+            .current_dir(&cwd)
+            .env("HOME", temp.path())
+            .env("TTA_ROOT", tta_root)
+            .env("PROJECTS_DIR", projects)
+            .env("TTA_SOCKET_PATH", &socket)
+            .args(["--print-shell", "project"]);
+        if let Some(root) = cli_root {
+            command.args(["--root", root]);
+        }
+        let source = assert_plan(&mut command);
+        assert!(source.contains(&temp.path().join(expected).join("project").display().to_string()), "{source}");
+        assert!(!socket.exists());
+    }
+    // Absolute legacy roots do not need HOME; literal TTA_ROOT is cwd-relative.
+    for key in ["PROJECTS_DIR", "TTA_ROOT"] {
+        let source = assert_plan(
+            tta()
+                .env_remove("HOME")
+                .env(key, temp.path().join("legacy"))
+                .env("TTA_SOCKET_PATH", &socket)
+                .args(["--print-shell", "project"]),
+        );
+        assert!(source.contains("legacy/project"));
+    }
+    let output = tta()
+        .env_remove("HOME")
+        .env("PROJECTS_DIR", "legacy")
+        .env("TTA_SOCKET_PATH", socket)
+        .args(["--print-shell", "project"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot determine the project root"));
+}
+
+#[test]
+fn endpoint_cli_selectors_override_the_entire_environment_family() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("project")).unwrap();
+    let mut base = tta();
+    base.current_dir(temp.path())
+        .env("TTA_ROOT", ".")
+        .env("TTA_SOCKET_NAME", "env-label")
+        .env("TTA_SOCKET_PATH", "env-socket")
+        .args(["--print-shell", "project"]);
+    let conflict = base.output().unwrap();
+    assert!(!conflict.status.success());
+    assert!(conflict.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("TTA_SOCKET_NAME and TTA_SOCKET_PATH conflict"));
+    let source = assert_plan(base.args(["--socket-path", "cli-socket"]));
+    assert!(source.contains(&format!("'-S' '{}'", temp.path().join("cli-socket").display())));
+    assert!(!source.contains("env-label"));
+    let label = format!("tta-env-test-{}", std::process::id());
+    let source = assert_plan(
+        tta()
+            .env("TTA_ROOT", temp.path())
+            .env("TTA_SOCKET_PATH", "ignored")
+            .args(["--socket-name", &label, "--print-shell", "project"]),
+    );
+    assert!(source.contains(&format!("'-L' '{label}'")), "{source}");
+    assert!(!source.contains("ignored"));
+    assert!(!temp.path().join("cli-socket").exists());
+}
+
+#[test]
+fn environment_validation_and_explicit_overrides_are_deliberate() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("project")).unwrap();
+    let socket = temp.path().join("socket");
+    for (key, value) in [("TTA_BACKEND", "unsupported"), ("TTA_TRACE", "yes")] {
+        let output = tta().env(key, value).args(["--print-shell", "project"]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(key));
+    }
+    let backend = if cfg!(feature = "native") { "native" } else { "cli" };
+    let mut empty = tta();
+    for key in ["TTA_BACKEND", "TTA_SOCKET_NAME", "TTA_SOCKET_PATH", "TTA_TMUX", "TTA_TMUX_CONFIG", "TTA_TRACE"] {
+        empty.env(key, "");
+    }
+    let source = assert_plan(
+        empty
+            .env("TTA_ROOT", temp.path())
+            .arg("--socket-path")
+            .arg(&socket)
+            .args(["--print-shell", "project"]),
+    );
+    assert!(source.contains("'tmux'"));
+    let source = assert_plan(
+        tta()
+            .env("TTA_BACKEND", "unsupported")
+            .env("TTA_TRACE", "invalid-but-overridden")
+            .env("TTA_ROOT", temp.path())
+            .env("TTA_SOCKET_PATH", &socket)
+            .args(["--backend", backend, "--trace=false", "--print-shell", "project"]),
+    );
+    assert!(source.contains("new-session"));
+    for trace in ["true", "1", "false", "0", ""] {
+        let output = tta()
+            .env("TTA_TRACE", trace)
+            .env("TTA_BACKEND", backend)
+            .env("TTA_ROOT", temp.path())
+            .env("TTA_SOCKET_PATH", &socket)
+            .args(["--print-shell", "project"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if trace == "true" || trace == "1" {
+            assert!(stderr.contains("lookup.start"), "{stderr}");
+        } else {
+            assert!(stderr.is_empty(), "{stderr}");
+        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("lookup.start"));
+    }
+    #[cfg(not(all(feature = "native", feature = "cli")))]
+    {
+        let unavailable = if cfg!(feature = "native") { "cli" } else { "native" };
+        let output = tta().env("TTA_BACKEND", unavailable).arg("project").output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("TTA_BACKEND"));
+    }
+}
+
+#[test]
+fn environment_client_paths_are_literal_and_cli_options_win() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("project")).unwrap();
+    let backend = if cfg!(feature = "native") { "native" } else { "cli" };
+    // CLI lookup needs a real executable; native lookup must not invoke this path.
+    let executable = if cfg!(feature = "native") { "./missing ' client" } else { "tmux" };
+    let mut command = tta();
+    command
+        .current_dir(temp.path())
+        .env("TTA_ROOT", ".")
+        .env("TTA_SOCKET_PATH", "socket")
+        .env("TTA_TMUX", executable)
+        .env("TTA_TMUX_CONFIG", "./config ' file")
+        .args(["--backend", backend, "--print-shell", "project"]);
+    let source = assert_plan(&mut command);
+    assert!(source.contains("config "), "{source}");
+    assert!(source.contains("'\\''"), "{source}");
+    assert!(!temp.path().join("socket").exists());
+    let source = assert_plan(command.args(["--tmux", "tmux", "--tmux-config", "/dev/null"]));
+    assert!(source.contains("'-f' '/dev/null'"), "{source}");
+    assert!(!source.contains("config "));
+}
+
+#[test]
+fn existing_sessions_do_not_require_home_or_a_usable_environment_root() {
+    struct Server(std::path::PathBuf);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = Command::new("tmux").arg("-S").arg(&self.0).arg("kill-server").status();
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let server = Server(temp.path().join("socket"));
+    let started = Command::new("tmux")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .args(["-f", "/dev/null", "-S"])
+        .arg(&server.0)
+        .args(["new-session", "-d", "-s", "existing", "sleep", "60"])
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
+    for root in [None, Some("/tta-no-such-project-root")] {
+        let mut command = tta();
+        command
+            .env_remove("HOME")
+            .env("PROJECTS_DIR", "relative-needs-home")
+            .env("TTA_SOCKET_PATH", &server.0)
+            .args(["--print-shell", "existing"]);
+        if let Some(root) = root {
+            command.env("TTA_ROOT", root);
+        }
+        let source = assert_plan(&mut command);
+        assert!(source.contains("attach-session"), "{source}");
+        assert!(!source.contains("new-session"));
+    }
 }

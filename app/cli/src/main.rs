@@ -15,6 +15,8 @@ use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
 use tta_launcher::{backend, launch, resolve, socket};
 
+mod environment;
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum Backend {
     #[cfg(feature = "native")]
@@ -34,7 +36,7 @@ enum Backend {
 struct Args {
     /// Session or immediate project directory name fragment (not a glob)
     argument: String,
-    /// Project root [default: $HOME/src]
+    /// Project root [env: TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
     #[arg(long)]
     root: Option<PathBuf>,
     /// Override the name of a new session (does not change session matching)
@@ -46,29 +48,29 @@ struct Args {
     /// Include exec in shell output, explicitly replacing the evaluating shell
     #[arg(long, requires = "print_shell")]
     exec_shell: bool,
-    /// Session lookup implementation (native never invokes a client process)
-    #[arg(long, value_enum, default_value_t)]
-    backend: Backend,
-    /// Select a tmux socket label, as with tmux -L
+    /// Lookup backend [env: TTA_BACKEND; default: native if compiled, otherwise cli]
+    #[arg(long, value_enum)]
+    backend: Option<Backend>,
+    /// Select a tmux socket label, as with tmux -L [env: TTA_SOCKET_NAME]
     #[arg(long, conflicts_with = "socket_path")]
     socket_name: Option<OsString>,
-    /// Select a tmux socket path, as with tmux -S
+    /// Select a tmux socket path, as with tmux -S [env: TTA_SOCKET_PATH]
     #[arg(long, conflicts_with = "socket_name")]
     socket_path: Option<PathBuf>,
-    /// Executable for the final tmux client (and CLI lookup, if selected)
-    #[arg(long, default_value = "tmux")]
-    tmux: OsString,
-    /// tmux startup configuration (-f); mainly useful with /dev/null in tests
+    /// Final client executable, also used by CLI lookup [env: TTA_TMUX; default: tmux]
+    #[arg(long)]
+    tmux: Option<OsString>,
+    /// tmux startup configuration (-f) [env: TTA_TMUX_CONFIG]
     #[arg(long)]
     tmux_config: Option<PathBuf>,
-    /// Write structured runtime events to stderr (never shell-output stdout)
-    #[arg(long)]
-    trace: bool,
+    /// Structured events on stderr [env: TTA_TRACE; --trace=false disables]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    trace: Option<bool>,
 }
 
 fn main() -> Result<ExitCode> {
-    let args = Args::parse();
-    if args.trace {
+    let args = environment::configure(Args::parse())?;
+    if args.trace.unwrap_or(false) {
         tracing_subscriber::fmt()
             .json()
             .with_writer(std::io::stderr)
@@ -85,10 +87,12 @@ fn main() -> Result<ExitCode> {
 
 fn run(mut args: Args) -> Result<ExitCode> {
     let context = socket::Context::from_environment()?;
+    let backend = args.backend.unwrap_or_default();
+    let mut tmux = args.tmux.unwrap_or_else(|| OsString::from("tmux"));
     // Explicit relative executable/config paths belong to the invocation cwd,
     // not the project cwd used later by the launch plan. Bare names keep PATH.
-    if args.tmux.as_encoded_bytes().contains(&b'/') {
-        args.tmux = context.cwd.join(&args.tmux).into_os_string();
+    if tmux.as_encoded_bytes().contains(&b'/') {
+        tmux = context.cwd.join(&tmux).into_os_string();
     }
     args.tmux_config = args.tmux_config.map(|path| context.cwd.join(path));
     let selection = match (args.socket_name, args.socket_path) {
@@ -98,29 +102,23 @@ fn run(mut args: Args) -> Result<ExitCode> {
     };
     let socket = context.resolve(&selection)?;
     let mode = context.client_mode(&socket.path)?;
-    tracing::info!(event = "lookup.start", backend = ?args.backend, socket = ?socket.path, argument = %args.argument);
-    let lookup: Box<dyn backend::SessionLookup> = match args.backend {
+    tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument = %args.argument);
+    let lookup: Box<dyn backend::SessionLookup> = match backend {
         #[cfg(feature = "native")]
         Backend::Native => Box::new(backend::Native {
             endpoint: tmax::endpoint::Tmux::new().socket_path(&socket.path),
         }),
         #[cfg(feature = "cli")]
         Backend::Cli => Box::new(backend::Cli {
-            program: args.tmux.clone(),
+            program: tmux.clone(),
             socket: socket.path.clone(),
         }),
     };
-    // No HOME is necessary when an existing session matches or --root is given.
-    // Resolve checks sessions before trying this root.
-    let root = args.root.or_else(|| {
-        std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join("src"))
-    });
+    // The configured root is inspected only after session matching fails.
     let resolved = resolve()
         .lookup(lookup.as_ref())
         .argument(&args.argument)
-        .maybe_root(root.as_deref())
+        .maybe_root(args.root.as_deref())
         .maybe_session_name(args.session_name.as_deref())
         .call()?;
     match &resolved {
@@ -135,7 +133,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .selection(&resolved)
         .socket(&socket)
         .client_mode(mode)
-        .program(&args.tmux)
+        .program(&tmux)
         .maybe_config(args.tmux_config.as_deref())
         .call()?;
     let operation = match (&resolved, mode) {
@@ -152,7 +150,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     // Reuse the caller's terminal. Successful exec never returns to Rust.
-    tracing::info!(event = "handoff", program = ?args.tmux, operation);
+    tracing::info!(event = "handoff", program = ?tmux, operation);
     let status = expression.execute(Handoff::Exec).context("tmux client handoff failed")?;
     Ok(match status {
         Some(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
