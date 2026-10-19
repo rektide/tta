@@ -9,11 +9,13 @@ date: 2026-10-19
 updated: { at: 2026-10-19, by: "model:openai/gpt-6-astra#high" }
 sources:
   - resource: opencode://ses_eaa17ad2effeEEkcV1BqiWcrUp
-    title: Launcher commission, additive runtime verification and tracing, implementation review, and outcome-first README diagrams and tables
+    title: Launcher commission, additive runtime verification and tracing, implementation review, outcome-first README diagrams and tables, and dtachment precedent
   - resource: opencode://ses_eaa172275ffe5q1qIrtAKpAG3q
     title: Implement and exercise the Rust launcher, command model, interchangeable lookup, PTY verification driver, and tracing contracts
   - resource: /design/launcher/research0.gpt6a.md
     title: Independent architecture assessment and integrated relative-path and guarded-eval recommendations
+  - resource: file:///home/rektide/src/dtachment/dta
+    title: Inspected predecessor's project selection, per-directory dtach socket, editor startup and attachment workflow
   - resource: file:///home/rektide/src/tmux-interface-control/README.md
     title: Native tmax client capability, feature, platform and development-dependency contracts
   - resource: file:///home/rektide/src/tmux-interface-control/src/endpoint/mod.rs
@@ -26,6 +28,7 @@ sources:
 
 Attach to a matching tmux session. If none matches, find a matching directory
 under `~/src`, create a session named after that directory, and enter it.
+The workflow builds on [dtachment's `dta` precedent](#precedent-dtachment).
 
 ## Action matrix
 
@@ -74,6 +77,24 @@ before launch. `--print-shell` emits the selected action rather than executing i
 The [matching tables](#matching-and-failure-behavior) cover inputs and errors;
 [execution failures](#creation-and-execution-failures) explain what can remain
 after a command starts.
+
+## Precedent: dtachment
+
+[`dtachment`](https://github.com/jauntywunderkind/dtachment), checked out at
+`~/src/dtachment`, is the original project-entry workflow. Its
+[`dta` shell function](file:///home/rektide/src/dtachment/dta) selects a directory
+under `~/${PROJECTS_DIR:-src}`, tries the supplied name before appending a `*`
+glob, and attaches through that directory's `.dtach.sock`. When creating a new
+instance, it starts `${EDITOR:-vim}` in the project, optionally supplies files
+discovered by `fd` and a Neovim listen socket, restores the caller's directory,
+then attaches.
+
+`tta` carries forward **find a project, resume its workspace, or create one and
+enter it**. Its tmux adaptation searches existing session names first, uses
+explicit exact/unique-substring matching, and uses tmux's configured startup
+command or shell. The predecessor's editor startup and per-directory
+sockets explain the lineage; [the action matrix](#action-matrix) describes the
+current tmux behavior.
 
 ## Build and install
 
