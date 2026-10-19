@@ -1,0 +1,27 @@
+//! Session discovery is replaceable; matching and launch planning are shared.
+#![forbid(unsafe_code)]
+
+pub mod backend;
+mod matching;
+mod plan;
+mod resolve;
+pub mod socket;
+
+pub use plan::{ClientMode, PlanError, launch};
+pub use resolve::{ResolveError, Selection, resolve};
+pub use tmax::operation::SessionId;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Session {
+    pub id: SessionId,
+    pub name: String,
+}
+
+impl From<tmax::query::Session> for Session {
+    fn from(session: tmax::query::Session) -> Self {
+        Self {
+            id: session.session_id,
+            name: session.name,
+        }
+    }
+}

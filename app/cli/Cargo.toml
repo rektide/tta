@@ -1,0 +1,23 @@
+[package]
+name = "tta"
+description = "Attach to a matching tmux session, or start one in a matching project"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[features]
+default = ["native"]
+native = ["tta-launcher/native"]
+cli = ["tta-launcher/cli"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tmax.workspace = true
+tta-command.workspace = true
+tta-launcher.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

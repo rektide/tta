@@ -1,0 +1,22 @@
+[package]
+name = "tta-launcher"
+description = "Resolve tmux sessions and project directories into executable launch plans"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["native"]
+native = []
+cli = []
+
+[dependencies]
+bon.workspace = true
+rustix.workspace = true
+thiserror.workspace = true
+tmax.workspace = true
+tta-command.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

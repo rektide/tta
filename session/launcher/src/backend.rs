@@ -1,0 +1,144 @@
+use std::io;
+
+use crate::Session;
+
+/// Backends acquire session facts only. Planning/creation never calls a backend
+/// mutation, and an absent server is represented by an empty inventory.
+pub trait SessionLookup {
+    fn sessions(&self) -> Result<Vec<Session>, LookupError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LookupError {
+    #[error(transparent)]
+    Native(#[from] tmax::error::OperationError),
+    #[error("cannot run tmux session lookup: {0}")]
+    Io(#[from] io::Error),
+    #[error("tmux session lookup exited with {status}: {stderr}")]
+    Command { status: std::process::ExitStatus, stderr: String },
+    #[error("tmux session output is not UTF-8: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error(transparent)]
+    Build(#[from] tmax::operation::BuildError),
+    #[error(transparent)]
+    Decode(#[from] tmax::operation::DecodeError),
+}
+
+#[cfg(feature = "native")]
+#[derive(Clone, Debug)]
+pub struct Native {
+    pub endpoint: tmax::endpoint::Tmux,
+}
+
+#[cfg(feature = "native")]
+impl SessionLookup for Native {
+    fn sessions(&self) -> Result<Vec<Session>, LookupError> {
+        match self.endpoint.query(tmax::query::Sessions::new()) {
+            Ok(sessions) => Ok(sessions.into_iter().map(Session::from).collect()),
+            Err(error) if absent_server(&error) => Ok(Vec::new()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+#[cfg(any(feature = "native", test))]
+fn absent_server(error: &tmax::error::OperationError) -> bool {
+    use tmax::error::OperationError;
+    match error {
+        OperationError::ServerConnection { source, .. } => matches!(source.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused),
+        // A deliberately kept-alive server may have no sessions.
+        OperationError::Rejected(diagnostic) => {
+            diagnostic.return_code == Some(1) && !diagnostic.truncated && diagnostic.body.is_empty() && diagnostic.stderr == b"no sessions\n"
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "cli")]
+#[derive(Clone, Debug)]
+pub struct Cli {
+    pub program: std::ffi::OsString,
+    pub socket: std::path::PathBuf,
+}
+
+#[cfg(feature = "cli")]
+impl SessionLookup for Cli {
+    fn sessions(&self) -> Result<Vec<Session>, LookupError> {
+        use tmax::operation::{ReplyDecoder, TypedOperation};
+        let query = tmax::query::Sessions::new();
+        let output = std::process::Command::new(&self.program)
+            .arg("-S")
+            .arg(&self.socket)
+            .args(query.invocation()?.argv()?)
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            if output.status.code() == Some(1) && output.stdout.is_empty() && cli_absent(&stderr, &self.socket) {
+                return Ok(Vec::new());
+            }
+            return Err(LookupError::Command { status: output.status, stderr });
+        }
+        let text = std::str::from_utf8(&output.stdout)?;
+        let mut decoder = query.decoder();
+        let mut rows = Vec::new();
+        if !text.is_empty() {
+            for line in text.strip_suffix('\n').unwrap_or(text).split('\n') {
+                if let Some(row) = decoder.push(line)? {
+                    rows.push(row);
+                }
+            }
+        }
+        decoder.finish()?;
+        Ok(tmax::query::Sessions::collect(rows)?.into_iter().map(Session::from).collect())
+    }
+}
+
+#[cfg(any(feature = "cli", test))]
+fn cli_absent(stderr: &str, socket: &std::path::Path) -> bool {
+    // tmux's CLI exposes errno only as a diagnostic. Match complete C-locale
+    // messages for this exact endpoint, never a loose "connect" substring.
+    let socket = socket.to_string_lossy();
+    stderr == "no sessions\n"
+        || stderr == format!("no server running on {socket}\n")
+        || stderr == format!("error connecting to {socket} (No such file or directory)\n")
+        || stderr == format!("error connecting to {socket} (Connection refused)\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_missing_or_refused_socket_connections_are_empty() {
+        for kind in [
+            io::ErrorKind::NotFound,
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::TimedOut,
+        ] {
+            let error = tmax::error::OperationError::ServerConnection {
+                socket_path: "/private/tmux".into(),
+                source: io::Error::from(kind),
+            };
+            assert_eq!(
+                absent_server(&error),
+                matches!(kind, io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused)
+            );
+        }
+        assert!(!absent_server(&tmax::error::OperationError::Io(io::Error::from(io::ErrorKind::NotFound))));
+        assert!(!absent_server(&tmax::error::OperationError::Engine("bad protocol".to_owned())));
+    }
+
+    #[test]
+    fn cli_absence_does_not_swallow_permission_protocol_or_other_endpoints() {
+        let path = std::path::Path::new("/private/tmux");
+        assert!(cli_absent("error connecting to /private/tmux (No such file or directory)\n", path));
+        assert!(cli_absent("no server running on /private/tmux\n", path));
+        assert!(!cli_absent("error connecting to /private/tmux (Permission denied)\n", path));
+        assert!(!cli_absent("protocol version mismatch\n", path));
+        assert!(!cli_absent("no server running on /other\n", path));
+        assert!(!cli_absent("no server running on /private/tmux\nextra\n", path));
+    }
+}
