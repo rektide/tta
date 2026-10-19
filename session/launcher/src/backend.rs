@@ -67,6 +67,9 @@ impl SessionLookup for Cli {
         use tmax::operation::{ReplyDecoder, TypedOperation};
         let query = tmax::query::Sessions::new();
         let output = std::process::Command::new(&self.program)
+            // Match native's explicit CLIENT_UTF8 even with C-locale errors.
+            // Without -u, tmux sanitizes the typed schema's tab delimiters.
+            .arg("-u")
             .arg("-S")
             .arg(&self.socket)
             .args(query.invocation()?.argv()?)
