@@ -101,7 +101,8 @@ fn cold_and_stale_servers_are_empty_without_starting_a_server() {
 fn native_and_cli_decode_the_same_hostile_names() {
     let mut server = Server::cold();
     server.start();
-    let name = "quote' space %25 #[x] #{session_name};";
+    let marker = server.directory.path().join("job-marker");
+    let name = format!("quote' space %25 #[x] #{{session_name}} #(touch {});", marker.display());
     let format_name = name.replace('#', "#{a:35}");
     // tmax's argv adapter also protects tmux's trailing-semicolon command parser.
     let invocation = tmax::operation::Invocation::new("new-session")
@@ -116,6 +117,7 @@ fn native_and_cli_decode_the_same_hostile_names() {
     if inventories.len() > 1 {
         assert_eq!(inventories[0], inventories[1]);
     }
+    assert!(!marker.exists(), "a literal tmux format operand executed a shell job");
 }
 
 #[test]

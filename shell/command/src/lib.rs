@@ -1,4 +1,14 @@
 //! Small, shell-independent expressions. Arguments are values, never shell source.
+//!
+//! ```
+//! use tta_command::{Command, Expression, Handoff, Word};
+//! let expression = Expression::from(Command::builder()
+//!     .program(Word::new("printf")?)
+//!     .args(vec![Word::new("hello world")?])
+//!     .build());
+//! assert_eq!(expression.shell(Handoff::Run)?, "'printf' 'hello world'");
+//! # Ok::<(), tta_command::Error>(())
+//! ```
 #![forbid(unsafe_code)]
 
 use std::ffi::{OsStr, OsString};

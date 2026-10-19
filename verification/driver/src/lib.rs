@@ -1,5 +1,15 @@
 //! Runtime acceptance, shared by the command and integration tests. Every run
 //! owns a private socket and project fixture; the user's server is never queried.
+//!
+//! ```no_run
+//! use tta_verify::{Backend, Config, Mode, Scenario, exercise};
+//! let config = Config::builder()
+//!     .tta("target/debug/tta".into())
+//!     .backend(Backend::Native)
+//!     .build();
+//! let report = exercise(&config, Mode::Direct, Scenario::New);
+//! assert!(report.success, "{report:#?}");
+//! ```
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
@@ -14,6 +24,7 @@ use bon::Builder;
 use clap::ValueEnum;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
+use tta_command::{Command as PlannedCommand, Handoff, Word};
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -51,6 +62,9 @@ pub enum Scenario {
 pub struct Config {
     pub tta: PathBuf,
     pub backend: Backend,
+    /// Invoke tta from a real pane beneath an already attached client.
+    #[builder(default)]
+    pub inside: bool,
     /// Each external query and lifecycle phase is separately bounded.
     #[builder(default = Duration::from_secs(10))]
     pub timeout: Duration,
@@ -88,12 +102,15 @@ pub struct Report {
     pub backend: Backend,
     pub mode: Mode,
     pub scenario: Scenario,
+    pub inside: bool,
     pub success: bool,
     pub failure: Option<String>,
     pub socket: PathBuf,
     pub project: PathBuf,
     pub events: Vec<Event>,
     pub initial: Option<State>,
+    pub origin_before: Option<State>,
+    pub origin_after: Option<State>,
     pub attached: Option<State>,
     pub detached: Option<State>,
     pub emission: Option<ProcessOutput>,
@@ -102,6 +119,7 @@ pub struct Report {
     pub transcript: String,
     pub omitted_transcript_bytes: usize,
     pub trace_events: Vec<serde_json::Value>,
+    pub inside_trace: Option<String>,
     pub cleanup: Option<ProcessOutput>,
 }
 
@@ -113,12 +131,15 @@ pub fn exercise(config: &Config, mode: Mode, scenario: Scenario) -> Report {
         backend: config.backend,
         mode,
         scenario,
+        inside: config.inside,
         success: false,
         failure: None,
         socket: PathBuf::new(),
         project: PathBuf::new(),
         events: Vec::new(),
         initial: None,
+        origin_before: None,
+        origin_after: None,
         attached: None,
         detached: None,
         emission: None,
@@ -127,11 +148,12 @@ pub fn exercise(config: &Config, mode: Mode, scenario: Scenario) -> Report {
         transcript: String::new(),
         omitted_transcript_bytes: 0,
         trace_events: Vec::new(),
+        inside_trace: None,
         cleanup: None,
     };
     let mut terminal = None;
     let fixture = Fixture::new(config.timeout);
-    let result = match &fixture {
+    let mut result = match &fixture {
         Ok(fixture) => {
             report.socket = fixture.socket.clone();
             report.project = fixture.project.clone();
@@ -157,28 +179,45 @@ pub fn exercise(config: &Config, mode: Mode, scenario: Scenario) -> Report {
         report.omitted_transcript_bytes = capture.omitted;
         report.terminal_exit = terminal.exit;
     }
-    let source = report.emission.as_ref().map(|output| output.stderr.as_str()).unwrap_or(&report.transcript);
+    if config.inside
+        && let Ok(fixture) = &fixture
+    {
+        match read_text(&fixture.directory.path().join("inside-trace.jsonl")) {
+            Ok(trace) => report.inside_trace = Some(trace),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if result.is_ok() => result = Err(error.into()),
+            Err(error) => report.events.push(Event {
+                elapsed_ms: start.elapsed().as_millis(),
+                event: format!("read inside trace: {error}"),
+            }),
+        }
+    }
+    let source = report
+        .inside_trace
+        .as_deref()
+        .or_else(|| report.emission.as_ref().map(|output| output.stderr.as_str()))
+        .unwrap_or(&report.transcript);
     report.trace_events = source.lines().filter_map(|line| serde_json::from_str(line.trim()).ok()).collect();
     if let Err(error) = result {
         report.failure = Some(format!("{error:#}"));
     } else if let Err(error) = check_trace(&report) {
         report.failure = Some(format!("{error:#}"));
     }
-    if let Ok(fixture) = &fixture {
-        if fixture.socket.exists() {
-            match fixture.tmux(&["kill-server"]) {
-                Ok(cleanup) => {
-                    if !cleanup.success && report.failure.is_none() {
-                        report.failure = Some(format!("owned server cleanup failed: {cleanup:?}"));
-                    }
-                    report.cleanup = Some(cleanup);
+    if let Ok(fixture) = &fixture
+        && fixture.socket.exists()
+    {
+        match fixture.tmux(&["kill-server"]) {
+            Ok(cleanup) => {
+                if !cleanup.success && report.failure.is_none() {
+                    report.failure = Some(format!("owned server cleanup failed: {cleanup:?}"));
                 }
-                Err(error) if report.failure.is_none() => report.failure = Some(format!("owned server cleanup: {error:#}")),
-                Err(error) => report.events.push(Event {
-                    elapsed_ms: start.elapsed().as_millis(),
-                    event: format!("owned server cleanup failed: {error:#}"),
-                }),
+                report.cleanup = Some(cleanup);
             }
+            Err(error) if report.failure.is_none() => report.failure = Some(format!("owned server cleanup: {error:#}")),
+            Err(error) => report.events.push(Event {
+                elapsed_ms: start.elapsed().as_millis(),
+                event: format!("owned server cleanup failed: {error:#}"),
+            }),
         }
     }
     report.success = report.failure.is_none();
@@ -227,7 +266,15 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
         "--trace".into(),
         "verify-project".into(),
     ];
-    let mut command = if report.mode == Mode::Shell {
+    let mut command = if config.inside {
+        let output = fixture.tmux(&["new-session", "-d", "-s", "verify-origin", "-c", fixture.directory.path().to_str().unwrap()])?;
+        ensure!(output.success, "bootstrap origin pane: {output:?}");
+        let mut command = CommandBuilder::new("tmux");
+        command.args(["-u", "-f", "/dev/null", "-S"]);
+        command.arg(&fixture.socket);
+        command.args(["attach-session", "-t", "=verify-origin"]);
+        command
+    } else if report.mode == Mode::Shell {
         let mut emit = Command::new(&executable);
         emit.args(&args).arg("--print-shell");
         fixture.environment(&mut emit);
@@ -262,6 +309,41 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     *terminal = Some(spawned);
     record(report, "terminal process spawned");
     let terminal = terminal.as_mut().unwrap();
+    if config.inside {
+        let deadline = Instant::now() + config.timeout;
+        loop {
+            let origin = fixture.state_for("verify-origin")?;
+            if origin.attached == 1 && origin.client_pids.len() == 1 {
+                ensure!(origin.client_pids.first().copied() == report.terminal_pid, "origin client identity mismatch");
+                let invocation = PlannedCommand::builder()
+                    .program(Word::new(executable.as_os_str())?)
+                    .args(args.iter().map(|arg| Word::new(arg.clone())).collect::<std::result::Result<Vec<_>, _>>()?)
+                    .build();
+                let raw = tta_command::Expression::from(invocation).shell(Handoff::Run)?;
+                let trace = Word::new(fixture.directory.path().join("inside-trace.jsonl"))?.shell()?;
+                let result = Word::new(fixture.directory.path().join("inside-status"))?.shell()?;
+                let source = if report.mode == Mode::Shell {
+                    let plan = Word::new(fixture.directory.path().join("inside-plan"))?.shell()?;
+                    format!(
+                        "tta_plan=$({raw} --print-shell 2>{trace}); tta_status=$?; if [ \"$tta_status\" -eq 0 ]; then printf '%s' \"$tta_plan\" >{plan}; eval \"$tta_plan\"; tta_status=$?; fi; printf '%s' \"$tta_status\" >{result}"
+                    )
+                } else {
+                    format!("{raw} 2>{trace}; tta_status=$?; printf '%s' \"$tta_status\" >{result}")
+                };
+                let sent = fixture.tmux(&["send-keys", "-t", &origin.pane_id, "-l", &source])?;
+                ensure!(sent.success, "invoke tta in origin pane: {sent:?}");
+                ensure!(
+                    fixture.tmux(&["send-keys", "-t", &origin.pane_id, "Enter"])?.success,
+                    "send origin Enter failed"
+                );
+                report.origin_before = Some(origin);
+                record(report, "invoked tta beneath the real attached origin client");
+                break;
+            }
+            ensure!(Instant::now() < deadline, "origin attach timed out: {origin:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     let deadline = Instant::now() + config.timeout;
     let mut last_observation = String::new();
     loop {
@@ -286,6 +368,9 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
                 if let Some(initial) = &report.initial {
                     ensure!(state.session_id == initial.session_id, "attach replaced the seeded session");
                 }
+                if let Some(origin) = &report.origin_before {
+                    ensure!(state.client_pids == origin.client_pids, "switch replaced the client or nested another client");
+                }
                 report.attached = Some(state);
                 break;
             }
@@ -296,6 +381,39 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
         std::thread::sleep(Duration::from_millis(10));
     }
     record(report, "observed expected session, cwd and attached client");
+    if config.inside {
+        let deadline = Instant::now() + config.timeout;
+        let result = fixture.directory.path().join("inside-status");
+        loop {
+            match read_text(&result) {
+                Ok(status) => {
+                    ensure!(status == "0", "inside tta/eval failed with status {status:?}");
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            ensure!(Instant::now() < deadline, "inside tta did not return to its original shell");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let origin = fixture.state_for("verify-origin")?;
+        let before = report.origin_before.as_ref().unwrap();
+        ensure!(
+            origin.attached == 0 && origin.pane_id == before.pane_id && origin.pane_pid == before.pane_pid,
+            "origin pane/shell did not survive switch: {origin:?}"
+        );
+        report.origin_after = Some(origin);
+        if report.mode == Mode::Shell {
+            report.emission = Some(ProcessOutput {
+                status: Some(0),
+                success: true,
+                stdout: read_text(&fixture.directory.path().join("inside-plan"))?,
+                stderr: read_text(&fixture.directory.path().join("inside-trace.jsonl"))?,
+                ..ProcessOutput::default()
+            });
+        }
+        record(report, "same client switched; original pane and evaluating shell survived");
+    }
     terminal.writer.write_all(b"\x02d")?;
     terminal.writer.flush()?;
     record(report, "sent tmux detach key through PTY");
@@ -315,7 +433,7 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     report.detached = Some(detached);
     record(report, "process exited cleanly; detached session and pane survived");
     terminal.settle_reader(config.timeout);
-    if report.mode == Mode::Shell {
+    if report.mode == Mode::Shell && !config.inside {
         ensure!(
             terminal.capture.lock().unwrap().text().contains("TTA_VERIFY_CALLER_SURVIVED:0"),
             "evaluating shell did not survive tmux detach"
@@ -422,16 +540,31 @@ impl Fixture {
     }
 
     fn state(&self) -> Result<State> {
+        self.state_for("verify-project")
+    }
+
+    fn state_for(&self, name: &str) -> Result<State> {
         let output = self.tmux(&["list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_attached}"])?;
         ensure!(output.success, "tmux state query: {output:?}");
-        let fields: Vec<_> = output.stdout.trim_end_matches('\n').split('\t').collect();
-        ensure!(fields.len() == 3 && fields[1] == "verify-project", "malformed owned-session state: {output:?}");
+        let rows: Vec<Vec<_>> = output.stdout.lines().map(|line| line.split('\t').collect()).collect();
+        ensure!(rows.iter().all(|row| row.len() == 3), "malformed owned-session state: {output:?}");
+        let fields = rows
+            .iter()
+            .find(|row| row[1] == name)
+            .with_context(|| format!("owned session {name:?} not found: {output:?}"))?;
         let pane = self.tmux(&["display-message", "-p", "-t", fields[0], "#{pane_current_path}\n#{pane_id}\n#{pane_pid}"])?;
         ensure!(pane.success, "tmux pane query: {pane:?}");
         let pane_fields: Vec<_> = pane.stdout.trim_end_matches('\n').split('\n').collect();
         ensure!(pane_fields.len() == 3, "malformed owned-pane state: {pane:?}");
-        let clients = self.tmux(&["list-clients", "-F", "#{client_pid}"])?;
+        let clients = self.tmux(&["list-clients", "-F", "#{client_pid}\t#{session_name}"])?;
         ensure!(clients.success, "tmux client query: {clients:?}");
+        let mut client_pids = Vec::new();
+        for line in clients.stdout.lines() {
+            let (pid, session) = line.split_once('\t').context("malformed owned client row")?;
+            if session == name {
+                client_pids.push(pid.parse()?);
+            }
+        }
         Ok(State {
             session_id: fields[0].to_owned(),
             session_name: fields[1].to_owned(),
@@ -439,7 +572,7 @@ impl Fixture {
             cwd: pane_fields[0].into(),
             pane_id: pane_fields[1].to_owned(),
             pane_pid: pane_fields[2].parse()?,
-            client_pids: clients.stdout.lines().map(str::parse).collect::<std::result::Result<_, _>>()?,
+            client_pids,
         })
     }
 }
@@ -459,6 +592,18 @@ struct Buffer {
     bytes: VecDeque<u8>,
     omitted: usize,
     done: bool,
+}
+
+fn read_text(path: &Path) -> std::io::Result<String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take((OUTPUT_LIMIT + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > OUTPUT_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("retained runtime artifact exceeds {OUTPUT_LIMIT} bytes: {path:?}"),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 impl Buffer {

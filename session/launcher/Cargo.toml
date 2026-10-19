@@ -21,5 +21,5 @@ tta-command.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tracing-mock = "0.1.0-beta.3"
+tracing-mock = "=0.1.0-beta.3"
 tracing-test = { version = "=0.2.6", features = ["no-env-filter"] }

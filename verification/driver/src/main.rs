@@ -22,6 +22,9 @@ struct Args {
     /// By default exercise both cold creation and existing-session attachment
     #[arg(long, value_enum)]
     scenario: Option<Scenario>,
+    /// Run tta within a real attached tmux pane and verify client switching
+    #[arg(long)]
+    inside: bool,
     /// Per-phase/query timeout in seconds
     #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
     timeout: u64,
@@ -36,6 +39,7 @@ fn main() -> Result<ExitCode> {
     let config = Config::builder()
         .tta(tta)
         .backend(args.backend)
+        .inside(args.inside)
         .timeout(Duration::from_secs(args.timeout))
         .build();
     let modes = args.mode.map_or_else(|| vec![Mode::Direct, Mode::Shell], |mode| vec![mode]);
@@ -47,6 +51,18 @@ fn main() -> Result<ExitCode> {
         }
     }
     let success = reports.iter().all(|report| report.success);
+    let passed = reports.iter().filter(|report| report.success).count();
+    eprintln!(
+        "tta runtime verification: {passed}/{} passed ({} backend, inside={})",
+        reports.len(),
+        args.backend.as_str(),
+        args.inside
+    );
+    for report in &reports {
+        if let Some(failure) = &report.failure {
+            eprintln!("  {:?}/{:?}: {failure}", report.mode, report.scenario);
+        }
+    }
     let text = serde_json::to_string_pretty(&serde_json::json!({ "success": success, "runs": reports }))?;
     if let Some(path) = args.report {
         std::fs::write(path, &text)?;
