@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-use tta_command::{Expression, Handoff};
+use tta_command::{Expression, Handoff, Word};
 use tta_launcher::{
     ClientMode, Selection, Session,
     backend::{self, SessionLookup},
@@ -142,7 +142,7 @@ fn planned_creation_preserves_literal_directory_and_name_and_refuses_races() {
     };
     let plan = launch()
         .selection(&selection)
-        .socket(&server.socket)
+        .socket(&tta_launcher::socket::Resolved::path(&server.socket))
         .client_mode(ClientMode::Switch)
         .program(OsStr::new("tmux"))
         .call()
@@ -215,19 +215,73 @@ fn inaccessible_sockets_are_errors_not_cold_servers() {
 #[cfg(feature = "cli")]
 #[test]
 fn cli_missing_executable_and_malformed_reply_are_errors() {
-    use std::os::unix::fs::PermissionsExt;
     let server = Server::cold();
     let missing = backend::Cli {
         program: server.directory.path().join("missing").into_os_string(),
         socket: server.socket.clone(),
     };
     assert!(matches!(missing.sessions(), Err(backend::LookupError::Io(_))));
-    let script = server.directory.path().join("fake-tmux");
-    fs::write(&script, "#!/bin/sh\nprintf '%s\\n' 'human-readable but invalid session row'\n").unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
     let malformed = backend::Cli {
-        program: script.into_os_string(),
+        // printf accepts -u as its literal format and emits a malformed row.
+        program: "printf".into(),
         socket: server.socket.clone(),
     };
     assert!(matches!(malformed.sessions(), Err(backend::LookupError::Decode(_))));
+}
+
+#[test]
+fn label_bootstrap_creates_its_private_socket_directory_in_direct_and_shell_modes() {
+    for shell in [false, true] {
+        let mut server = Server::cold();
+        let context = tta_launcher::socket::Context::builder()
+            .cwd(server.directory.path().to_owned())
+            .uid(rustix::process::geteuid().as_raw())
+            // Relative TMUX_TMPDIR is frozen against this cwd, not project cwd.
+            .tmpdir("relative-tmp".into())
+            .build();
+        fs::create_dir(server.directory.path().join("relative-tmp")).unwrap();
+        let endpoint = context.resolve(&tta_launcher::socket::Selection::Name("owned".into())).unwrap();
+        server.socket = endpoint.path.clone();
+        assert!(!server.socket.parent().unwrap().exists());
+        for inventory in server.inventories() {
+            assert!(inventory.is_empty());
+        }
+        assert!(!server.socket.parent().unwrap().exists());
+        let directory = server.directory.path().join("project");
+        fs::create_dir(&directory).unwrap();
+        let selection = Selection::Project {
+            directory,
+            session_name: "project".to_owned(),
+        };
+        let mut plan = launch()
+            .selection(&selection)
+            .socket(&endpoint)
+            .client_mode(ClientMode::Switch)
+            .program(OsStr::new("tmux"))
+            .call()
+            .unwrap();
+        let Expression::And(and) = &mut plan else { panic!("expected sequence") };
+        let Expression::Command(create) = &mut and.steps[1] else {
+            panic!("expected create")
+        };
+        // Test-only isolation of tmux configuration and initial pane command.
+        create.args.splice(0..0, [Word::new("-f").unwrap(), Word::new("/dev/null").unwrap()]);
+        create.args.extend([Word::new("sleep").unwrap(), Word::new("120").unwrap()]);
+        let create = &and.steps[1];
+        let success = if shell {
+            Command::new("sh")
+                .args(["-c", &create.shell(Handoff::Run).unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        } else {
+            create.execute(Handoff::Run).unwrap().unwrap().success()
+        };
+        assert!(success);
+        server.started = true;
+        assert!(server.socket.exists());
+        for inventory in server.inventories() {
+            assert_eq!(inventory[0].name, "project");
+        }
+    }
 }

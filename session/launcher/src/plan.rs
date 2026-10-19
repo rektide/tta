@@ -3,7 +3,7 @@ use std::path::Path;
 
 use bon::builder;
 use tmax::operation::Invocation;
-use tta_command::{And, ChangeDir, Command, Expression, Word};
+use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
 use crate::Selection;
 
@@ -29,11 +29,31 @@ pub enum PlanError {
 /// created and attached in one tmux invocation. Inside tmux, create detached,
 /// then switch the invoking client only if creation succeeds.
 #[builder]
-pub fn launch(selection: &Selection, socket: &Path, client_mode: ClientMode, program: &OsStr) -> Result<Expression, PlanError> {
+pub fn launch(
+    selection: &Selection,
+    socket: &crate::socket::Resolved,
+    client_mode: ClientMode,
+    program: &OsStr,
+    config: Option<&Path>,
+) -> Result<Expression, PlanError> {
     let command = |invocation: Invocation| -> Result<Expression, PlanError> {
-        let mut args = vec![Word::new("-S")?, Word::new(socket.as_os_str())?];
+        let (mut args, environment) = match &socket.label {
+            Some(label) => (
+                vec![Word::new("-L")?, Word::new(&label.name)?],
+                vec![Assignment::new("TMUX_TMPDIR", Word::new(label.directory.as_os_str())?)?],
+            ),
+            None => (vec![Word::new("-S")?, Word::new(socket.path.as_os_str())?], Vec::new()),
+        };
+        if let Some(config) = config {
+            args.extend([Word::new("-f")?, Word::new(config.as_os_str())?]);
+        }
         args.extend(invocation.argv()?.into_iter().map(Word::new).collect::<Result<Vec<_>, _>>()?);
-        Ok(Command::builder().program(Word::new(program)?).args(args).build().into())
+        Ok(Command::builder()
+            .program(Word::new(program)?)
+            .args(args)
+            .environment(environment)
+            .build()
+            .into())
     };
     let client = match client_mode {
         ClientMode::Attach => "attach-session",
@@ -82,7 +102,7 @@ mod tests {
         for (mode, expected) in [(ClientMode::Attach, "attach-session"), (ClientMode::Switch, "switch-client")] {
             let expression = launch()
                 .selection(&session)
-                .socket(Path::new("/tmp/sock"))
+                .socket(&crate::socket::Resolved::path("/tmp/sock"))
                 .client_mode(mode)
                 .program(OsStr::new("tmux"))
                 .call()
@@ -102,7 +122,7 @@ mod tests {
         };
         let expression = launch()
             .selection(&selection)
-            .socket(Path::new("/tmp/sock"))
+            .socket(&crate::socket::Resolved::path("/tmp/sock"))
             .client_mode(ClientMode::Switch)
             .program(OsStr::new("tmux"))
             .call()

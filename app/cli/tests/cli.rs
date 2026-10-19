@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
-use std::process::Command;
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::fs;
+use std::process::Command;
 
 fn tta() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tta"));
@@ -38,17 +38,14 @@ fn cross_server_calls_inside_tmux_fail_before_lookup() {
 
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
 #[test]
-fn print_is_observation_only_and_emitted_shell_preserves_the_caller() {
+fn native_print_is_observation_only_and_does_not_spawn_the_client() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
     let project = root.join("space ' #[x];");
     fs::create_dir_all(&project).unwrap();
     let socket = temp.path().join("socket");
-    // An executable recorder proves direct execution uses argv/cwd, and native
-    // --print-shell never attempts to run even this executable.
-    let recorder = temp.path().join("record-tmux");
-    fs::write(&recorder, "#!/bin/sh\nprintf 'cwd:<%s>\\n' \"$PWD\"\nprintf 'arg:<%s>\\n' \"$@\"\n").unwrap();
-    fs::set_permissions(&recorder, fs::Permissions::from_mode(0o700)).unwrap();
+    // Native --print-shell cannot attempt to run even a missing executable.
+    let recorder = temp.path().join("missing-tmux");
     let args = [
         "--root".as_ref(),
         root.as_os_str(),
@@ -64,17 +61,6 @@ fn print_is_observation_only_and_emitted_shell_preserves_the_caller() {
     let source = String::from_utf8(printed.stdout).unwrap();
     assert!(source.starts_with("cd -P "));
     assert!(!source.contains("exec "));
-    let direct = tta().args(args).arg("space").output().unwrap();
-    assert!(direct.status.success());
-    let evaluated = Command::new("sh")
-        .args(["-c", &format!("{source}\nprintf '%s' 'caller survived'\n")])
-        .output()
-        .unwrap();
-    assert!(evaluated.status.success());
-    let mut expected = direct.stdout;
-    expected.extend_from_slice(b"caller survived");
-    assert_eq!(evaluated.stdout, expected);
-    assert!(!socket.exists());
 }
 
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
@@ -117,4 +103,51 @@ fn relative_socket_is_frozen_before_project_cd() {
     assert!(printed.status.success());
     let source = String::from_utf8(printed.stdout).unwrap();
     assert!(source.contains(&format!("'-S' '{}'", temp.path().join("socket").display())));
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
+#[test]
+fn explicit_relative_executable_and_config_are_frozen_before_project_cd() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("project")).unwrap();
+    let printed = tta()
+        .current_dir(temp.path())
+        .args([
+            "--root",
+            ".",
+            "--socket-path",
+            "socket",
+            "--tmux",
+            "./bin/tmux",
+            "--tmux-config",
+            "./tmux.conf",
+            "--print-shell",
+            "project",
+        ])
+        .output()
+        .unwrap();
+    assert!(printed.status.success(), "{}", String::from_utf8_lossy(&printed.stderr));
+    let source = String::from_utf8(printed.stdout).unwrap();
+    assert!(source.contains(&format!("'{}'", temp.path().join("./bin/tmux").display())), "{source}");
+    assert!(source.contains(&format!("'-f' '{}'", temp.path().join("./tmux.conf").display())), "{source}");
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn cli_backend_can_emit_a_cold_server_plan_without_starting_it() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("project")).unwrap();
+    let socket = temp.path().join("socket");
+    let printed = tta()
+        .args(["--backend", "cli", "--print-shell", "--socket-path"])
+        .arg(&socket)
+        .arg("--root")
+        .arg(temp.path())
+        .arg("project")
+        .output()
+        .unwrap();
+    assert!(printed.status.success(), "{}", String::from_utf8_lossy(&printed.stderr));
+    assert!(printed.stderr.is_empty());
+    assert!(String::from_utf8_lossy(&printed.stdout).contains("new-session"));
+    assert!(!socket.exists());
 }

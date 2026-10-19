@@ -14,6 +14,8 @@ pub enum Error {
     Nul,
     #[error("POSIX shell output requires UTF-8 operands: {0:?}")]
     NonUtf8(OsString),
+    #[error("invalid portable environment variable name: {0:?}")]
+    EnvironmentName(String),
     #[error("cannot enter directory {path:?}: {source}")]
     Directory {
         path: PathBuf,
@@ -57,17 +59,42 @@ pub struct Command {
     pub program: Word,
     #[builder(default)]
     pub args: Vec<Word>,
+    #[builder(default)]
+    pub environment: Vec<Assignment>,
+}
+
+/// A validated assignment, not executable shell source or a joined argv word.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Assignment {
+    name: String,
+    value: Word,
+}
+
+impl Assignment {
+    pub fn new(name: impl Into<String>, value: Word) -> Result<Self, Error> {
+        let name = name.into();
+        if !name.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(Error::EnvironmentName(name));
+        }
+        Ok(Self { name, value })
+    }
 }
 
 impl Command {
     pub fn process(&self) -> Process {
         let mut command = Process::new(self.program.as_os_str());
         command.args(self.args.iter().map(Word::as_os_str));
+        command.envs(self.environment.iter().map(|assignment| (&assignment.name, assignment.value.as_os_str())));
         command
     }
 
     fn shell(&self, handoff: bool) -> Result<String, Error> {
         let mut words = Vec::with_capacity(self.args.len() + 2);
+        for assignment in &self.environment {
+            words.push(format!("{}={}", assignment.name, assignment.value.shell()?));
+        }
         if handoff {
             words.push("exec".to_owned());
         }

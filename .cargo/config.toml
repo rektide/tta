@@ -1,0 +1,2 @@
+[alias]
+verify = "run --package tta-verify --"

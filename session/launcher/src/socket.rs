@@ -13,6 +13,29 @@ pub enum Selection {
     Path(PathBuf),
 }
 
+/// Exact lookup path plus client startup policy. A label remains a label so
+/// tmux creates/checks its private socket directory on a cold system.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Resolved {
+    pub path: PathBuf,
+    pub label: Option<Label>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Label {
+    pub name: OsString,
+    pub directory: PathBuf,
+}
+
+impl Resolved {
+    pub fn path(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            label: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Builder)]
 pub struct Context {
     pub cwd: PathBuf,
@@ -44,17 +67,17 @@ impl Context {
         })
     }
 
-    pub fn resolve(&self, selection: &Selection) -> Result<PathBuf, Error> {
+    pub fn resolve(&self, selection: &Selection) -> Result<Resolved, Error> {
         let name = match selection {
             Selection::Path(path) => {
                 if path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0) {
                     return Err(Error::InvalidPath);
                 }
-                return Ok(self.absolute(path));
+                return Ok(Resolved::path(self.absolute(path)));
             }
             Selection::Default => {
                 if let Some(path) = self.current_server() {
-                    return Ok(path);
+                    return Ok(Resolved::path(path));
                 }
                 std::ffi::OsStr::new("default")
             }
@@ -66,7 +89,14 @@ impl Context {
             }
         };
         let tmpdir = self.tmpdir.as_deref().unwrap_or_else(|| Path::new("/tmp"));
-        Ok(self.absolute(tmpdir).join(format!("tmux-{}", self.uid)).join(name))
+        let directory = self.absolute(tmpdir);
+        Ok(Resolved {
+            path: directory.join(format!("tmux-{}", self.uid)).join(name),
+            label: Some(Label {
+                name: name.to_owned(),
+                directory,
+            }),
+        })
     }
 
     pub fn client_mode(&self, selected: &Path) -> Result<crate::ClientMode, Error> {
@@ -125,13 +155,13 @@ mod tests {
     #[test]
     fn selected_socket_is_frozen_and_tmux_precedence_is_explicit() {
         let context = context();
-        assert_eq!(context.resolve(&Selection::Default).unwrap(), Path::new("/tmp/old"));
+        assert_eq!(context.resolve(&Selection::Default).unwrap().path, Path::new("/tmp/old"));
         assert_eq!(
-            context.resolve(&Selection::Name("work".into())).unwrap(),
+            context.resolve(&Selection::Name("work".into())).unwrap().path,
             Path::new("/private/tmp/tmux-1000/work")
         );
         assert_eq!(
-            context.resolve(&Selection::Path("relative/socket".into())).unwrap(),
+            context.resolve(&Selection::Path("relative/socket".into())).unwrap().path,
             Path::new("/home/me/relative/socket")
         );
         assert_eq!(context.client_mode(Path::new("/tmp/old")).unwrap(), crate::ClientMode::Switch);
@@ -142,7 +172,7 @@ mod tests {
     fn empty_inherited_tmux_uses_default_label_and_outside_mode() {
         let mut context = context();
         context.tmux = Some(",123,4".into());
-        assert_eq!(context.resolve(&Selection::Default).unwrap(), Path::new("/private/tmp/tmux-1000/default"));
+        assert_eq!(context.resolve(&Selection::Default).unwrap().path, Path::new("/private/tmp/tmux-1000/default"));
         assert_eq!(context.client_mode(Path::new("/tmp/new")).unwrap(), crate::ClientMode::Attach);
         assert!(context.resolve(&Selection::Name("../default".into())).is_err());
     }

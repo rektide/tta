@@ -12,3 +12,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# Cargo-built process fixture, not installed by the tta CLI package.
+[[bin]]
+name = "tta-command-test-recorder"
+path = "tests/support/recorder.rs"
+test = false

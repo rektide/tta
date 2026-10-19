@@ -1,5 +1,5 @@
 [workspace]
-members = ["shell/command", "session/launcher", "app/cli"]
+members = ["shell/command", "session/launcher", "app/cli", "verification/driver"]
 resolver = "3"
 
 [workspace.package]
@@ -15,6 +15,8 @@ clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["process"] }
 tempfile = "3"
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
 tmax = { path = "../tmux-interface-control", default-features = false, features = ["client"] }
 tta-command = { path = "shell/command" }
 tta-launcher = { path = "session/launcher", default-features = false }

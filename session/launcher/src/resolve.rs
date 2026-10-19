@@ -49,13 +49,19 @@ struct Project {
 /// root. This is observation, not authorization to create or mutate a session.
 #[builder]
 pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, session_name: Option<&str>) -> Result<Selection, ResolveError> {
+    let _span = tracing::info_span!("resolve", argument).entered();
     if argument.is_empty() {
         return Err(ResolveError::Empty);
     }
     let sessions = lookup.sessions()?;
+    tracing::info!(event = "lookup.complete", count = sessions.len());
     match matching::select(sessions.clone(), argument, |session| &session.name) {
-        Ok(Some(session)) => return Ok(Selection::Existing(session)),
+        Ok(Some(session)) => {
+            tracing::info!(event = "match.existing", session_id = %session.id, session_name = %session.name);
+            return Ok(Selection::Existing(session));
+        }
         Err(candidates) => {
+            tracing::warn!(event = "match.ambiguous", domain = "session", count = candidates.len());
             return Err(ResolveError::Sessions {
                 argument: argument.to_owned(),
                 candidates: candidates.into_iter().map(|session| format!("{} ({})", session.name, session.id)).collect(),
@@ -94,10 +100,13 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
         }
     }
     let project = matching::select(projects, argument, |project| &project.name)
-        .map_err(|projects| ResolveError::Projects {
-            argument: argument.to_owned(),
-            root: root.clone(),
-            candidates: projects.into_iter().map(|project| project.name).collect(),
+        .map_err(|projects| {
+            tracing::warn!(event = "match.ambiguous", domain = "project", count = projects.len());
+            ResolveError::Projects {
+                argument: argument.to_owned(),
+                root: root.clone(),
+                candidates: projects.into_iter().map(|project| project.name).collect(),
+            }
         })?
         .ok_or_else(|| ResolveError::Missing {
             argument: argument.to_owned(),
@@ -111,6 +120,7 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
             id: session.id,
         });
     }
+    tracing::info!(event = "match.project", directory = ?project.path, session_name = name);
     Ok(Selection::Project {
         directory: project.path,
         session_name: name.to_owned(),

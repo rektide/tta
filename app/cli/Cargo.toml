@@ -16,8 +16,11 @@ cli = ["tta-launcher/cli"]
 anyhow.workspace = true
 clap.workspace = true
 tmax.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 tta-command.workspace = true
 tta-launcher.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tta-verify = { path = "../../verification/driver" }
