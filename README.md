@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-19, by: "model:openai/gpt-6-astra#high" }
+updated: { at: 2026-10-19, by: "model:openai/gpt-6.1-sol#medium" }
 sources:
+  - resource: opencode://ses_ea9d7700affeAvzVxuUAG4LHuY
+    title: Add dtachment-compatible PROJECTS_DIR and scoped TTA environment configuration, precedence, isolated Rust tests, and documentation
   - resource: opencode://ses_eaa17ad2effeEEkcV1BqiWcrUp
     title: Launcher commission, additive runtime verification and tracing, implementation review, outcome-first README diagrams and tables, and dtachment precedent
   - resource: opencode://ses_eaa172275ffe5q1qIrtAKpAG3q
@@ -27,7 +29,8 @@ sources:
 # tta
 
 Attach to a matching tmux session. If none matches, find a matching directory
-under `~/src`, create a session named after that directory, and enter it.
+under the configured project root (default `~/src`), create a session named after
+that directory, and enter it.
 The workflow builds on [dtachment's `dta` precedent](#precedent-dtachment).
 
 ## Action matrix
@@ -64,7 +67,7 @@ fragment and a valid endpoint/client context:
 flowchart TD
     matchSession{"Session match?"} -->|One selected| useSession["Existing session:<br/>attach or switch"]
     matchSession -->|Ambiguous| stopResolution["Report error;<br/>create nothing"]
-    matchSession -->|No match| matchProject{"Directory match<br/>under --root or ~/src?"}
+    matchSession -->|No match| matchProject{"Directory match<br/>under configured root?"}
     matchProject -->|Ambiguous or no match| stopResolution
     matchProject -->|One selected| validateName{"New name valid<br/>and unused?"}
     validateName -->|No| stopResolution
@@ -96,6 +99,10 @@ command or shell. The predecessor's editor startup and per-directory
 sockets explain the lineage; [the action matrix](#action-matrix) describes the
 current tmux behavior.
 
+The [environment configuration](#environment-configuration) adopts `PROJECTS_DIR`
+compatibility without adopting `${EDITOR:-vim}` or `DTACHMENT_NVIM_LISTEN`:
+tta still lets tmux choose the new session's startup command or shell.
+
 ## Build and install
 
 Requires Rust, tmux 3.2 or newer, and a Unix terminal. The default native lookup
@@ -119,6 +126,50 @@ cargo install --path app/cli --locked --no-default-features --features cli
 `--backend native` or `--backend cli`. There is no hidden fallback after a native
 error. CLI-only execution still uses tmax's shared typed schema/decoder, whose
 current `client` compilation feature also includes native plumbing.
+
+## Environment configuration
+
+**Explicit CLI options win over environment values, then built-in defaults.**
+Unset and empty environment values both mean “not configured.” CLI values retain
+their ordinary meaning; paths and program values are literal, not shell source,
+and do not expand `~`, `$variables`, or embedded arguments.
+
+| Variable | CLI override | Meaning / default |
+| --- | --- | --- |
+| `TTA_ROOT` | `--root` | Project root; relative paths use the invocation cwd |
+| `PROJECTS_DIR` | `--root` or `TTA_ROOT` | Compatibility with dtachment: relative paths use `$HOME`; absolute paths are honored; default `src` under `$HOME` |
+| `TTA_BACKEND` | `--backend` | `native` or `cli`, only if compiled; default native when compiled, otherwise cli; no automatic fallback |
+| `TTA_SOCKET_NAME` | Either socket option | tmux `-L` label; otherwise normal tmux endpoint selection |
+| `TTA_SOCKET_PATH` | Either socket option | tmux `-S` path; relative paths use the invocation cwd |
+| `TTA_TMUX` | `--tmux` | Client executable (not a command string); default `tmux` on PATH |
+| `TTA_TMUX_CONFIG` | `--tmux-config` | Startup config passed with `-f`; relative paths use the invocation cwd; otherwise tmux defaults |
+| `TTA_TRACE` | `--trace` / `--trace=false` | JSON diagnostics on stderr; exactly `true`/`1` or `false`/`0`; default off |
+
+Root precedence is **`--root` > `TTA_ROOT` > `PROJECTS_DIR` > `$HOME/src`**.
+HOME is needed only for a relative `PROJECTS_DIR` or the default root. Missing
+HOME or an unreadable root does not block an existing-session match: directory
+search still happens last.
+
+The two socket selectors are one family: an explicit `--socket-name` or
+`--socket-path` suppresses **both** environment selectors. Without either CLI
+selector, setting both nonempty environment selectors is an error. Explicitly
+passing both CLI selectors remains a usage error. Invalid active backend or trace
+values fail before lookup; an explicit CLI override ignores the replaced value.
+
+```sh
+export PROJECTS_DIR=work          # searches $HOME/work, like dtachment
+tta project
+TTA_ROOT=./checkout tta project   # invocation-cwd-relative, not home-relative
+TTA_SOCKET_NAME=work tta project
+TTA_TRACE=1 tta --trace=false project
+```
+
+`--session-name`, `--print-shell`, and `--exec-shell` stay explicit, not ambient
+environment preferences. See [endpoint/client options](#endpoint-and-client-options)
+for path freezing and [shell output](#shell-output) for safe evaluation.
+The [environment layer](app/cli/src/environment.rs) implements this small surface;
+[CLI integration tests](app/cli/tests/cli.rs) exercise precedence, empty/invalid
+values, literal paths, session-first behavior and observation-only plans.
 
 ## Matching and failure behavior
 
@@ -144,7 +195,8 @@ it reports ambiguity. A directory named `foo` does not override either result.
 
 ### Directory search is the fallback
 
-This search runs **only when no session matches**, under `--root` or `$HOME/src`.
+This search runs **only when no session matches**, under the
+[configured root](#environment-configuration), defaulting to `$HOME/src`.
 
 | Directory search result | Outcome |
 | --- | --- |
@@ -152,7 +204,7 @@ This search runs **only when no session matches**, under `--root` or `$HOME/src`
 | No exact basename; one directory contains the fragment | Select that directory |
 | No exact basename; multiple directories contain the fragment | Error with sorted candidates |
 | No directory contains the fragment | Error: no matching session or project directory |
-| Neither `--root` nor `$HOME` available | Error: cannot determine project root |
+| No root can be determined from CLI/environment | Error: cannot determine project root |
 | Root or a relevant entry cannot be inspected | Report the filesystem error |
 
 Only immediate directories qualify. Directory symlinks count, retaining their
@@ -243,8 +295,8 @@ the same terminal/context rather than saving it as a durable session identity.
   entering a project; use an absolute executable path when that matters.
 - `--tmux-config PATH` passes `-f` to the final client; relative configuration
   paths also belong to the invocation cwd. `/dev/null` is useful for isolation.
-- `--trace` emits structured JSON events on stderr: lookup, match decision,
-  operations, emission, handoff attempt, and failure. A handoff event means an
+- `--trace` (or `TTA_TRACE=1`) emits structured JSON events on stderr: lookup,
+  match decision, operations, emission, handoff attempt, and failure. A handoff event means an
   **attempt**, not proof that tmux attached after replacing the Rust process.
 
 ## Reusable pieces
@@ -293,7 +345,9 @@ than treated as completion evidence themselves.
 
 Queries/lifecycle phases have bounded timeouts (`--timeout`, default 10 seconds);
 retained process/PTY output is bounded to 256 KiB per stream. Fixtures use
-`/dev/null` tmux config and isolated homes. Only owned endpoints are cleaned up.
+`/dev/null` tmux config and isolated homes. CLI tests and runtime fixtures remove
+inherited `TTA_*` and `PROJECTS_DIR` settings, so local preferences do not steer
+acceptance. Only owned endpoints are cleaned up.
 Reports retain diagnostics after fixture removal. Missing tmux, unsupported
 backends, failed assertions and failed cleanup return nonzero, not skipped
 acceptance reported as success.
