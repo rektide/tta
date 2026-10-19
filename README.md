@@ -6,9 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
+updated: { at: 2026-10-19, by: "model:openai/gpt-6-astra#high" }
 sources:
   - resource: opencode://ses_eaa17ad2effeEEkcV1BqiWcrUp
-    title: Original launcher commission and additive Rust runtime verification and tracing requirements
+    title: Launcher commission, additive runtime verification and tracing, implementation review, and outcome-first README diagrams and tables
   - resource: opencode://ses_eaa172275ffe5q1qIrtAKpAG3q
     title: Implement and exercise the Rust launcher, command model, interchangeable lookup, PTY verification driver, and tracing contracts
   - resource: /design/launcher/research0.gpt6a.md
@@ -26,6 +27,24 @@ sources:
 Attach to a matching tmux session. If none matches, find a matching directory
 under `~/src`, create a session named after that directory, and enter it.
 
+## Action matrix
+
+**Existing sessions win. Exact names win over partial matches. Ambiguity stops.**
+
+| Match selected | Outside tmux | Inside the same tmux server |
+| --- | --- | --- |
+| **Existing session** | Attach to it by session ID | Switch the current client to it |
+| **Project directory**, with no matching session | Create a session in that directory and attach | Create a detached session in that directory, then switch on success |
+| **Ambiguous or missing match** | Report the problem; create nothing | Report the problem; create nothing |
+
+New sessions use the directory basename unless `--session-name` overrides it.
+Outside tmux, direct execution replaces `tta` with the real tmux client; inside,
+it switches the existing client rather than nesting an attachment. Selecting a
+different server from inside tmux is an error.
+
+With **`--print-shell`**, these actions are only printed, ready to evaluate; no
+session is created or entered. See [shell output modes](#shell-output).
+
 ```sh
 tta project
 tta --root ~/work project
@@ -33,9 +52,28 @@ tta --socket-name work project
 tta --session-name project-name project.name
 ```
 
-Outside tmux, `tta` hands its process and terminal to the real tmux client.
-Inside the same server, it switches the existing client instead of nesting an
-attachment. New inside sessions are created detached, then selected on success.
+## How a fragment becomes an action
+
+**Exact name first; otherwise a unique literal substring.** For a nonempty
+fragment and a valid endpoint/client context:
+
+```mermaid
+flowchart TD
+    matchSession{"Session match?"} -->|One selected| useSession["Existing session:<br/>attach or switch"]
+    matchSession -->|Ambiguous| stopResolution["Report error;<br/>create nothing"]
+    matchSession -->|No match| matchProject{"Directory match<br/>under --root or ~/src?"}
+    matchProject -->|Ambiguous or no match| stopResolution
+    matchProject -->|One selected| validateName{"New name valid<br/>and unused?"}
+    validateName -->|No| stopResolution
+    validateName -->|Yes| createSession["New project session:<br/>create, then enter"]
+```
+
+An absent server counts as an empty session inventory. An ambiguous session
+match never falls through to directories. Lookup and filesystem errors also stop
+before launch. `--print-shell` emits the selected action rather than executing it.
+The [matching tables](#matching-and-failure-behavior) cover inputs and errors;
+[execution failures](#creation-and-execution-failures) explain what can remain
+after a command starts.
 
 ## Build and install
 
@@ -63,23 +101,70 @@ current `client` compilation feature also includes native plumbing.
 
 ## Matching and failure behavior
 
-1. Match existing session names first: **exact name**, otherwise a **unique,
-   case-sensitive literal substring**.
-2. Only if no session matches, apply that policy to immediate directories under
-   `--root` (default `$HOME/src`). Directory symlinks count, retaining their entry
-   basename. Regular files and deeper descendants do not.
-3. Report sorted ambiguity instead of selecting an arbitrary first match. Session
-   ambiguity never falls through to project matching.
+Matching is **case-sensitive and literal**. Each search prefers an exact name;
+only when there is no exact name must the substring match be unique.
+
+### Session search comes first
+
+| Fragment / session lookup result | Outcome |
+| --- | --- |
+| Fragment omitted | CLI usage error |
+| Empty fragment (`""`) | Error: provide a nonempty fragment |
+| Exact session name exists | Select it, even if other names contain the fragment |
+| No exact name; one session contains the fragment | Select that session |
+| No exact name; multiple sessions contain the fragment | Error with sorted candidates; do not search directories |
+| No session contains the fragment | Search project directories |
+| Server absent or has no sessions | Search project directories |
+| Permission, protocol, decoding, or other lookup failure | Error; do not search directories |
+
+For example, `tta foo` selects session `foo` ahead of `foobar`. Without `foo`,
+it selects `foobar` if that is the only match; with both `foobar` and `myfoo`,
+it reports ambiguity. A directory named `foo` does not override either result.
+
+### Directory search is the fallback
+
+This search runs **only when no session matches**, under `--root` or `$HOME/src`.
+
+| Directory search result | Outcome |
+| --- | --- |
+| Exact directory basename exists | Select it, even if other basenames contain the fragment |
+| No exact basename; one directory contains the fragment | Select that directory |
+| No exact basename; multiple directories contain the fragment | Error with sorted candidates |
+| No directory contains the fragment | Error: no matching session or project directory |
+| Neither `--root` nor `$HOME` available | Error: cannot determine project root |
+| Root or a relevant entry cannot be inspected | Report the filesystem error |
+
+Only immediate directories qualify. Directory symlinks count, retaining their
+entry basename; dangling symlinks, regular files, and deeper descendants do not.
 
 Arguments are not globs or regular expressions. Quote shell metacharacters; use
 `--` before a fragment beginning with `-`. Project matching requires UTF-8 names;
 non-UTF-8 directory entries are skipped. New tmux start-directory paths must also
 be UTF-8. No project root or HOME is needed when an existing session matches.
 
-New names containing `.`, `:`, or control characters are rejected rather than
-normalized into potentially colliding names. Use `--session-name` to choose a
-distinct safe name. This option affects creation only, not session matching.
-An override colliding with another existing session is an error.
+### Creation and execution failures
+
+| Condition | Outcome |
+| --- | --- |
+| Project selected, no `--session-name` | Use the directory basename as the new session name |
+| Project selected with `--session-name NAME` | Use `NAME`; fragment matching is unchanged |
+| Existing session selected with `--session-name` | Override has no effect |
+| New name empty or contains `.`, `:`, or control characters | Error; choose a distinct safe name with `--session-name` |
+| Override already belongs to another session | Error; choose another name |
+| Selected project's start-directory path is not UTF-8 | Error before launch |
+| Another process creates the same session name after lookup | Creation fails visibly; rerun to resolve again |
+| Project cd or creation fails | Stop; subsequent commands do not run |
+| Detached creation succeeds, then switching fails | Report failure; the new detached session remains |
+| Client executable cannot start, or attach/switch fails | Report failure; do not choose another match automatically |
+
+Names are rejected rather than silently normalized into potentially colliding
+names. Existing sessions are targeted by canonical server-local IDs, not tmux's
+fuzzy name lookup. There is no `new-session -A` fallback that might change an
+existing session's cwd. Server restarts, rename/replacement between create and
+switch, and changes after shell emission remain races, not hidden reconciliation
+duties.
+
+### Lookup backend details
 
 Native discovery does not spawn a process or implicitly start a server. Missing
 or refused server sockets and a server with no sessions are empty inventories;
@@ -88,14 +173,20 @@ same strict typed decoder, `-u` for UTF-8 framing, and narrowly matched C-locale
 absence diagnostics. Native discovery inherits tmax's bounded connection/output
 policy; the optional CLI lookup currently has no equivalent timeout/output cap.
 
-Existing sessions are targeted by canonical server-local IDs, not tmux's fuzzy
-name lookup. A duplicate-creation race fails visibly: rerun to resolve again.
-There is deliberately no `new-session -A` fallback that might change an existing
-session's cwd. Failed switching does not automatically remove a newly created
-detached session. Server restarts, rename/replacement between create and switch,
-and changes after shell emission remain races, not hidden reconciliation duties.
+The [matcher](session/launcher/src/matching.rs),
+[resolver](session/launcher/src/resolve.rs), and
+[launch planner](session/launcher/src/plan.rs) implement these rules.
+[CLI checks](app/cli/tests/cli.rs) cover input and emission behavior;
+[runtime acceptance](#runtime-verification) exercises actual attach, create,
+switch, and detach behavior.
 
 ## Shell output
+
+| Invocation mode | What `tta` does now | Effect on the calling shell |
+| --- | --- | --- |
+| `tta FRAGMENT` | Resolve and execute; replace `tta` with the final tmux client | Its cwd is unchanged |
+| `tta --print-shell FRAGMENT` | Resolve and print an expression only | When evaluated, a new-project plan changes its cwd; the shell survives the tmux command |
+| `tta --print-shell --exec-shell FRAGMENT` | Resolve and print an expression ending in `exec` | When evaluated, explicitly replace the shell with the final tmux client |
 
 No shell is needed for normal execution. To change the calling shell's directory
 as well when entering a new project, evaluate the emitted POSIX shell expression:
