@@ -12,6 +12,7 @@
 //! short-circuiting; only decisions and file contents are computed here.
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -30,6 +31,8 @@ pub enum Error {
         "branch name {0:?} is not usable as a git branch and config key; avoid whitespace, control characters, and . : ? * [ \\ ~ ^ @ {{ }} and a leading '-'"
     )]
     Branch(String),
+    #[error("remote name {0:?} is not a usable git remote name")]
+    Remote(String),
     #[error("template {0:?} uses an unsupported placeholder; only {{name}} is substituted")]
     Template(String),
     #[error("cannot author package.json: {0}")]
@@ -39,21 +42,22 @@ pub enum Error {
 }
 
 /// Adapter options, deserialized from the registry entry's `options` table.
-/// Defaults reproduce the script's behavior with its rough edges removed.
+/// Defaults reproduce the current live workflow with its rough edges removed.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Options {
     /// Initial branch, created by `git init -b` (git 2.28+).
     #[serde(default = "default_branch")]
     branch: String,
-    /// `origin` remote template; `{name}` substitutes the project name.
-    /// An empty string omits the remote and its tracking configuration.
-    #[serde(default = "default_origin")]
-    origin_remote: String,
-    /// Secondary remote template added as `voodoo`, like the script.
-    /// An empty string omits it.
-    #[serde(default = "default_voodoo")]
-    voodoo_remote: String,
+    /// Git remotes by name, each a `{name}`-templated URL, merged over the
+    /// defaults: `origin` (GitHub), `tngl` (tangled.org through the `tngl`
+    /// SSH host alias), and `voodoo` (the archive). A value of `""` omits
+    /// that remote; further keys add remotes. Only `origin` receives git
+    /// tracking configuration; every configured remote gets
+    /// `jj bookmark track` for the initial branch, which works before the
+    /// remote repository exists and performs no network access.
+    #[serde(default)]
+    remotes: Option<BTreeMap<String, String>>,
     /// Empty files to create; each supports `{name}` templating.
     /// An empty list creates none.
     #[serde(default = "default_starter_files")]
@@ -76,12 +80,16 @@ fn default_branch() -> String {
     "main".to_owned()
 }
 
-fn default_origin() -> String {
-    "git@github.com:rektide/{name}".to_owned()
-}
-
-fn default_voodoo() -> String {
-    "https://archive.voodoowarez.com/{name}".to_owned()
+/// Configured remotes merge over these defaults rather than replacing them.
+fn default_remotes() -> BTreeMap<String, String> {
+    [
+        ("origin", "git@github.com:rektide/{name}"),
+        ("tngl", "tngl:jauntywunderkind.bsky.social/{name}"),
+        ("voodoo", "https://archive.voodoowarez.com/{name}"),
+    ]
+    .into_iter()
+    .map(|(name, url)| (name.to_owned(), url.to_owned()))
+    .collect()
 }
 
 fn default_starter_files() -> Vec<String> {
@@ -107,12 +115,25 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
     // fails whenever git already defaults to that branch.
     steps.push(command("git", vec!["init".into(), "-b".into(), OsString::from(&options.branch)])?);
 
-    if !options.origin_remote.is_empty() {
-        validate_template(&options.origin_remote)?;
+    let mut remotes = Vec::new();
+    let configured = options.remotes.unwrap_or_default();
+    for (name, template) in default_remotes().into_iter().chain(configured) {
+        if name.is_empty() || name.chars().any(|character| character.is_control() || character.is_whitespace()) {
+            return Err(Error::Remote(name));
+        }
+        remotes.retain(|(existing, _)| existing != &name);
+        if !template.is_empty() {
+            validate_template(&template)?;
+            remotes.push((name, template));
+        }
+    }
+    for (name, template) in &remotes {
         steps.push(command(
             "git",
-            vec!["remote".into(), "add".into(), "origin".into(), expand(&options.origin_remote, project)],
+            vec!["remote".into(), "add".into(), OsString::from(name), expand(template, project)],
         )?);
+    }
+    if remotes.iter().any(|(name, _)| name == "origin") {
         steps.push(command(
             "git",
             vec!["config".into(), format!("branch.{}.remote", options.branch).into(), "origin".into()],
@@ -126,13 +147,6 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
             ],
         )?);
     }
-    if !options.voodoo_remote.is_empty() {
-        validate_template(&options.voodoo_remote)?;
-        steps.push(command(
-            "git",
-            vec!["remote".into(), "add".into(), "voodoo".into(), expand(&options.voodoo_remote, project)],
-        )?);
-    }
 
     let mut touched = Vec::new();
     for file in &options.starter_files {
@@ -143,8 +157,11 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
         steps.push(command("touch", touched)?);
     }
 
-    // jj colocates onto the existing git repository.
+    // jj colocates onto the existing git repository. The bookmark is created
+    // at the working copy before the init commit, so the commit describes the
+    // change the bookmark follows.
     steps.push(command("jj", vec!["git".into(), "init".into()])?);
+    steps.push(command("jj", vec!["bookmark".into(), "create".into(), OsString::from(&options.branch)])?);
 
     if options.package_json {
         let author = resolve_author(
@@ -169,6 +186,18 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
     }
 
     steps.push(command("jj", vec!["commit".into(), "-m".into(), "init".into()])?);
+    // Tracking is local-only and valid before the remote repository exists;
+    // live repos show tracked-but-not-yet-created remotes the same way.
+    for (name, _) in &remotes {
+        steps.push(command(
+            "jj",
+            vec![
+                "bookmark".into(),
+                "track".into(),
+                OsString::from(format!("{branch}@{name}", branch = options.branch)),
+            ],
+        )?);
+    }
     Ok(And::builder().steps(steps).build().into())
 }
 
@@ -267,11 +296,15 @@ mod tests {
     }
 
     #[test]
-    fn defaults_reproduce_the_script_with_its_bugs_removed() {
+    fn defaults_reproduce_the_live_workflow_with_its_bugs_removed() {
         let script = rendered(&options(""));
         assert!(script.starts_with("'mkdir' '-p' '/root/fresh' && cd -P '/root/fresh'"), "{script}");
         assert!(script.contains("'git' 'init' '-b' 'main'"), "{script}");
         assert!(script.contains("'git' 'remote' 'add' 'origin' 'git@github.com:rektide/fresh'"), "{script}");
+        assert!(
+            script.contains("'git' 'remote' 'add' 'tngl' 'tngl:jauntywunderkind.bsky.social/fresh'"),
+            "{script}"
+        );
         assert!(
             script.contains("'git' 'remote' 'add' 'voodoo' 'https://archive.voodoowarez.com/fresh'"),
             "{script}"
@@ -279,25 +312,30 @@ mod tests {
         assert!(script.contains("'git' 'config' 'branch.main.remote' 'origin'"), "{script}");
         assert!(script.contains("'git' 'config' 'branch.main.merge' 'refs/heads/main'"), "{script}");
         assert!(script.contains("'touch' 'README.md' 'fresh.ts'"), "{script}");
-        assert!(script.contains("'jj' 'git' 'init'"), "{script}");
-        assert!(script.contains("'pnpm' 'install' '--silent'"), "{script}");
-        assert!(script.ends_with("'jj' 'commit' '-m' 'init'"), "{script}");
-        // package.json is authored before installing, after jj initializes.
-        let package_at = script.find("'printf' '%s'").unwrap();
-        let install_at = script.find("'pnpm' 'install'").unwrap();
+        // The bookmark is created before the init commit so the commit lands
+        // on it, and every remote is tracked after the commit.
+        let bookmark_at = script.find("'jj' 'bookmark' 'create' 'main'").unwrap();
+        let commit_at = script.rfind("'jj' 'commit' '-m' 'init'").unwrap();
         let jj_at = script.find("'jj' 'git' 'init'").unwrap();
-        assert!(jj_at < package_at && package_at < install_at, "{script}");
+        assert!(jj_at < bookmark_at && bookmark_at < commit_at, "{script}");
+        for remote in ["origin", "tngl", "voodoo"] {
+            let track_at = script.find(&format!("'jj' 'bookmark' 'track' 'main@{remote}'")).unwrap();
+            assert!(commit_at < track_at, "{script}");
+        }
+        assert!(script.contains("'pnpm' 'install' '--silent'"), "{script}");
     }
 
     #[test]
-    fn options_parameterize_branch_remotes_files_and_package_steps() {
+    fn remotes_options_add_remove_and_retarget() {
         let script = rendered(&options(
             r#"
 branch = "trunk"
-origin-remote = "https://git.example.org/work/{name}.git"
-voodoo-remote = ""
-starter-files = ["{name}.rs"]
-package-json = false
+
+[remotes]
+origin = "https://git.example.org/work/{name}.git"
+tngl = "tngl:other.handle/{name}"
+voodoo = ""
+dl = "github.com:rektide/dl-{name}"
 "#,
         ));
         assert!(script.contains("'git' 'init' '-b' 'trunk'"), "{script}");
@@ -305,31 +343,36 @@ package-json = false
             script.contains("'git' 'remote' 'add' 'origin' 'https://git.example.org/work/fresh.git'"),
             "{script}"
         );
+        assert!(script.contains("'git' 'remote' 'add' 'tngl' 'tngl:other.handle/fresh'"), "{script}");
+        assert!(script.contains("'git' 'remote' 'add' 'dl' 'github.com:rektide/dl-fresh'"), "{script}");
         assert!(script.contains("'git' 'config' 'branch.trunk.merge' 'refs/heads/trunk'"), "{script}");
         assert!(!script.contains("voodoo"), "{script}");
-        assert!(script.contains("'touch' 'fresh.rs'"), "{script}");
-        assert!(!script.contains("printf"), "{script}");
-        assert!(!script.contains("pnpm"), "{script}");
-        assert!(script.ends_with("'jj' 'commit' '-m' 'init'"), "{script}");
+        for remote in ["origin", "tngl", "dl"] {
+            assert!(script.contains(&format!("'jj' 'bookmark' 'track' 'trunk@{remote}'")), "{script}");
+        }
+        assert!(!script.contains("trunk@voodoo"), "{script}");
     }
 
     #[test]
-    fn invalid_options_branches_and_templates_are_rejected() {
+    fn invalid_options_branches_remotes_and_templates_are_rejected() {
         for table in [
             "unknown-key = 1",
             "branch = \"ma in\"",
             "branch = \"release.1\"",
             "branch = \"-x\"",
-            "origin-remote = \"https://x/{project}\"",
+            "[remotes]\norigin = \"https://x/{project}\"",
+            "[remotes]\n\"bad name\" = \"https://x/{name}\"",
             "starter-files = [\"{name}.{ext}\"]",
         ] {
             let error = scaffold("fresh", Path::new("/root"), &options(table)).unwrap_err().to_string();
             assert!(!error.is_empty());
         }
         // Disabling the origin remote also skips its config keys.
-        let script = rendered(&options("origin-remote = \"\""));
+        let script = rendered(&options("[remotes]\norigin = \"\"\n"));
         assert!(!script.contains("'remote' 'add' 'origin'"), "{script}");
         assert!(!script.contains("branch.main"), "{script}");
+        assert!(!script.contains("main@origin"), "{script}");
+        assert!(script.contains("'jj' 'bookmark' 'track' 'main@tngl'"), "{script}");
     }
 
     #[test]

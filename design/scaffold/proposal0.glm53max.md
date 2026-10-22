@@ -92,7 +92,12 @@ Recorded from the commissioning session, with the fork that shaped each:
   exactly — it's kind of trash"). `git init -b`, templated remotes and starter
   files, authored package.json, `pnpm install --silent` (the script's `pnpm i
   -q` is rejected by pnpm 12 and was silently failing under the script's
-  no-`set -e` discipline). The script-wrapping `rekon` adapter remains.
+  no-`set -e` discipline; the script itself was fixed to match). Remotes
+  default to the live layout — GitHub `origin`, tangled `tngl` (via the `tngl`
+  SSH alias for tangled.org), archive `voodoo` — as a merged name→template map,
+  and each remote gets `jj bookmark track` after `jj bookmark create` places
+  the initial branch on the init commit; tracking is local-only and valid
+  before the remote exists. The script-wrapping `rekon` adapter remains.
 - ~~**Per-adapter configuration**~~ — registry entries carry an `options`
   table the adapter validates when the generator runs.
 - **More adapters**: `tta-start-it-up-ref` on the board keeps

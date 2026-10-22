@@ -426,13 +426,13 @@ adapter = \"rekon\"
     #[test]
     fn native_options_reach_the_adapter_and_direct_its_steps() {
         let config = load(
-            "[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbranch = \"trunk\"\norigin-remote = \"\"\npackage-json = false\n",
+            "[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbranch = \"trunk\"\npackage-json = false\n\n[scaffold.generators.rn.options.remotes]\norigin = \"\"\n",
         );
         let expression = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root")).unwrap();
         let script = expression.shell(tta_command::Handoff::Run).unwrap();
         assert!(script.contains("'git' 'init' '-b' 'trunk'"), "{script}");
         assert!(!script.contains("'remote' 'add' 'origin'"), "{script}");
-        assert!(!script.contains("branch.main"), "{script}");
+        assert!(!script.contains("branch.trunk"), "{script}");
         assert!(!script.contains("printf"), "{script}");
         assert!(!script.contains("pnpm"), "{script}");
     }

@@ -479,21 +479,30 @@ option:
 adapter = "rekon-native"
 
 [scaffold.generators.mine.options]
-branch = "main"                                  # git init -b; default main
-origin-remote = "git@github.com:rektide/{name}"  # {name} templates; "" disables
-voodoo-remote = "https://archive.voodoowarez.com/{name}"  # "" disables
-starter-files = ["README.md", "{name}.ts"]       # {name} templates
+branch = "main"                        # git init -b and the jj bookmark
+starter-files = ["README.md", "{name}.ts"]  # {name} templates
 author = "rektide"      # > AUTHOR env > git config user.name > omitted
 license = "MIT"         # > LICENSE env > MIT
 package-json = true     # module {name}.js, type module
 install = true          # pnpm install --silent after authoring
+
+[scaffold.generators.mine.options.remotes]
+# Merged over the defaults below; "" disables, new keys add remotes.
+# origin = "git@github.com:rektide/{name}"
+# tngl   = "tngl:jauntywunderkind.bsky.social/{name}"   # tangled.org SSH alias
+# voodoo = "https://archive.voodoowarez.com/{name}"
 ```
 
-Option mistakes surface when the generator runs (adapters validate at
-expression-build time), not at config load. More adapters grow from the
-board — each its own crate behind a feature; `start-it-up` is recorded there
-as interesting prior art, not the path. Work anchor: `tta-scaffold` on the
-project's Beads board; design decisions in
+Remotes default to the live layout (GitHub `origin`, tangled `tngl`, archive
+`voodoo`): each is added with `git remote add`, `origin` gets git tracking
+configuration, and every remote gets `jj bookmark track main@NAME` — which is
+local-only and works before the remote repository exists. The initial branch
+is created as a jj bookmark before the init commit, so `main` lands on it and
+exports to git. Option mistakes surface when the generator runs (adapters
+validate at expression-build time), not at config load. More adapters grow
+from the board — each its own crate behind a feature; `start-it-up` is
+recorded there as interesting prior art, not the path. Work anchor:
+`tta-scaffold` on the project's Beads board; design decisions in
 [the scaffold proposal](design/scaffold/proposal0.glm53max.md).
 
 ### Shared scaffold API
