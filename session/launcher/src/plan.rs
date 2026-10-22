@@ -7,10 +7,10 @@ use bon::builder;
 use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
-use crate::{Selection, Session};
 use crate::execution::LaunchPlan;
 #[cfg(feature = "native")]
 use crate::execution::NativeCreation;
+use crate::{Selection, Session};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientMode {
@@ -124,8 +124,10 @@ pub fn prepare_launch(
         ClientMode::Attach => "attach-session",
         ClientMode::Switch => "switch-client",
     };
+    #[cfg(feature = "native")]
+    let mut native_creation = None;
     let new_project_steps =
-        |directory: Option<&Path>, project_directory: &Path, session_name: &str, startup: &[OsString]| -> Result<Vec<Expression>, PlanError> {
+        &mut |directory: Option<&Path>, project_directory: &Path, session_name: &str, startup: &[OsString]| -> Result<Vec<Expression>, PlanError> {
             crate::resolve::validate_name(session_name)?;
             let directory = directory.unwrap_or(project_directory);
             let path = directory_format(directory)?;
@@ -134,6 +136,29 @@ pub fn prepare_launch(
                 create = create.arg("-d");
             }
             create = create.args(["-s", &literal_format(session_name), "-c", &path]);
+            #[cfg(feature = "native")]
+            if client_mode == ClientMode::Switch
+                && let Some(startup) = startup.iter().map(|word| word.to_str()).collect::<Option<Vec<_>>>()
+            {
+                let mut invocation = create.clone();
+                if !startup.is_empty() {
+                    invocation = invocation.arg("--");
+                    if startup.len() == 1 {
+                        invocation = invocation.args(["/bin/sh", "-c", "exec \"$0\""]);
+                    }
+                    invocation = invocation.args(startup);
+                }
+                native_creation = Some(NativeCreation {
+                    invocation,
+                    prefix: if matches!(selection, Selection::Create { .. }) {
+                        prefix.cloned()
+                    } else {
+                        None
+                    },
+                    directory: directory.to_owned(),
+                    handoff: command(vec![Invocation::new(client)?.args(["-t", &format!("={session_name}")])], &[])?,
+                });
+            }
             let mut steps = vec![
                 ChangeDir::builder().path(Word::new(directory.as_os_str())?).build().into(),
                 command(vec![create], startup)?,
@@ -143,8 +168,6 @@ pub fn prepare_launch(
             }
             Ok(steps)
         };
-    #[cfg(feature = "native")]
-    let mut native_creation = None;
     let expression = match selection {
         Selection::Existing(session) if grouped => {
             let satellite = satellite_name.ok_or(PlanError::UnnamedSatellite)?;
@@ -163,13 +186,6 @@ pub fn prepare_launch(
                 // session component rather than treating the name as a pane.
                 Invocation::new("set-option")?.args(["-t", &format!("{target}:"), "destroy-unattached", "keep-last"]),
             ];
-            #[cfg(feature = "native")]
-            {
-                native_creation = Some(NativeCreation {
-                    invocation: create.clone(),
-                    handoff: command(handoff.clone(), &[])?,
-                });
-            }
             let mut invocations = vec![create];
             invocations.extend(handoff);
             command(invocations, &[])
