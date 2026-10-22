@@ -6,8 +6,12 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-22, by: "model:openai/gpt-6-astra#high" }
+updated: { at: 2026-10-22, by: "model:openai/gpt-6.1-sol#xhigh" }
 sources:
+  - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
+    title: Implement native-default detached inside creation with preserved cwd, literal argv, cold-start and grouped-queue boundaries; verify backend execution and failures
+  - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
+    title: Parent commissions practical native tmax launch improvement with an optional CLI backend and verifies the prior lookup-only boundary
   - resource: opencode://ses_e9a607209ffeABss72x2fVkW70
     title: Rebuild the README around project-entry workflows and tmux session groups; inspect current planner, satellite tests, scaffold adapters, command expressions and completion to correct stale contracts
   - resource: /session/launcher/src/plan.rs
@@ -158,12 +162,13 @@ Switching to a different server from inside tmux is an error.
 ## Build and install
 
 Requires Rust, a Unix terminal, and **tmux 3.2+** (**3.4+** for satellites).
-The default native discovery backend requires **little-endian Linux** and a
+The default native backend requires **little-endian Linux** and a
 tmux protocol supported by the [tmax checkout](file:///home/rektide/src/tmux-interface-control/README.md).
-Runtime verification here uses tmux **3.7c**.
+This launch-backend slice was verified with a pinned tmux **3.7c** fixture and
+also exercised against the current system tmux **3.8**.
 
 This development workspace has a path dependency on `../tmux-interface-control`
-(package `tmax` 0.4.0, `client` feature). Keep that sibling checkout available;
+(package `tmax` 0.5.0, `client` feature). Keep that sibling checkout available;
 the dependency uses its development API.
 
 ```sh
@@ -171,17 +176,44 @@ cargo install --path app/cli --locked
 # Or the local alias (also forces replacement of an installed binary):
 cargo install-tta
 
-# Add the optional CLI discovery backend:
+# Add the optional CLI backend:
 cargo install --path app/cli --locked --features cli
-# CLI-only runtime discovery, e.g. for other Unix platforms:
+# CLI-only runtime execution, e.g. for other Unix platforms:
 cargo install --path app/cli --locked --no-default-features --features cli
 ```
 
 The root is a virtual Cargo workspace; install from `app/cli`, not `.`.
 Default features are `native`, `scaffold-rekon`, `scaffold-rekon-native`, and
 `scaffold-by-default`. A CLI-only build above omits the scaffold adapters;
-add their features explicitly if wanted. With both discovery backends built,
-choose `--backend native` or `--backend cli`.
+add their features explicitly if wanted. With both backends built, choose
+`--backend native` or `--backend cli` (also `TTA_BACKEND`). Native is the default
+when compiled; the selection covers discovery and eligible direct launch work.
+
+### Which operations use tmax?
+
+| Operation | Native selection (default) | CLI selection |
+| --- | --- | --- |
+| Session discovery | Native tmax query | tmux subprocess with the same typed query |
+| Ordinary project/scaffold creation inside a live server, UTF-8 startup argv | Native tmax detached creation, then CLI switch | CLI detached creation, then CLI switch |
+| Outside creation and attachment | One real tmux client, including cold server startup | Same |
+| Existing-session attach or invoking-client switch | Real tmux client | Same |
+| Grouped satellite creation, client move and `keep-last` | One CLI command queue, preserving lifecycle ordering | Same |
+| Non-UTF-8 startup argv | CLI, preserving raw Unix argument bytes | Same |
+| `--print-shell` / `--exec-shell` | Complete CLI expression; no mutation while printing | Same |
+
+Native inside creation first reads the inventory again. An absent or sessionless
+server takes the CLI creation path **before** generation or mutation, preserving
+server startup, `-f` configuration and label-directory setup. Other read errors
+stop. Once a native mutation is attempted, there is **no CLI retry or rollback**.
+The generator still runs first, directory validation precedes creation, and a
+failed creation prevents switching. A failed handoff can leave the new session.
+
+Grouping stays together because splitting detached creation from attachment can
+let inherited `destroy-unattached` settings remove the satellite between commands.
+Switching stays CLI because tmax's descriptor-free client is not the invoking
+terminal client. Native does not mean a new interactive terminal implementation.
+See the [execution decision](design/launcher/launch-backends0.gpt61sol.md) and the
+library-side [tta consumer account](file:///home/rektide/src/tmux-interface-control/doc/consumer/tta.md).
 
 ## Scaffolding missing projects
 
@@ -355,18 +387,22 @@ fail. Failed creation prevents switching; failed switching or option-setting
 after creation can leave the new session behind. There is no automatic retry
 against another match or `new-session -A` fallback.
 
-#### Lookup backend details
+#### Backend details
 
 Native discovery uses tmax to query the server directly, without spawning a
 process or starting a server. Optional CLI discovery runs tmux with the same
 typed query/decoder. Backends are explicit; native errors do not trigger a
 hidden CLI fallback. Native discovery inherits tmax's bounded connection/output
 policy; CLI discovery currently has no equivalent timeout/output cap. CLI-only
-runtime lookup still compiles tmax's `client` feature, including native plumbing.
+runtime execution still compiles tmax's `client` feature, including native plumbing.
+Native detached creation uses the same endpoint policy and a client-directory
+override, without changing the Rust process's cwd. The
+[operation matrix](#which-operations-use-tmax) states the deliberate CLI boundaries.
 
 Implementation: [matcher](session/launcher/src/matching.rs),
 [resolver](session/launcher/src/resolve.rs), [backends](session/launcher/src/backend.rs),
-and [launch planner](session/launcher/src/plan.rs).
+and [launch planner](session/launcher/src/plan.rs) /
+[execution policy](session/launcher/src/execution.rs).
 
 ## Environment configuration
 
@@ -412,9 +448,10 @@ and shell-output modes remain explicit per invocation.
 
 ## Shell output
 
-The launch plan is a reusable expression: argv commands, environment assignments,
-physical directory changes, file writes, and short-circuit sequences. Normal
-execution runs it directly; `--print-shell` renders it without generating files,
+Every launch retains a reusable CLI expression: argv commands, environment
+assignments, physical directory changes, file writes, and short-circuit sequences.
+Normal execution chooses the selected backend's eligible operations;
+`--print-shell` renders the complete expression without generating files,
 creating sessions, or attaching.
 
 ```sh
@@ -442,7 +479,7 @@ into executable operations.
 
 | Crate / home | Responsibility |
 | --- | --- |
-| [`tta-launcher`](session/launcher/src/lib.rs) | Replaceable `SessionLookup`, matching, resolution, endpoint/client policy, satellite naming and launch plans |
+| [`tta-launcher`](session/launcher/src/lib.rs) | Replaceable `SessionLookup`, matching, resolution, endpoint/client policy, satellite naming, pure plans and native/CLI execution |
 | [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Shared registry, generator choice, session-first resolution and creation prefix |
 | [`tta-command`](shell/command/src/lib.rs) | Bon-built command expressions, literal file writes, cwd and environment; direct run/Unix exec or POSIX rendering |
 | [`tta-scaffold-rekon`](scaffold/rekon/src/lib.rs) / [`tta-scaffold-rekon-native`](scaffold/rekon-native/src/lib.rs) | Feature-gated adapters returning command expressions |
@@ -489,6 +526,14 @@ let shell = plan.shell(tta_command::Handoff::Run)?;
 // Or run with plan.execute(...), choosing Run or Exec for the caller's lifecycle.
 ```
 
+`launch()` remains the portable CLI-expression API. For native execution, use
+`prepare_launch()` with the same builder inputs, then
+`plan.execute(tta_launcher::execution::LaunchBackend::default(), handoff)`.
+`plan.expression()` exposes the complete unchanged CLI expression for inspection
+or rendering. Library callers can choose launch execution independently of lookup;
+the CLI deliberately uses one backend selection for both. The generic command
+crate has no native/tmux execution hooks.
+
 Library defaults enable neither scaffold adapters nor scaffold posture. Enable
 `scaffold-rekon` or `scaffold-rekon-native` as needed and layer caller preferences
 before passing `choice`. Registry loading honors `TTA_CONFIG`/XDG/HOME, or accepts
@@ -523,6 +568,7 @@ the evaluator survives; detach checks the session and pane persist. Independent
 tmux observations establish outcomes rather than treating trace messages as proof.
 
 Additional suites cover [satellite lifecycle and literal startup argv](session/launcher/tests/satellites.rs),
+[native/CLI launch execution and failure ordering](app/cli/tests/launch.rs),
 [shared scaffold policy](session/launcher/tests/scaffold.rs),
 [CLI scaffold behavior](app/cli/tests/scaffold.rs),
 [real Git/jj generator setup](scaffold/rekon-native/tests/live.rs), and
