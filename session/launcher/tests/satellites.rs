@@ -161,6 +161,8 @@ fn outside_satellite_has_independent_window_and_disappears_on_detach() {
         server.run(&["select-window", "-t", &format!("{satellite}:1")]);
         assert_ne!(server.field(&satellite, "#{window_id}"), seed_window);
         assert_eq!(server.field("=seed", "#{window_id}"), seed_window);
+        server.run(&["detach-client", "-s", &satellite]);
+        wait(|| server.clients().is_empty());
         drop(client);
         wait(|| server.run(&["list-sessions", "-F", "#{session_id}"]).lines().count() == 1);
         assert_eq!(server.field("=seed", "#{session_windows}"), "2");
@@ -192,8 +194,9 @@ fn inside_satellite_switches_same_client_and_keep_last_preserves_final_session()
     assert!(server.field(satellite, "#{session_name}").starts_with("tta-satellite-"));
     assert_eq!(server.run(&["show-options", "-v", "-t", satellite, "destroy-unattached"]), "keep-last");
     server.run(&["kill-session", "-t", "=seed"]);
-    drop(client);
+    server.run(&["detach-client", "-s", satellite]);
     wait(|| server.clients().is_empty());
+    drop(client);
     assert_eq!(server.run(&["list-sessions", "-F", "#{session_id}"]), satellite);
 }
 
