@@ -109,7 +109,12 @@ fn main() -> Result<ExitCode> {
 
 fn run(mut args: Args) -> Result<ExitCode> {
     if matches!(args.completion_candidates, Some(CompletionCandidates::Backends)) {
-        print_candidates(Backend::value_variants().iter().map(|backend| backend.to_possible_value().unwrap().get_name().to_owned()).collect());
+        print_candidates(
+            Backend::value_variants()
+                .iter()
+                .map(|backend| backend.to_possible_value().unwrap().get_name().to_owned())
+                .collect(),
+        );
         return Ok(ExitCode::SUCCESS);
     }
     if matches!(args.completion_candidates, Some(CompletionCandidates::Projects)) {
@@ -133,7 +138,11 @@ fn run(mut args: Args) -> Result<ExitCode> {
     };
     let socket = context.resolve(&selection)?;
     // Inventory is allowed for another server: it never switches this client.
-    let mode = if args.completion_candidates.is_none() { Some(context.client_mode(&socket.path)?) } else { None };
+    let mode = if args.completion_candidates.is_none() {
+        Some(context.client_mode(&socket.path)?)
+    } else {
+        None
+    };
     let lookup: Box<dyn backend::SessionLookup> = match backend {
         #[cfg(feature = "native")]
         Backend::Native => Box::new(backend::Native {

@@ -71,7 +71,9 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
     }
 
     let root = root.ok_or(ResolveError::MissingRoot)?;
-    let root = root.canonicalize().map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
+    let root = root
+        .canonicalize()
+        .map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
     let projects = projects(&root, argument)?;
     let project = matching::select(projects, argument, |project| &project.name)
         .map_err(|projects| {

@@ -1,13 +1,19 @@
 ---
 type: Guide
 title: tta — enter a matching tmux workspace
-description: Rust session-first tmux launcher, reusable command expressions, and instrumented private-server runtime verification
+description: Rust session-first tmux launcher with wildcard Zim/Zsh completion, reusable command expressions, and private-server runtime verification
 resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-19, by: "model:openai/gpt-6.1-sol#medium" }
+updated: { at: 2026-10-22, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e9b668237ffe74i4Il8nao5Vqr
+    title: Add and verify read-only live project/session inventories and wildcard Zim-compatible Zsh completion; track tta-zsh-completion
+  - resource: file:///home/rektide/archive/zimfw/zimfw/README.md
+    title: Zim local-module roots, functions discovery, configuration and installation commands
+  - resource: file:///home/rektide/archive/zimfw/completion/README.md
+    title: Completion-definition modules must precede Zim completion initialization
   - resource: opencode://ses_ea9d7700affeAvzVxuUAG4LHuY
     title: Add dtachment-compatible PROJECTS_DIR and scoped TTA environment configuration, precedence, isolated Rust tests, and documentation
   - resource: opencode://ses_eaa17ad2effeEEkcV1BqiWcrUp
@@ -131,6 +137,67 @@ cargo install --path app/cli --locked --no-default-features --features cli
 `--backend native` or `--backend cli`. There is no hidden fallback after a native
 error. CLI-only execution still uses tmax's shared typed schema/decoder, whose
 current `client` compilation feature also includes native plumbing.
+
+## Zim / Zsh completion
+
+The [Zsh module](shell/zsh/functions/_tta) completes **live tmux session names and
+immediate project directory basenames**, plus CLI options and their values.
+Type a prefix, substring, or wildcard pattern, then press **Tab**:
+
+```text
+tta pipe<Tab>          → tta pipewire-native
+tta wire<Tab>          → tta pipewire-native
+tta *wire*nat*<Tab>    → tta pipewire-native
+```
+
+Multiple matches remain available for selection through Zsh's completion UI.
+Inserted names are shell-escaped, including spaces and literal metacharacters.
+**Press Tab before Enter:** wildcard matching belongs to completion; the launcher
+still uses [literal exact/unique-substring matching](#matching-and-failure-behavior).
+Completion does not bypass tmux's new-session name restrictions; use
+`--session-name` when a project basename needs a different session name.
+
+First install the updated binary with `cargo install --path app/cli --locked`.
+In your Zim configuration (`~/.zimrc`, or `$ZIM_CONFIG_FILE`), add the local module
+**before** the existing `zmodule completion` line:
+
+```zsh
+zmodule ~/src/tta --root shell/zsh
+# ...other completion providers...
+zmodule completion
+```
+
+Run `zimfw install`, then start a new shell. Alternatively, after this code is
+available upstream, use `zmodule rektide/tta --root shell/zsh` for a Zim-managed
+checkout. The module supplies completion definitions, not the Rust executable.
+
+For plain Zsh, before your existing `compinit` call:
+
+```zsh
+fpath=( ~/src/tta/shell/zsh/functions $fpath )
+autoload -Uz compinit
+compinit
+```
+
+If Tab is bound to `expand-or-complete`, Zsh may expand a wildcard against the
+**current directory** before asking tta for candidates. For predictable wildcard
+project completion, put `bindkey '^I' complete-word` in `.zshrc` after your keymap
+setup. This changes Tab to completion-only for all commands; the module itself
+does not change your bindings or global completion styles.
+
+Candidates use the same [root and endpoint configuration](#environment-configuration)
+as launch, including `--root=PATH`, `--socket-path PATH`, and environment fallbacks.
+Session and project inventories are queried independently: an unavailable project
+root does not hide sessions, and a failed session query does not hide projects.
+Tab suppresses inventory diagnostics; run tta normally to see configuration or
+lookup errors. Completion only observes state: it never creates, attaches, or
+switches a session, and does not require a server for project candidates.
+Control-character names are omitted from the line-oriented candidate protocol.
+
+The [completion integration tests](app/cli/tests/completion.rs) exercise real Zsh
+widgets in a private PTY, configuration precedence, symlinks, quoted names, and
+live and absent private tmux servers. Zsh and tmux are required for those tests.
+Work anchor: `tta-zsh-completion` on the project's Beads board.
 
 ## Environment configuration
 
@@ -309,6 +376,7 @@ the same terminal/context rather than saving it as a durable session identity.
 | Home | Responsibility |
 | --- | --- |
 | [shell/command](shell/command/src/lib.rs) | Bon-built argv commands, validated environment assignments, physical cd, short-circuit conjunction; direct run/Unix exec or POSIX shell rendering |
+| [shell/zsh](shell/zsh/functions/_tta) | Zim-compatible option, live session, project and wildcard Tab completion |
 | [session/launcher](session/launcher/src/lib.rs) | `SessionLookup`, native/CLI acquisition, deterministic resolution, endpoint policy and launch planning |
 | [app/cli](app/cli/src/main.rs) | Arguments, structured diagnostics and interactive handoff |
 | [verification/driver](verification/driver/src/lib.rs) | Shared Rust runtime exercise/observation library plus `tta-verify` command |
