@@ -6,12 +6,12 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-22, by: "model:zai-coding-plan/glm-5.3#max" }
+updated: { at: 2026-10-22, by: "model:openai/gpt-6-astra#high" }
 sources:
   - resource: opencode://ses_e9b671d21ffeJXXTDi6GZnjm60
     title: Commission and implement scaffold mode for missing projects — adapter crate, TOML generator registry, CLI posture, and documentation; track tta-scaffold
   - resource: opencode://ses_e9ae02eceffextjZz5w45jVByw
-    title: Implement grouped satellites, literal startup argv and explicit initial directories for term-preserver integration; verify private-server lifecycle and CLI argument layouts
+    title: Implement grouped entry options and extract shared scaffold registry/resolution for both term-preserver adapters; verify literal argv, private-server lifecycle, scaffold policy and generator short-circuiting
   - resource: file:///home/rektide/archive/tmux/tmux/CHANGES
     title: keep-last and keep-group were added in tmux 3.4
   - resource: opencode://ses_e9b668237ffe74i4Il8nao5Vqr
@@ -420,8 +420,9 @@ switch, and detach behavior.
 When nothing matches at all — no session, no immediate directory, and no
 candidates to make ambiguous — scaffold mode runs a **generator** to materialize
 `<root>/<fragment>`, then continues into the ordinary new-project flow. Existing
-sessions and directories always win first; a `--scaffold` flag next to a match is
-simply unused.
+sessions and directories always win first: a valid scaffold choice never runs a
+generator for an existing match. Registry and choice validation still happen
+before matching, so invalid configuration or an unknown generator remains an error.
 
 Generators are **named registry entries** in a TOML file, each pointing at a
 compiled-in adapter crate:
@@ -465,6 +466,54 @@ checks nothing, the following `cd` does. More adapters and a per-adapter
 configuration surface grow from the survey; each will be its own crate behind a
 feature. Work anchor: `tta-scaffold` on the project's Beads board; design
 decisions in [the scaffold proposal](design/scaffold/proposal0.glm53max.md).
+
+### Shared scaffold API
+
+[`tta_launcher::scaffold`](session/launcher/src/scaffold.rs) owns the registry,
+choice policy, and create-prefix preparation used by the CLI and embedded
+consumers. Enable the launcher's **`scaffold-rekon`** feature to include that
+adapter; the CLI feature of the same name forwards to it. The library's default
+features do not enable an adapter or choose a scaffold posture for its caller.
+
+```rust,ignore
+let resolved = tta_launcher::scaffold::resolve()
+    .lookup(lookup)
+    .argument(fragment)
+    .maybe_root(root)                  // Option<&Path>
+    .maybe_session_name(session_name)  // Option<&str>
+    .choice(choice)                    // "false", "default", or registry name
+    .call()?;
+
+let plan = tta_launcher::launch()
+    .selection(&resolved.selection)
+    .socket(&socket)
+    .client_mode(mode)
+    .program(tmux_program)
+    .maybe_prefix(resolved.prefix.as_ref())
+    .startup(&startup_argv)
+    .maybe_directory(initial_directory)
+    .call()?;
+```
+
+The caller layers its explicit option and `TTA_SCAFFOLD` before supplying
+`choice`. The CLI retains its `scaffold-by-default` feature: it supplies `default`
+when enabled and `false` otherwise. The shared resolver loads the same
+`TTA_CONFIG`/XDG/HOME registry unless passed `.config(&config)` with an already
+loaded `scaffold::Config`. `Config::names()` also supplies scaffold completion.
+
+`Resolved` exposes `selection`, `prefix: Option<tta_command::Expression>`, and
+`generator: Option<scaffold::Entry>` for tracing. Only `Selection::Create` has a
+prefix and generator; resolution itself executes neither. Passing the prefix to
+`launch` places it before the directory change and tmux creation, with failures
+short-circuiting the remainder. `scaffold::Error` implements
+`std::error::Error + Send + Sync`, preserving underlying causes for `?` into
+callers such as eyre.
+
+[Shared policy tests](session/launcher/tests/scaffold.rs) exercise existing
+matches, clean and ambiguous misses, choice errors, retained causes, and prefix
+ordering/failure in direct and shell execution using private `rekon` and tmux
+shims. [CLI scaffold tests](app/cli/tests/scaffold.rs) check configuration
+precedence, completion, and feature-controlled defaults.
 
 ## Shell output
 
@@ -520,7 +569,8 @@ the same terminal/context rather than saving it as a durable session identity.
 | [shell/zsh](shell/zsh/functions/_tta) | Zim-compatible option, live session, project and wildcard Tab completion |
 | [scaffold/rekon](scaffold/rekon/src/lib.rs) | rekon-script scaffold adapter: one argv expression, `rekon <name>` |
 | [session/launcher](session/launcher/src/lib.rs) | `SessionLookup`, native/CLI acquisition, deterministic resolution, endpoint policy and launch planning |
-| [app/cli](app/cli/src/main.rs) | Arguments, scaffold registry configuration, structured diagnostics and interactive handoff |
+| [session/launcher scaffold API](session/launcher/src/scaffold.rs) | Shared scaffold registry, generator choice, session-first resolution and creation prefix |
+| [app/cli](app/cli/src/main.rs) | Arguments, environment/feature posture, structured diagnostics and interactive handoff |
 | [verification/driver](verification/driver/src/lib.rs) | Shared Rust runtime exercise/observation library plus `tta-verify` command |
 
 The generic command model knows no tmux syntax. The launcher separately handles
