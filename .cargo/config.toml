@@ -1,2 +1,3 @@
 [alias]
 verify = "run --package tta-verify --"
+install-tta = "install --path app/cli --locked --force"
