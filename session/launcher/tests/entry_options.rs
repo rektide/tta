@@ -18,12 +18,13 @@ fn existing_attach_options_are_opt_in_and_startup_is_ignored() {
             .client_mode(ClientMode::Attach)
             .program(OsStr::new("tmux"))
             .grouped(grouped)
+            .maybe_satellite_name(Some("_seed-1"))
             .startup(&["ignored".into()])
             .maybe_directory(Some(Path::new("/work/#{session_name}")))
             .call()
             .unwrap();
         let expected = if grouped {
-            "'tmux' '-S' '/tmp/opencode/sock' 'new-session' '-t' '$7' '-c' '/work/#{a:35}{session_name}' ';' 'set-option' 'destroy-unattached' 'keep-last'"
+            "'tmux' '-S' '/tmp/opencode/sock' 'new-session' '-d' '-s' '_seed-1' '-t' '$7' '-c' '/work/#{a:35}{session_name}' ';' 'attach-session' '-t' '=_seed-1' ';' 'set-option' '-t' '=_seed-1:' 'destroy-unattached' 'keep-last'"
         } else {
             "'tmux' '-S' '/tmp/opencode/sock' 'attach-session' '-t' '$7'"
         };

@@ -5,9 +5,10 @@ pub mod backend;
 mod matching;
 mod plan;
 mod resolve;
+pub mod scaffold;
 pub mod socket;
 
-pub use plan::{ClientMode, PlanError, launch};
+pub use plan::{ClientMode, PlanError, launch, satellite_name};
 pub use resolve::{ResolveError, Selection, project_names, resolve};
 pub use tmax::operation::SessionId;
 

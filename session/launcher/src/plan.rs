@@ -1,13 +1,13 @@
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use bon::builder;
 use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
-use crate::Selection;
+use crate::{Selection, Session};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientMode {
@@ -23,6 +23,8 @@ pub enum PlanError {
     Tmux(#[from] tmax::operation::BuildError),
     #[error(transparent)]
     Name(#[from] crate::ResolveError),
+    #[error("grouped launch requires a satellite session name chosen from the session inventory")]
+    UnnamedSatellite,
     #[error("tmux start-directory must be an absolute UTF-8 path: {0:?}")]
     Directory(std::path::PathBuf),
     #[error("a create selection needs its generator command as the plan prefix")]
@@ -30,8 +32,9 @@ pub enum PlanError {
 }
 
 /// Assemble commands only; this performs no I/O. New outside sessions are
-/// created and attached in one tmux invocation. Inside tmux, create detached,
-/// then switch the invoking client only if creation succeeds.
+/// created and attached in one tmux invocation. Grouped satellites are created
+/// detached under an exact chosen name in both client modes, then this client
+/// moves onto the satellite: attach-session outside tmux, switch-client inside.
 /// Grouping applies only to existing selections; startup argv only to project
 /// and create selections. An explicit directory overrides the selected
 /// project's initial directory and supplies `-c` for satellites. Library
@@ -46,6 +49,7 @@ pub fn launch(
     config: Option<&Path>,
     prefix: Option<&Expression>,
     #[builder(default)] grouped: bool,
+    satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
 ) -> Result<Expression, PlanError> {
@@ -107,28 +111,23 @@ pub fn launch(
         };
     match selection {
         Selection::Existing(session) if grouped => {
-            let mut create = Invocation::new("new-session")?.args(["-t", &session.id.to_string()]);
+            let satellite = satellite_name.ok_or(PlanError::UnnamedSatellite)?;
+            crate::resolve::validate_name(satellite)?;
+            let target = format!("={satellite}");
+            let mut create = Invocation::new("new-session")?.args(["-d", "-s", &literal_format(satellite), "-t", &session.id.to_string()]);
             if let Some(directory) = directory {
                 create = create.args(["-c", &directory_format(directory)?]);
             }
-            let mut invocations = Vec::new();
-            let mut keep = Invocation::new("set-option")?;
-            if client_mode == ClientMode::Switch {
-                // An explicit exact target avoids relying on the detached
-                // new-session command's unchanged current-target context.
-                static NEXT_SATELLITE: AtomicU64 = AtomicU64::new(0);
-                let name = format!("tta-satellite-{}-{}", std::process::id(), NEXT_SATELLITE.fetch_add(1, Ordering::Relaxed));
-                let target = format!("={name}");
-                create = create.args(["-d", "-s", &name]);
-                invocations.push(create);
-                invocations.push(Invocation::new("switch-client")?.args(["-t", &target]));
+            // Both client modes create the satellite detached, then move this
+            // client onto it by exact name: nothing depends on the create
+            // command's unchanged current-target context.
+            let invocations = vec![
+                create,
+                Invocation::new(client)?.args(["-t", &target]),
                 // set-option parses a pane target; the colon fixes the exact
                 // session component rather than treating the name as a pane.
-                keep = keep.args(["-t", &format!("{target}:")]);
-            } else {
-                invocations.push(create);
-            }
-            invocations.push(keep.args(["destroy-unattached", "keep-last"]));
+                Invocation::new("set-option")?.args(["-t", &format!("{target}:"), "destroy-unattached", "keep-last"]),
+            ];
             command(invocations, &[])
         }
         Selection::Existing(session) => command(vec![Invocation::new(client)?.args(["-t", &session.id.to_string()])], &[]),
@@ -150,6 +149,24 @@ pub fn launch(
             Ok(And::builder().steps(steps).build().into())
         }
     }
+}
+
+/// A grouped satellite's name: `_`, the base session's name, then the smallest
+/// counter no live session already holds (`compfuzor` → `_compfuzor-1`,
+/// `_compfuzor-2`, …). The `_` prefix keeps the base name an unambiguous
+/// completion prefix while satellites are alive, and uniqueness is judged
+/// against every live session name, not only other satellites.
+pub fn satellite_name(base: &str, existing: &[Session]) -> String {
+    let prefix = format!("_{base}-");
+    let used: HashSet<u64> = existing
+        .iter()
+        .filter_map(|session| session.name.strip_prefix(&prefix).and_then(|suffix| suffix.parse().ok()))
+        .collect();
+    let mut counter = 1;
+    while used.contains(&counter) {
+        counter += 1;
+    }
+    format!("{prefix}{counter}")
 }
 
 fn directory_format(directory: &Path) -> Result<String, PlanError> {
@@ -230,6 +247,71 @@ mod tests {
             panic!("expected switch")
         };
         assert_eq!(switch.args.last().unwrap().as_os_str(), "=#[a]\\;");
+    }
+
+    #[test]
+    fn grouped_satellites_are_created_detached_and_targeted_exactly_in_both_modes() {
+        let session = Selection::Existing(crate::Session {
+            id: "$7".parse().unwrap(),
+            name: "seed".into(),
+        });
+        for (mode, client) in [(ClientMode::Attach, "attach-session"), (ClientMode::Switch, "switch-client")] {
+            let expression = launch()
+                .selection(&session)
+                .socket(&crate::socket::Resolved::path("/tmp/sock"))
+                .client_mode(mode)
+                .program(OsStr::new("tmux"))
+                .grouped(true)
+                .satellite_name("_seed-2 #[x]")
+                .call()
+                .unwrap();
+            assert_eq!(
+                expression.shell(Handoff::Run).unwrap(),
+                format!(
+                    "'tmux' '-S' '/tmp/sock' 'new-session' '-d' '-s' '_seed-2 #{{a:35}}[x]' '-t' '$7' ';' \
+                     '{client}' '-t' '=_seed-2 #[x]' ';' 'set-option' '-t' '=_seed-2 #[x]:' \
+                     'destroy-unattached' 'keep-last'"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_launch_refuses_to_plan_without_a_satellite_name() {
+        let session = Selection::Existing(crate::Session {
+            id: "$7".parse().unwrap(),
+            name: "seed".into(),
+        });
+        assert!(matches!(
+            launch()
+                .selection(&session)
+                .socket(&crate::socket::Resolved::path("/tmp/sock"))
+                .client_mode(ClientMode::Attach)
+                .program(OsStr::new("tmux"))
+                .grouped(true)
+                .call(),
+            Err(PlanError::UnnamedSatellite)
+        ));
+    }
+
+    #[test]
+    fn satellite_names_prefix_the_base_and_skip_live_counters() {
+        let sessions = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| Session {
+                    id: "$1".parse().unwrap(),
+                    name: (*name).to_owned(),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(satellite_name("compfuzor", &sessions(&["compfuzor"])), "_compfuzor-1");
+        assert_eq!(satellite_name("compfuzor", &sessions(&["compfuzor", "_compfuzor-1"])), "_compfuzor-2");
+        assert_eq!(satellite_name("compfuzor", &sessions(&["_compfuzor-3", "_compfuzor-1"])), "_compfuzor-2");
+        // Non-numeric suffixes, other bases, and unparsable counters never consume a slot.
+        assert_eq!(satellite_name("a", &sessions(&["_a-x", "_b-1", "_a-99999999999999999999999"])), "_a-1");
+        // A satellite of a satellite still derives from its own base name.
+        assert_eq!(satellite_name("_a-1", &sessions(&["__a-1-1"])), "__a-1-2");
     }
 
     #[test]

@@ -61,7 +61,7 @@ impl Server {
         })
     }
 
-    fn plan(&self, selection: &Selection, mode: ClientMode, startup: &[OsString], directory: Option<&std::path::Path>) -> Expression {
+    fn plan(&self, selection: &Selection, mode: ClientMode, startup: &[OsString], directory: Option<&std::path::Path>, satellite: Option<&str>) -> Expression {
         launch()
             .selection(selection)
             .socket(&socket::Resolved::path(&self.socket))
@@ -69,6 +69,7 @@ impl Server {
             .program(OsStr::new("tmux"))
             .config(std::path::Path::new("/dev/null"))
             .grouped(true)
+            .maybe_satellite_name(satellite)
             .startup(startup)
             .maybe_directory(directory)
             .call()
@@ -137,7 +138,7 @@ fn outside_satellite_has_independent_window_and_disappears_on_detach() {
         let seed_window = server.field("=seed", "#{window_id}");
         let initial = server.directory.path().join("initial #{session_name}");
         fs::create_dir(&initial).unwrap();
-        let mut expression = server.plan(&server.seed(), ClientMode::Attach, &["must-not-run".into()], Some(&initial));
+        let mut expression = server.plan(&server.seed(), ClientMode::Attach, &["must-not-run".into()], Some(&initial), Some("_seed-1"));
         let Expression::Command(command) = &mut expression else {
             panic!("expected grouped command")
         };
@@ -155,6 +156,7 @@ fn outside_satellite_has_independent_window_and_disappears_on_detach() {
         wait(|| !server.clients().is_empty());
         let satellite = server.clients().split_whitespace().nth(1).unwrap().to_owned();
         assert_ne!(satellite, server.field("=seed", "#{session_id}"));
+        assert_eq!(server.field(&satellite, "#{session_name}"), "_seed-1");
         assert_eq!(server.run(&["show-options", "-v", "-t", &satellite, "destroy-unattached"]), "keep-last");
         assert_eq!(server.field(&satellite, "#{session_path}"), initial.to_str().unwrap());
         assert_eq!(server.field(&satellite, "#{session_group}"), server.field("=seed", "#{session_group}"));
@@ -175,7 +177,7 @@ fn inside_satellite_switches_same_client_and_keep_last_preserves_final_session()
     let client = Client::start(server.command().args(["-C", "attach-session", "-t", "=seed"]));
     wait(|| !server.clients().is_empty());
     let before = server.clients();
-    let expression = server.plan(&server.seed(), ClientMode::Switch, &[], None);
+    let expression = server.plan(&server.seed(), ClientMode::Switch, &[], None, Some("_seed-1"));
     let Expression::Command(command) = expression else {
         panic!("expected command")
     };
@@ -191,7 +193,7 @@ fn inside_satellite_switches_same_client_and_keep_last_preserves_final_session()
     assert_eq!(before.split_whitespace().next(), after.split_whitespace().next());
     let satellite = after.split_whitespace().nth(1).unwrap();
     assert_ne!(before, after);
-    assert!(server.field(satellite, "#{session_name}").starts_with("tta-satellite-"));
+    assert_eq!(server.field(satellite, "#{session_name}"), "_seed-1");
     assert_eq!(server.run(&["show-options", "-v", "-t", satellite, "destroy-unattached"]), "keep-last");
     server.run(&["kill-session", "-t", "=seed"]);
     server.run(&["detach-client", "-s", satellite]);
@@ -220,7 +222,7 @@ fn startup_preserves_raw_arguments_and_explicit_cwd() {
         directory: server.directory.path().join("not-used"),
         session_name: "created".into(),
     };
-    let expression = server.plan(&selection, ClientMode::Switch, &startup, Some(&directory));
+    let expression = server.plan(&selection, ClientMode::Switch, &startup, Some(&directory), None);
     let Expression::And(and) = expression else { panic!("expected sequence") };
     let Expression::Command(create) = &and.steps[1] else {
         panic!("expected creation")
@@ -241,7 +243,7 @@ fn lone_startup_executable_with_spaces_is_not_shell_source() {
         directory: server.directory.path().to_owned(),
         session_name: "created".into(),
     };
-    let expression = server.plan(&selection, ClientMode::Switch, &[executable.into_os_string()], None);
+    let expression = server.plan(&selection, ClientMode::Switch, &[executable.into_os_string()], None, None);
     let Expression::And(and) = expression else { panic!("expected sequence") };
     let Expression::Command(create) = &and.steps[1] else {
         panic!("expected creation")
