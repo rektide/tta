@@ -217,10 +217,7 @@ impl Expression {
                         Some(cwd) => cwd.join(write.path.as_os_str()),
                         None => PathBuf::from(write.path.as_os_str()),
                     };
-                    std::fs::write(&path, write.contents.as_os_str().as_encoded_bytes()).map_err(|source| Error::Write {
-                        path: path.clone(),
-                        source,
-                    })?;
+                    std::fs::write(&path, write.contents.as_os_str().as_encoded_bytes()).map_err(|source| Error::Write { path: path.clone(), source })?;
                     status = None;
                 }
                 Self::Command(command) => {

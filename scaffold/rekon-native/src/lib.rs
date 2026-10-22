@@ -16,8 +16,8 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use serde::Deserialize;
-use tta_command::{And, ChangeDir, Command, Expression, Word, WriteFile};
 use toml::Table;
+use tta_command::{And, ChangeDir, Command, Expression, Word, WriteFile};
 
 /// Registry name of this adapter.
 pub const ADAPTER: &str = "rekon-native";
@@ -26,7 +26,9 @@ pub const ADAPTER: &str = "rekon-native";
 pub enum Error {
     #[error("invalid rekon-native options: {0}")]
     Options(String),
-    #[error("branch name {0:?} is not usable as a git branch and config key; avoid whitespace, control characters, and . : ? * [ \\ ~ ^ @ {{ }} and a leading '-'")]
+    #[error(
+        "branch name {0:?} is not usable as a git branch and config key; avoid whitespace, control characters, and . : ? * [ \\ ~ ^ @ {{ }} and a leading '-'"
+    )]
     Branch(String),
     #[error("template {0:?} uses an unsupported placeholder; only {{name}} is substituted")]
     Template(String),
@@ -92,8 +94,7 @@ fn default_true() -> bool {
 
 /// Build the generator expression for `project` under `root`.
 pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expression, Error> {
-    let options =
-        Options::deserialize(toml::Value::Table(options.clone())).map_err(|error| Error::Options(error.to_string()))?;
+    let options = Options::deserialize(toml::Value::Table(options.clone())).map_err(|error| Error::Options(error.to_string()))?;
     validate_branch(&options.branch)?;
     let directory = root.join(project);
     let mut steps: Vec<Expression> = Vec::new();
@@ -108,13 +109,29 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
 
     if !options.origin_remote.is_empty() {
         validate_template(&options.origin_remote)?;
-        steps.push(command("git", vec!["remote".into(), "add".into(), "origin".into(), expand(&options.origin_remote, project)])?);
-        steps.push(command("git", vec!["config".into(), format!("branch.{}.remote", options.branch).into(), "origin".into()])?);
-        steps.push(command("git", vec!["config".into(), format!("branch.{}.merge", options.branch).into(), format!("refs/heads/{}", options.branch).into()])?);
+        steps.push(command(
+            "git",
+            vec!["remote".into(), "add".into(), "origin".into(), expand(&options.origin_remote, project)],
+        )?);
+        steps.push(command(
+            "git",
+            vec!["config".into(), format!("branch.{}.remote", options.branch).into(), "origin".into()],
+        )?);
+        steps.push(command(
+            "git",
+            vec![
+                "config".into(),
+                format!("branch.{}.merge", options.branch).into(),
+                format!("refs/heads/{}", options.branch).into(),
+            ],
+        )?);
     }
     if !options.voodoo_remote.is_empty() {
         validate_template(&options.voodoo_remote)?;
-        steps.push(command("git", vec!["remote".into(), "add".into(), "voodoo".into(), expand(&options.voodoo_remote, project)])?);
+        steps.push(command(
+            "git",
+            vec!["remote".into(), "add".into(), "voodoo".into(), expand(&options.voodoo_remote, project)],
+        )?);
     }
 
     let mut touched = Vec::new();
@@ -135,7 +152,10 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
             std::env::var_os("AUTHOR").as_ref().and_then(|value| value.to_str()),
             git_user_name().as_deref(),
         );
-        let license = resolve_license(options.license.as_deref(), std::env::var_os("LICENSE").as_ref().and_then(|value| value.to_str()));
+        let license = resolve_license(
+            options.license.as_deref(),
+            std::env::var_os("LICENSE").as_ref().and_then(|value| value.to_str()),
+        );
         steps.push(
             WriteFile::builder()
                 .path(Word::new("package.json")?)
@@ -162,11 +182,7 @@ fn resolve_author(parameter: Option<&str>, environment: Option<&str>, git: Optio
 }
 
 fn resolve_license(parameter: Option<&str>, environment: Option<&str>) -> String {
-    parameter
-        .or(environment)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("MIT")
-        .to_owned()
+    parameter.or(environment).filter(|value| !value.is_empty()).unwrap_or("MIT").to_owned()
 }
 
 /// A failed or missing git identity simply omits the author field.
@@ -247,10 +263,7 @@ mod tests {
     }
 
     fn rendered(options: &Table) -> String {
-        scaffold("fresh", Path::new("/root"), options)
-            .unwrap()
-            .shell(Handoff::Run)
-            .unwrap()
+        scaffold("fresh", Path::new("/root"), options).unwrap().shell(Handoff::Run).unwrap()
     }
 
     #[test]
@@ -259,7 +272,10 @@ mod tests {
         assert!(script.starts_with("'mkdir' '-p' '/root/fresh' && cd -P '/root/fresh'"), "{script}");
         assert!(script.contains("'git' 'init' '-b' 'main'"), "{script}");
         assert!(script.contains("'git' 'remote' 'add' 'origin' 'git@github.com:rektide/fresh'"), "{script}");
-        assert!(script.contains("'git' 'remote' 'add' 'voodoo' 'https://archive.voodoowarez.com/fresh'"), "{script}");
+        assert!(
+            script.contains("'git' 'remote' 'add' 'voodoo' 'https://archive.voodoowarez.com/fresh'"),
+            "{script}"
+        );
         assert!(script.contains("'git' 'config' 'branch.main.remote' 'origin'"), "{script}");
         assert!(script.contains("'git' 'config' 'branch.main.merge' 'refs/heads/main'"), "{script}");
         assert!(script.contains("'touch' 'README.md' 'fresh.ts'"), "{script}");
@@ -275,19 +291,20 @@ mod tests {
 
     #[test]
     fn options_parameterize_branch_remotes_files_and_package_steps() {
-        let script = rendered(
-            &options(
-                r#"
+        let script = rendered(&options(
+            r#"
 branch = "trunk"
 origin-remote = "https://git.example.org/work/{name}.git"
 voodoo-remote = ""
 starter-files = ["{name}.rs"]
 package-json = false
 "#,
-            ),
-        );
+        ));
         assert!(script.contains("'git' 'init' '-b' 'trunk'"), "{script}");
-        assert!(script.contains("'git' 'remote' 'add' 'origin' 'https://git.example.org/work/fresh.git'"), "{script}");
+        assert!(
+            script.contains("'git' 'remote' 'add' 'origin' 'https://git.example.org/work/fresh.git'"),
+            "{script}"
+        );
         assert!(script.contains("'git' 'config' 'branch.trunk.merge' 'refs/heads/trunk'"), "{script}");
         assert!(!script.contains("voodoo"), "{script}");
         assert!(script.contains("'touch' 'fresh.rs'"), "{script}");

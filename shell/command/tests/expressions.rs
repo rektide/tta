@@ -148,10 +148,7 @@ fn file_writes_agree_between_direct_and_shell_modes() {
     fs::remove_file(dir.join("package.json")).unwrap();
     let rendered = expression.shell(Handoff::Run).unwrap();
     assert!(rendered.contains("'printf' '%s'"), "{rendered}");
-    assert!(
-        Process::new("sh").args(["-c", &rendered]).status().unwrap().success(),
-        "{rendered}"
-    );
+    assert!(Process::new("sh").args(["-c", &rendered]).status().unwrap().success(), "{rendered}");
     assert_eq!(fs::read_to_string(dir.join("package.json")).unwrap(), contents);
 }
 
