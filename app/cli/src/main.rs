@@ -35,7 +35,11 @@ enum Backend {
 )]
 struct Args {
     /// Session or immediate project directory name fragment (not a glob)
-    argument: String,
+    #[arg(required_unless_present = "completion_candidates")]
+    argument: Option<String>,
+    /// Read-only shell completion inventory (one name per line)
+    #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name"])]
+    completion_candidates: Option<CompletionCandidates>,
     /// Project root [env: TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
     #[arg(long)]
     root: Option<PathBuf>,
@@ -68,6 +72,24 @@ struct Args {
     trace: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CompletionCandidates {
+    Backends,
+    Projects,
+    Sessions,
+}
+
+fn print_candidates(mut names: Vec<String>) {
+    names.sort();
+    names.dedup();
+    for name in names {
+        // The line-oriented shell protocol cannot represent control characters.
+        if !name.chars().any(char::is_control) {
+            println!("{name}");
+        }
+    }
+}
+
 fn main() -> Result<ExitCode> {
     let args = environment::configure(Args::parse())?;
     if args.trace.unwrap_or(false) {
@@ -86,6 +108,15 @@ fn main() -> Result<ExitCode> {
 }
 
 fn run(mut args: Args) -> Result<ExitCode> {
+    if matches!(args.completion_candidates, Some(CompletionCandidates::Backends)) {
+        print_candidates(Backend::value_variants().iter().map(|backend| backend.to_possible_value().unwrap().get_name().to_owned()).collect());
+        return Ok(ExitCode::SUCCESS);
+    }
+    if matches!(args.completion_candidates, Some(CompletionCandidates::Projects)) {
+        let root = args.root.as_deref().ok_or(tta_launcher::ResolveError::MissingRoot)?;
+        print_candidates(tta_launcher::project_names(root)?);
+        return Ok(ExitCode::SUCCESS);
+    }
     let context = socket::Context::from_environment()?;
     let backend = args.backend.unwrap_or_default();
     let mut tmux = args.tmux.unwrap_or_else(|| OsString::from("tmux"));
@@ -101,8 +132,8 @@ fn run(mut args: Args) -> Result<ExitCode> {
         _ => socket::Selection::Default,
     };
     let socket = context.resolve(&selection)?;
-    let mode = context.client_mode(&socket.path)?;
-    tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument = %args.argument);
+    // Inventory is allowed for another server: it never switches this client.
+    let mode = if args.completion_candidates.is_none() { Some(context.client_mode(&socket.path)?) } else { None };
     let lookup: Box<dyn backend::SessionLookup> = match backend {
         #[cfg(feature = "native")]
         Backend::Native => Box::new(backend::Native {
@@ -114,10 +145,17 @@ fn run(mut args: Args) -> Result<ExitCode> {
             socket: socket.path.clone(),
         }),
     };
+    if matches!(args.completion_candidates, Some(CompletionCandidates::Sessions)) {
+        print_candidates(lookup.sessions()?.into_iter().map(|session| session.name).collect());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let argument = args.argument.as_deref().expect("clap requires a fragment outside completion mode");
+    let mode = mode.expect("launch mode was checked before lookup");
+    tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument);
     // The configured root is inspected only after session matching fails.
     let resolved = resolve()
         .lookup(lookup.as_ref())
-        .argument(&args.argument)
+        .argument(argument)
         .maybe_root(args.root.as_deref())
         .maybe_session_name(args.session_name.as_deref())
         .call()?;

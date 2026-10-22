@@ -1,0 +1,48 @@
+#compdef tta
+
+local curcontext="$curcontext" context state state_descr line ret=1
+local -A opt_args
+local -a query sessions projects expl
+local option
+
+_arguments -s -S -C \
+  '--root=[Project root]:project root:_directories' \
+  '--session-name=[Override new session name]:session name:' \
+  '--print-shell[Print a plan without creating or attaching]' \
+  '--exec-shell[Use exec in the printed plan]' \
+  '--backend=[Session lookup backend]:backend:->backend' \
+  '(--socket-path)--socket-name=[tmux socket label]:socket label:' \
+  '(--socket-name)--socket-path=[tmux socket path]:socket path:_files' \
+  '--tmux=[tmux executable]:executable:_command_names' \
+  '--tmux-config=[tmux startup configuration]:configuration:_files' \
+  '--trace=-[Structured diagnostics (true or false)]:enabled:(true false)' \
+  '(-h --help)'{-h,--help}'[Show help]' \
+  '(-V --version)'{-V,--version}'[Show version]' \
+  '1:session or project:->target' && ret=0
+
+if [[ $state == backend ]]; then
+  local -a backends
+  backends=( "${(@f)$(command tta --completion-candidates backends 2>/dev/null)}" )
+  _wanted backends expl 'compiled lookup backend' compadd -a backends && ret=0
+elif [[ $state == target ]]; then
+  # Forward only lookup configuration, never an action or the typed pattern.
+  # _arguments accepts both --root VALUE and --root=VALUE, including quoting.
+  for option in --root --backend --socket-name --socket-path --tmux; do
+    if (( ${+opt_args[$option]} )); then
+      query+=( "$option" "${(Q)opt_args[$option]}" )
+    fi
+  done
+  sessions=( "${(@f)$(command tta "${query[@]}" --completion-candidates sessions 2>/dev/null)}" )
+  projects=( "${(@f)$(command tta "${query[@]}" --completion-candidates projects 2>/dev/null)}" )
+  sessions=( "${(@)sessions:#}" )
+  projects=( "${(@)projects:#}" )
+
+  # Native Zsh pattern completion replaces a wildcard with the selected literal
+  # name; the matcher also permits fragments anywhere within a name.
+  compstate[pattern_match]='*'
+  compstate[pattern_insert]=menu
+  _wanted sessions expl 'tmux session' compadd -M 'l:|=* r:|=*' -a sessions && ret=0
+  _wanted projects expl 'project directory' compadd -M 'l:|=* r:|=*' -a projects && ret=0
+fi
+
+return ret

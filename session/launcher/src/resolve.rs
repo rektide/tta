@@ -71,34 +71,8 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
     }
 
     let root = root.ok_or(ResolveError::MissingRoot)?;
-    let directory_error = |source| ResolveError::Directory { path: root.to_owned(), source };
-    let root = root.canonicalize().map_err(directory_error)?;
-    let entries = fs::read_dir(&root).map_err(|source| ResolveError::Directory { path: root.clone(), source })?;
-    let mut projects = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| ResolveError::Directory { path: root.clone(), source })?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            // A UTF-8 CLI fragment cannot name this directory faithfully.
-            continue;
-        };
-        if !name.contains(argument) {
-            continue;
-        }
-        let path = entry.path();
-        let kind = entry.file_type().map_err(|source| ResolveError::Directory { path: path.clone(), source })?;
-        let is_directory = if kind.is_symlink() {
-            match fs::metadata(&path) {
-                Ok(metadata) => metadata.is_dir(),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-                Err(source) => return Err(ResolveError::Directory { path, source }),
-            }
-        } else {
-            kind.is_dir()
-        };
-        if is_directory {
-            projects.push(Project { name, path });
-        }
-    }
+    let root = root.canonicalize().map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
+    let projects = projects(&root, argument)?;
     let project = matching::select(projects, argument, |project| &project.name)
         .map_err(|projects| {
             tracing::warn!(event = "match.ambiguous", domain = "project", count = projects.len());
@@ -125,6 +99,44 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
         directory: project.path,
         session_name: name.to_owned(),
     })
+}
+
+/// Sorted immediate project basenames, using the same directory/symlink policy
+/// as resolution. Inventory only: no tmux connection or session-name validation.
+pub fn project_names(root: &Path) -> Result<Vec<String>, ResolveError> {
+    let mut names: Vec<_> = projects(root, "")?.into_iter().map(|project| project.name).collect();
+    names.sort();
+    Ok(names)
+}
+
+fn projects(root: &Path, argument: &str) -> Result<Vec<Project>, ResolveError> {
+    let entries = fs::read_dir(root).map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
+    let mut projects = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            // A UTF-8 CLI fragment cannot name this directory faithfully.
+            continue;
+        };
+        if !name.contains(argument) {
+            continue;
+        }
+        let path = entry.path();
+        let kind = entry.file_type().map_err(|source| ResolveError::Directory { path: path.clone(), source })?;
+        let is_directory = if kind.is_symlink() {
+            match fs::metadata(&path) {
+                Ok(metadata) => metadata.is_dir(),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(source) => return Err(ResolveError::Directory { path, source }),
+            }
+        } else {
+            kind.is_dir()
+        };
+        if is_directory {
+            projects.push(Project { name, path });
+        }
+    }
+    Ok(projects)
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), ResolveError> {

@@ -8,7 +8,7 @@ mod resolve;
 pub mod socket;
 
 pub use plan::{ClientMode, PlanError, launch};
-pub use resolve::{ResolveError, Selection, resolve};
+pub use resolve::{ResolveError, Selection, project_names, resolve};
 pub use tmax::operation::SessionId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
