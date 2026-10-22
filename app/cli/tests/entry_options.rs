@@ -79,8 +79,9 @@ fn existing_grouped_plan_ignores_startup_and_preserves_session_first_matching() 
     assert_eq!(String::from_utf8(inventory.stdout).unwrap(), "seed\n");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let source = String::from_utf8(output.stdout).unwrap();
-    assert!(source.contains("'new-session' '-t' '$0'"), "{source}");
+    assert!(source.contains("'new-session' '-d' '-s' '_seed-1' '-t' '$0'"), "{source}");
     assert!(source.contains(&format!("'-c' '{}'", temp.path().join("initial").display())), "{source}");
-    assert!(source.contains("';' 'set-option' 'destroy-unattached' 'keep-last'"), "{source}");
+    assert!(source.contains("';' 'attach-session' '-t' '=_seed-1'"), "{source}");
+    assert!(source.contains("';' 'set-option' '-t' '=_seed-1:' 'destroy-unattached' 'keep-last'"), "{source}");
     assert!(!source.contains("must-not-run"));
 }

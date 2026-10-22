@@ -211,6 +211,17 @@ fn run(mut args: Args) -> Result<ExitCode> {
             tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
         }
     }
+    let satellite = match (&resolved, args.group) {
+        (tta_launcher::Selection::Existing(session), true) => {
+            // A fresh inventory names the satellite with the counter no live
+            // session holds, keeping the base name an unambiguous prefix.
+            let sessions = lookup.sessions()?;
+            let name = tta_launcher::satellite_name(&session.name, &sessions);
+            tracing::info!(event = "satellite.named", base = %session.name, name = %name);
+            Some(name)
+        }
+        _ => None,
+    };
     let expression = launch()
         .selection(&resolved)
         .socket(&socket)
@@ -219,11 +230,12 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .maybe_config(args.tmux_config.as_deref())
         .maybe_prefix(prefix.as_ref())
         .grouped(args.group)
+        .maybe_satellite_name(satellite.as_deref())
         .startup(&args.command)
         .maybe_directory(args.dir.as_deref())
         .call()?;
     let operation = match (&resolved, mode) {
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session+attach",
+        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session-detached+attach",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group => "new-grouped-session-detached+switch-client",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) => "attach-session",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) => "switch-client",
