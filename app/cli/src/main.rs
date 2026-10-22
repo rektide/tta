@@ -4,7 +4,7 @@
 compile_error!("tta requires a Unix terminal and tmux");
 
 #[cfg(not(any(feature = "native", feature = "cli")))]
-compile_error!("enable at least one lookup backend: native or cli");
+compile_error!("enable at least one backend: native or cli");
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -13,7 +13,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
-use tta_launcher::{backend, launch, scaffold, socket};
+use tta_launcher::execution::LaunchBackend;
+use tta_launcher::{backend, prepare_launch, scaffold, socket};
 
 mod environment;
 
@@ -65,7 +66,7 @@ struct Args {
     /// Include exec in shell output, explicitly replacing the evaluating shell
     #[arg(long, requires = "print_shell")]
     exec_shell: bool,
-    /// Lookup backend [env: TTA_BACKEND; default: native if compiled, otherwise cli]
+    /// Lookup and eligible launch backend [env: TTA_BACKEND; default: native if compiled, otherwise cli]
     #[arg(long, value_enum)]
     backend: Option<Backend>,
     /// Select a tmux socket label, as with tmux -L [env: TTA_SOCKET_NAME]
@@ -222,7 +223,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         }
         _ => None,
     };
-    let expression = launch()
+    let plan = prepare_launch()
         .selection(&resolved)
         .socket(&socket)
         .client_mode(mode)
@@ -248,12 +249,18 @@ fn run(mut args: Args) -> Result<ExitCode> {
     if args.print_shell {
         let handoff = if args.exec_shell { Handoff::Exec } else { Handoff::Run };
         tracing::info!(event = "emission", handoff = ?handoff);
-        println!("{}", expression.shell(handoff)?);
+        println!("{}", plan.expression().shell(handoff)?);
         return Ok(ExitCode::SUCCESS);
     }
     // Reuse the caller's terminal. Successful exec never returns to Rust.
     tracing::info!(event = "handoff", program = ?tmux, operation);
-    let status = expression.execute(Handoff::Exec).context("tmux client handoff failed")?;
+    let launch_backend = match backend {
+        #[cfg(feature = "native")]
+        Backend::Native => LaunchBackend::Native,
+        #[cfg(feature = "cli")]
+        Backend::Cli => LaunchBackend::Cli,
+    };
+    let status = plan.execute(launch_backend, Handoff::Exec).context("tmux launch failed")?;
     Ok(match status {
         Some(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         None => ExitCode::SUCCESS,

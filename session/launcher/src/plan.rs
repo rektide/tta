@@ -8,6 +8,9 @@ use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
 use crate::{Selection, Session};
+use crate::execution::LaunchPlan;
+#[cfg(feature = "native")]
+use crate::execution::NativeCreation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientMode {
@@ -53,6 +56,37 @@ pub fn launch(
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
 ) -> Result<Expression, PlanError> {
+    Ok(prepare_launch()
+        .selection(selection)
+        .socket(socket)
+        .client_mode(client_mode)
+        .program(program)
+        .maybe_config(config)
+        .maybe_prefix(prefix)
+        .grouped(grouped)
+        .maybe_satellite_name(satellite_name)
+        .startup(startup)
+        .maybe_directory(directory)
+        .call()?
+        .into_expression())
+}
+
+/// Prepare both the portable CLI expression and eligible native execution.
+/// Like [`launch`], preparation performs no I/O; shell output always uses the
+/// complete CLI expression, never a partially executed native plan.
+#[builder]
+pub fn prepare_launch(
+    selection: &Selection,
+    socket: &crate::socket::Resolved,
+    client_mode: ClientMode,
+    program: &OsStr,
+    config: Option<&Path>,
+    prefix: Option<&Expression>,
+    #[builder(default)] grouped: bool,
+    satellite_name: Option<&str>,
+    #[builder(default = &[])] startup: &[OsString],
+    directory: Option<&Path>,
+) -> Result<LaunchPlan, PlanError> {
     let command = |invocations: Vec<Invocation>, startup: &[OsString]| -> Result<Expression, PlanError> {
         let (mut args, environment) = match &socket.label {
             Some(label) => (
@@ -109,7 +143,9 @@ pub fn launch(
             }
             Ok(steps)
         };
-    match selection {
+    #[cfg(feature = "native")]
+    let mut native_creation = None;
+    let expression = match selection {
         Selection::Existing(session) if grouped => {
             let satellite = satellite_name.ok_or(PlanError::UnnamedSatellite)?;
             crate::resolve::validate_name(satellite)?;
@@ -121,13 +157,21 @@ pub fn launch(
             // Both client modes create the satellite detached, then move this
             // client onto it by exact name: nothing depends on the create
             // command's unchanged current-target context.
-            let invocations = vec![
-                create,
+            let handoff = vec![
                 Invocation::new(client)?.args(["-t", &target]),
                 // set-option parses a pane target; the colon fixes the exact
                 // session component rather than treating the name as a pane.
                 Invocation::new("set-option")?.args(["-t", &format!("{target}:"), "destroy-unattached", "keep-last"]),
             ];
+            #[cfg(feature = "native")]
+            {
+                native_creation = Some(NativeCreation {
+                    invocation: create.clone(),
+                    handoff: command(handoff.clone(), &[])?,
+                });
+            }
+            let mut invocations = vec![create];
+            invocations.extend(handoff);
             command(invocations, &[])
         }
         Selection::Existing(session) => command(vec![Invocation::new(client)?.args(["-t", &session.id.to_string()])], &[]),
@@ -148,7 +192,14 @@ pub fn launch(
             steps.extend(new_project_steps(directory, project_directory, session_name, startup)?);
             Ok(And::builder().steps(steps).build().into())
         }
-    }
+    }?;
+    Ok(LaunchPlan {
+        expression,
+        #[cfg(feature = "native")]
+        socket: socket.path.clone(),
+        #[cfg(feature = "native")]
+        native_creation,
+    })
 }
 
 /// A grouped satellite's name: `_`, the base session's name, then the smallest

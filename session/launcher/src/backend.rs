@@ -2,8 +2,9 @@ use std::io;
 
 use crate::Session;
 
-/// Backends acquire session facts only. Planning/creation never calls a backend
-/// mutation, and an absent server is represented by an empty inventory.
+/// Lookup acquires session facts only. Launch execution is a separate seam in
+/// [`crate::execution`]; an absent server is an empty inventory, not permission
+/// to retry a failed mutation.
 pub trait SessionLookup {
     fn sessions(&self) -> Result<Vec<Session>, LookupError>;
 }
