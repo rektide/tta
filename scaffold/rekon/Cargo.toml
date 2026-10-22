@@ -1,0 +1,11 @@
+[package]
+name = "tta-scaffold-rekon"
+description = "rekon script scaffold adapter for tta"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tta-command.workspace = true

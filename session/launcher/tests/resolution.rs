@@ -149,3 +149,90 @@ fn project_symlinks_keep_the_selected_basename() {
     let selected = resolve().lookup(&inventory(&[])).argument("alias").root(root.path()).call().unwrap();
     assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "alias"));
 }
+
+#[test]
+fn create_mode_turns_a_clean_miss_into_a_fresh_project_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let empty = inventory(&[]);
+    assert!(matches!(
+        resolve().lookup(&empty).argument("fresh").root(root.path()).call(),
+        Err(ResolveError::Missing { .. })
+    ));
+    let selected = resolve().lookup(&empty).argument("fresh").root(root.path()).create(true).call().unwrap();
+    assert_eq!(
+        selected,
+        Selection::Create {
+            directory: root.path().canonicalize().unwrap().join("fresh"),
+            session_name: "fresh".to_owned()
+        }
+    );
+}
+
+#[test]
+fn create_mode_refuses_unsafe_names_and_occupied_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let empty = inventory(&[]);
+    for unsafe_name in ["nested/path", ".", "..", "/absolute"] {
+        assert!(
+            matches!(
+                resolve().lookup(&empty).argument(unsafe_name).root(root.path()).create(true).call(),
+                Err(ResolveError::UnsafeName { .. })
+            ),
+            "{unsafe_name}"
+        );
+    }
+    fs::write(root.path().join("taken"), "").unwrap();
+    assert!(matches!(
+        resolve().lookup(&empty).argument("taken").root(root.path()).create(true).call(),
+        Err(ResolveError::Exists { .. })
+    ));
+    // Dangling symlinks never match a directory search but still collide.
+    std::os::unix::fs::symlink("missing", root.path().join("dangling")).unwrap();
+    assert!(matches!(
+        resolve().lookup(&empty).argument("dangling").root(root.path()).create(true).call(),
+        Err(ResolveError::Exists { .. })
+    ));
+}
+
+#[test]
+fn create_mode_keeps_matching_priority_ambiguity_and_name_rules() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["a-fresh", "z-fresh"] {
+        fs::create_dir(root.path().join(name)).unwrap();
+    }
+    let empty = inventory(&[]);
+    // Ambiguity still stops; creation never resolves it by guessing.
+    assert!(matches!(
+        resolve().lookup(&empty).argument("fresh").root(root.path()).create(true).call(),
+        Err(ResolveError::Projects { .. })
+    ));
+    // Existing sessions and directories still win over creation.
+    fs::create_dir(root.path().join("present")).unwrap();
+    assert!(matches!(
+        resolve().lookup(&empty).argument("present").root(root.path()).create(true).call(),
+        Ok(Selection::Project { .. })
+    ));
+    assert!(matches!(
+        resolve().lookup(&inventory(&["live"])).argument("live").root(root.path()).create(true).call(),
+        Ok(Selection::Existing { .. })
+    ));
+    // Session-name rules and collisions apply before any generator runs.
+    assert!(matches!(
+        resolve().lookup(&empty).argument("dotted.name").root(root.path()).create(true).call(),
+        Err(ResolveError::InvalidName(_))
+    ));
+    assert!(matches!(
+        resolve().lookup(&empty).argument("dotted.name").root(root.path()).create(true).session_name("dotted").call(),
+        Ok(Selection::Create { session_name, .. }) if session_name == "dotted"
+    ));
+    assert!(matches!(
+        resolve()
+            .lookup(&inventory(&["occupied"]))
+            .argument("fresh-two")
+            .root(root.path())
+            .create(true)
+            .session_name("occupied")
+            .call(),
+        Err(ResolveError::Collision { .. })
+    ));
+}

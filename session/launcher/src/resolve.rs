@@ -10,7 +10,16 @@ use crate::{Session, matching};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Selection {
     Existing(Session),
-    Project { directory: PathBuf, session_name: String },
+    Project {
+        directory: PathBuf,
+        session_name: String,
+    },
+    /// A missing project that scaffold mode intends to materialize before the
+    /// session starts. Planning needs the generator command as a prefix.
+    Create {
+        directory: PathBuf,
+        session_name: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +36,10 @@ pub enum ResolveError {
     Projects { argument: String, root: PathBuf, candidates: Vec<String> },
     #[error("no session or immediate project directory matches {argument:?} under {root:?}")]
     Missing { argument: String, root: PathBuf },
+    #[error("cannot scaffold {argument:?}: a new project name must be a single path component, not '.', '..', or a path containing '/'")]
+    UnsafeName { argument: String },
+    #[error("refusing to scaffold {path:?}: something already exists there")]
+    Exists { path: PathBuf },
     #[error("cannot inspect project directory {path:?}: {source}")]
     Directory {
         path: PathBuf,
@@ -47,8 +60,16 @@ struct Project {
 
 /// Inspect once, prefer existing sessions, and only then enumerate the project
 /// root. This is observation, not authorization to create or mutate a session.
+/// With `create` set, an otherwise-clean miss becomes a `Create` selection
+/// after validating the fragment as a fresh, nonexisting project name.
 #[builder]
-pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, session_name: Option<&str>) -> Result<Selection, ResolveError> {
+pub fn resolve(
+    lookup: &dyn SessionLookup,
+    argument: &str,
+    root: Option<&Path>,
+    session_name: Option<&str>,
+    #[builder(default)] create: bool,
+) -> Result<Selection, ResolveError> {
     let _span = tracing::info_span!("resolve", argument).entered();
     if argument.is_empty() {
         return Err(ResolveError::Empty);
@@ -75,19 +96,23 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
         .canonicalize()
         .map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
     let projects = projects(&root, argument)?;
-    let project = matching::select(projects, argument, |project| &project.name)
-        .map_err(|projects| {
-            tracing::warn!(event = "match.ambiguous", domain = "project", count = projects.len());
-            ResolveError::Projects {
-                argument: argument.to_owned(),
-                root: root.clone(),
-                candidates: projects.into_iter().map(|project| project.name).collect(),
-            }
-        })?
-        .ok_or_else(|| ResolveError::Missing {
+    let (project, created) = match matching::select(projects, argument, |project| &project.name).map_err(|projects| {
+        tracing::warn!(event = "match.ambiguous", domain = "project", count = projects.len());
+        ResolveError::Projects {
             argument: argument.to_owned(),
-            root,
-        })?;
+            root: root.clone(),
+            candidates: projects.into_iter().map(|project| project.name).collect(),
+        }
+    })? {
+        Some(project) => (project, false),
+        None if create => (new_project(&root, argument)?, true),
+        None => {
+            return Err(ResolveError::Missing {
+                argument: argument.to_owned(),
+                root,
+            });
+        }
+    };
     let name = session_name.unwrap_or(&project.name);
     validate_name(name)?;
     if let Some(session) = sessions.iter().find(|session| session.name == name) {
@@ -96,10 +121,33 @@ pub fn resolve(lookup: &dyn SessionLookup, argument: &str, root: Option<&Path>, 
             id: session.id,
         });
     }
+    if created {
+        tracing::info!(event = "match.create", directory = ?project.path, session_name = name);
+        return Ok(Selection::Create {
+            directory: project.path,
+            session_name: name.to_owned(),
+        });
+    }
     tracing::info!(event = "match.project", directory = ?project.path, session_name = name);
     Ok(Selection::Project {
         directory: project.path,
         session_name: name.to_owned(),
+    })
+}
+
+/// A scaffold target must be one fresh directory component under the root.
+/// Dangling symlinks count as existing: they would collide with creation.
+fn new_project(root: &Path, argument: &str) -> Result<Project, ResolveError> {
+    if argument == "." || argument == ".." || argument.contains('/') {
+        return Err(ResolveError::UnsafeName { argument: argument.to_owned() });
+    }
+    let path = root.join(argument);
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err(ResolveError::Exists { path });
+    }
+    Ok(Project {
+        name: argument.to_owned(),
+        path,
     })
 }
 
