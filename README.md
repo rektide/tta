@@ -114,6 +114,10 @@ This development workspace depends on `../tmux-interface-control`, package
 `tmax` 0.4.0, with only its `client` feature. Keep that sibling checkout available;
 this is not a claim that its current API is published on crates.io.
 
+A root `justfile` wraps these (`just install`, `just install-cli`,
+`just install-cli-only`), since the workspace root is a virtual manifest and
+`cargo install --path .` does not work here.
+
 ```sh
 cargo install --path app/cli --locked
 # Include the optional scripted lookup backend:
