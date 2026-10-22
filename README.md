@@ -1,15 +1,21 @@
 ---
 type: Guide
-title: tta — enter a matching tmux workspace
-description: Rust session-first tmux launcher with project scaffolding, wildcard Zim/Zsh completion, reusable command expressions, and private-server runtime verification
+title: tta — project workspaces, shared terminals, independent views
+description: Enter persistent tmux workspaces, open grouped satellite sessions, scaffold new projects, and compose the same launch plans from Rust or a shell
 resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-10-22, by: "model:openai/gpt-6-astra#high" }
 sources:
-  - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
-    title: Audit native-default and CLI lookup features, clarify tmux launch execution, and repair scaffold tests for native-only builds; track tta-lookup-backends
+  - resource: opencode://ses_e9a607209ffeABss72x2fVkW70
+    title: Rebuild the README around project-entry workflows and tmux session groups; inspect current planner, satellite tests, scaffold adapters, command expressions and completion to correct stale contracts
+  - resource: /session/launcher/src/plan.rs
+    title: Current attach/switch plans, explicit satellite naming, startup argv and initial-directory behavior
+  - resource: /session/launcher/tests/satellites.rs
+    title: Read runtime assertions for shared windows, independent selection, same-client switching and keep-last lifecycle
+  - resource: /scaffold/rekon-native/src/lib.rs
+    title: Current generator options, default remotes, file authoring and local bookmark tracking
   - resource: opencode://ses_e9b671d21ffeJXXTDi6GZnjm60
     title: Commission and implement scaffold mode for missing projects — adapter crate, TOML generator registry, CLI posture, and documentation; track tta-scaffold
   - resource: opencode://ses_e9ae02eceffextjZz5w45jVByw
@@ -42,201 +48,221 @@ sources:
 
 # tta
 
-Attach to a matching tmux session. If none matches, find a matching directory
-under the configured project root (default `~/src`), create a session named after
-that directory, and enter it. With [scaffold mode](#scaffolding-missing-projects)
-configured, a project that does not exist yet can be generated first.
-The workflow builds on [dtachment's `dta` precedent](#precedent-dtachment).
+**Enter a project. Resume its work. Open another view without starting over.**
 
-## Action matrix
+tta brings project discovery, persistent tmux workspaces, and project creation
+into one command. Give it a name or a fragment: it finds a running session,
+opens a project directory in a new session, or scaffolds a fresh project with
+your configured generator.
 
-**Existing sessions win. Exact names win over partial matches. Ambiguity stops.**
-
-| Match selected | Outside tmux | Inside the same tmux server |
-| --- | --- | --- |
-| **Existing session** | Attach to it by session ID | Switch the current client to it |
-| **Project directory**, with no matching session | Create a session in that directory and attach | Create a detached session in that directory, then switch on success |
-| **No match anywhere**, scaffold mode active | Run the generator, then create a session in the new directory and attach | Generate, create detached in the new directory, then switch on success |
-| **Ambiguous or missing match**, otherwise | Report the problem; create nothing | Report the problem; create nothing |
-
-New sessions use the directory basename unless `--session-name` overrides it.
-Outside tmux, direct execution replaces `tta` with the real tmux client; inside,
-it switches the existing client rather than nesting an attachment. Selecting a
-different server from inside tmux is an error.
-
-With **`--print-shell`**, these actions are only printed, ready to evaluate; no
-session is created or entered. See [shell output modes](#shell-output).
+Its tmux trick is **shared work with independent window selection**. Open a
+grouped satellite from another terminal and navigate the same running windows
+without moving the first terminal to a different window. Detach when you're
+done; tmux keeps the work alive.
 
 ```sh
-tta project
-tta --root ~/work project
-tta --socket-name work project
-tta --session-name project-name project.name
-tta fresh-project          # with scaffold mode on, generates fresh-project first
+tta myproject                            # resume it, or start it from ~/src
+tta --group myproject                    # another view of its running windows
+tta myproject -- nvim 'file with spaces'  # start nvim only if creating a session
+tta --scaffold=mine new-project           # generate a project, then enter it
+tta --print-shell myproject               # inspect the launch plan
 ```
 
-## Grouped satellites, startup argv and initial directory
+The CLI is one entry point. Rust callers can reuse the same discovery,
+resolution, scaffolding, and launch planner; command expressions can run
+directly or render as POSIX shell.
 
-These options are explicit; omitting them preserves ordinary attach/switch and
-tmux's default startup command or shell.
+**Start here:** [Install](#build-and-install) · [How tmux works](#how-we-use-tmux) ·
+[Scaffolding](#scaffolding-missing-projects) · [Zsh completion](#zim--zsh-completion)
 
-```sh
-tta --group project
-tta --dir "$PWD" project -- nvim 'file with spaces'
-tta --group --dir "$PWD" -- -project nvim 'file with spaces'
-```
+**Go deeper:** [Configuration](#environment-configuration) ·
+[Matching](#matching-and-failure-behavior) · [Shell plans](#shell-output) ·
+[Rust pieces](#reusable-pieces) · [Verification](#runtime-verification)
 
-- **`--group`**: when an existing session matches, create a satellite sharing its
-  windows but with its own current-window selection. Outside tmux the command is
-  `new-session -t SESSION_ID ; set-option destroy-unattached keep-last`. Inside
-  tmux, create a named detached satellite, switch the current client to that exact
-  name, then set its `destroy-unattached` option. This requires **tmux 3.4+**.
-  An unattached satellite is removed while another group member remains; the
-  last session is retained. Existing windows and their processes are shared.
-  Grouping does not alter project matching or create an extra satellite when a
-  new project session is needed.
-- **`--dir PATH`**: use this initial directory for new project sessions or grouped
-  satellites. Relative paths belong to the invocation cwd and are made absolute
-  before the launch plan changes directory. New-project shell output also changes
-  to this directory. A satellite's directory is its session starting directory;
-  existing shared panes retain their cwd. Ordinary attachment ignores this option.
-  Directory paths must be UTF-8; library callers must provide an absolute path.
-- **Trailing `ARGV`**: the executable and arguments run only when creating a new
-  project session. Existing selections, including grouped satellites, ignore them.
-  Both `FRAGMENT -- ARGV...` and `-- FRAGMENT ARGV...` work; the latter also supports
-  leading-`-` fragments. No shell splitting or interpolation is applied. A lone
-  executable is protected from tmux's single-operand shell interpretation with
-  `/bin/sh -c 'exec "$0"' EXECUTABLE`. Multiple operands go directly to tmux as argv.
-  Non-UTF-8 argument bytes work in direct execution; `--print-shell` rejects them.
+## How we use tmux
 
-The library exposes the same opt-in behavior through
-[`tta_launcher::launch`](session/launcher/src/plan.rs):
+A terminal is a **client**. A tmux **session** holds a collection of windows and
+a current-window selection. Each **window** contains panes and their running
+processes. A **session group** lets several sessions share the same windows
+while retaining their own current-window selection.
 
-```rust,ignore
-let expression = tta_launcher::launch()
-    .selection(&selection)
-    .socket(&socket)
-    .client_mode(mode)
-    .program(tmux_program)
-    .grouped(grouped)                    // default false
-    .startup(&startup_argv)               // &[OsString], default empty
-    .maybe_directory(initial_directory)  // Option<&Path>, default None
-    .call()?;
-```
+That distinction makes two useful ways to enter a workspace:
 
-Inside satellites use process/counter-qualified names; a name collision fails
-visibly rather than attaching to an unrelated session. As with other creation
-plans, a failure after creation may leave the newly created session behind.
-The [satellite runtime tests](session/launcher/tests/satellites.rs) use real control
-clients on preflight-verified absolute sockets under `/tmp/opencode`, checking
-independent current windows, same-client switching, detach/keep-last behavior,
-literal argv and cwd. Cleanup targets individual owned sessions.
-
-## How a fragment becomes an action
-
-**Exact name first; otherwise a unique literal substring.** For a nonempty
-fragment and a valid endpoint/client context:
+- **`tta myproject`** joins the matching session. Clients attached to that same
+  session follow its current-window selection together.
+- **`tta --group myproject`** creates a satellite session in the same group.
+  Each session can select a different window, with the same underlying work
+  available in both.
 
 ```mermaid
-flowchart TD
-    matchSession{"Session match?"} -->|One selected| useSession["Existing session:<br/>attach or switch"]
-    matchSession -->|Ambiguous| stopResolution["Report error;<br/>create nothing"]
-    matchSession -->|No match| matchProject{"Directory match<br/>under configured root?"}
-    matchProject -->|Ambiguous| stopResolution
-    matchProject -->|No match| scaffold{"Scaffold mode active<br/>and registry ready?"}
-    scaffold -->|No| stopResolution
-    scaffold -->|Yes| validateCreate{"Fragment a safe fresh<br/>name under the root?"}
-    validateCreate -->|No| stopResolution
-    validateCreate -->|Yes| runGenerator["Generate, then create<br/>session and enter"]
-    matchProject -->|One selected| validateName{"New name valid<br/>and unused?"}
-    validateName -->|No| stopResolution
-    validateName -->|Yes| createSession["New project session:<br/>create, then enter"]
+flowchart LR
+    terminalOne["Terminal A"] --> baseSession["myproject session<br/>current window: editor"]
+    terminalTwo["Terminal B"] --> satelliteSession["_myproject-1 satellite<br/>current window: build"]
+    baseSession --> sharedWindows["Shared windows<br/>editor · build · shell"]
+    satelliteSession --> sharedWindows
+    sharedWindows --> runningPanes["Same panes and running processes"]
 ```
 
-An absent server counts as an empty session inventory. An ambiguous session
-match never falls through to directories. Lookup and filesystem errors also stop
-before launch. `--print-shell` emits the selected action rather than executing it.
-The [matching tables](#matching-and-failure-behavior) cover inputs and errors;
-[execution failures](#creation-and-execution-failures) explain what can remain
-after a command starts.
+For example, keep an editor visible in one terminal and select a build window
+in another. Creating or closing a window changes the shared collection. If
+both views select the same window, they see the same panes; input goes to the
+same processes. Independence is at **session/window selection**, not a copy
+of the terminal state.
 
-## Precedent: dtachment
+### Grouped satellites, startup argv and initial directory
 
-[`dtachment`](https://github.com/jauntywunderkind/dtachment), checked out at
-`~/src/dtachment`, is the original project-entry workflow. Its
-[`dta` shell function](file:///home/rektide/src/dtachment/dta) selects a directory
-under `~/${PROJECTS_DIR:-src}`, tries the supplied name before appending a `*`
-glob, and attaches through that directory's `.dtach.sock`. When creating a new
-instance, it starts `${EDITOR:-vim}` in the project, optionally supplies files
-discovered by `fd` and a Neovim listen socket, restores the caller's directory,
-then attaches.
+On an existing match, `--group` chooses the smallest unused satellite suffix:
+`_myproject-1`, `_myproject-2`, and so on. It creates that satellite detached,
+attaches or switches to its exact name, then sets its session option
+`destroy-unattached` to `keep-last`.
 
-`tta` carries forward **find a project, resume its workspace, or create one and
-enter it**. Its tmux adaptation searches existing session names first, uses
-explicit exact/unique-substring matching, and uses tmux's configured startup
-command or shell unless explicit startup argv is supplied. The predecessor's editor startup and per-directory
-sockets explain the lineage; [the action matrix](#action-matrix) describes the
-current tmux behavior.
+**The view is disposable; the shared work persists.** An unattached satellite
+is removed while another session in the group remains. If it is the last
+session in the group, it is retained. This uses **tmux 3.4+**. When the project
+needs its first session, `--group` creates that ordinary session directly.
 
-The [environment configuration](#environment-configuration) adopts `PROJECTS_DIR`
-compatibility without adopting `${EDITOR:-vim}` or `DTACHMENT_NVIM_LISTEN`:
-tta lets tmux choose the new session's startup command or shell when no explicit
-startup argv is supplied.
+| Entry option | New project session | Existing session | Grouped satellite |
+| --- | --- | --- | --- |
+| `--dir PATH` | Initial pane directory, overriding the project directory | No effect | Session starting directory; existing shared panes keep their cwd |
+| `-- ARGV...` | Startup executable and literal arguments | No effect | No effect; existing processes are shared |
+| `--session-name NAME` | Override the new session's name | No effect | Satellite name is derived from the matched session |
+
+```sh
+tta --dir "$PWD" myproject -- nvim 'file with spaces'
+tta --group --dir "$PWD" myproject
+tta -- --leading-dash-project nvim README.md
+```
+
+Relative `--dir` paths resolve from the invocation directory. Without startup
+argv, tmux uses its configured startup command or shell. Arguments are passed
+literally: tta does no shell splitting or interpolation. A lone executable is
+wrapped with `/bin/sh -c 'exec "$0"' EXECUTABLE` to avoid tmux interpreting a
+single operand as shell source. Direct execution accepts non-UTF-8 argument
+bytes; shell rendering requires UTF-8. Initial-directory paths require UTF-8.
+
+### Action matrix
+
+tta works both outside and inside tmux. Inside, it moves the **current client**
+within the same server, so entering another workspace does not nest a client.
+
+| Selected work | Outside tmux | Inside the same server |
+| --- | --- | --- |
+| Existing session | Attach by session ID | Switch the current client by session ID |
+| Existing session with `--group` | Create a satellite, then attach | Create a satellite, then switch the current client |
+| Project directory | Create and attach | Create detached, then switch on success |
+| Missing project, configured scaffold active | Generate, then create and attach | Generate, create detached, then switch |
+
+The real tmux client owns the terminal: direct execution replaces tta with it.
+Switching to a different server from inside tmux is an error.
 
 ## Build and install
 
-Requires Rust, tmux 3.2 or newer, and a Unix terminal. The default native lookup
-requires **little-endian Linux** and a tmux protocol supported by the sibling
-[tmax checkout](file:///home/rektide/src/tmux-interface-control/README.md).
-Live tests here use tmux **3.7c**; they do not establish every version's behavior.
+Requires Rust, a Unix terminal, and **tmux 3.2+** (**3.4+** for satellites).
+The default native discovery backend requires **little-endian Linux** and a
+tmux protocol supported by the [tmax checkout](file:///home/rektide/src/tmux-interface-control/README.md).
+Runtime verification here uses tmux **3.7c**.
 
-This development workspace depends on `../tmux-interface-control`, package
-`tmax` 0.4.0, with only its `client` feature. Keep that sibling checkout available;
-this is not a claim that its current API is published on crates.io.
-In this workspace, `~/src/tmax` is a symlink to that same checkout.
-
-The workspace root is a virtual manifest, so `cargo install --path .` does not
-work here. The `cargo install-tta` alias (see `.cargo/config.toml`) runs the
-default install above; extra arguments pass through, e.g.
-`cargo install-tta --features cli`.
+This development workspace has a path dependency on `../tmux-interface-control`
+(package `tmax` 0.4.0, `client` feature). Keep that sibling checkout available;
+the dependency uses its development API.
 
 ```sh
 cargo install --path app/cli --locked
-# Include the optional scripted lookup backend:
+# Or the local alias (also forces replacement of an installed binary):
+cargo install-tta
+
+# Add the optional CLI discovery backend:
 cargo install --path app/cli --locked --features cli
-# CLI-only runtime lookup, e.g. for other Unix platforms:
+# CLI-only runtime discovery, e.g. for other Unix platforms:
 cargo install --path app/cli --locked --no-default-features --features cli
 ```
 
-`native` is the default feature/backend. With both compiled, select
-`--backend native` or `--backend cli`. There is no hidden fallback after a native
-error. CLI-only execution still uses tmax's shared typed schema/decoder, whose
-current `client` compilation feature also includes native plumbing.
+The root is a virtual Cargo workspace; install from `app/cli`, not `.`.
+Default features are `native`, `scaffold-rekon`, `scaffold-rekon-native`, and
+`scaffold-by-default`. A CLI-only build above omits the scaffold adapters;
+add their features explicitly if wanted. With both discovery backends built,
+choose `--backend native` or `--backend cli`.
 
-The feature switch controls **session lookup**, including completion inventories:
+## Scaffolding missing projects
 
-| Operation | `native` (default) | `cli` |
-| --- | --- | --- |
-| Query sessions | tmax connects directly to the server socket | Spawn `tmux list-sessions` |
-| Create, attach, switch, and configure satellites | Execute the tmux client | Execute the tmux client |
-| `--print-shell` | Query natively, then emit tmux commands | Query through tmux, then emit tmux commands |
+A new project can begin with the same command used to return to it later.
+On a clean miss, a configured generator creates `<root>/<name>`, then tta
+opens its tmux session. Existing sessions and directories take precedence.
 
-Direct launch uses argv-based process execution; it does not evaluate the plan
-through a shell. Outside tmux, the final client replaces tta via Unix exec.
-Feature audit and verification: `tta-lookup-backends` on the project's Beads board.
+Configure a named generator in `$XDG_CONFIG_HOME/tta/config.toml`, or
+`~/.config/tta/config.toml` when XDG is unset. `TTA_CONFIG` overrides the path.
+For example, this `rekon-native` entry sets up Git/jj, starter files, and a
+JavaScript package, with a customized remote:
 
-Default features also include `scaffold-rekon` (the script-wrapping rekon
-generator), `scaffold-rekon-native` (tta's own parameterized reimplementation),
-and `scaffold-by-default` (scaffold on a clean miss; drop the feature to make
-scaffolding opt-in per invocation). Adapters are separate crates under
-`scaffold/`; `--no-default-features` builds omit them and any configuration
-naming them fails with the compiled-adapter list.
+```toml
+[scaffold]
+default = "mine"
+
+[scaffold.generators.mine]
+adapter = "rekon-native"
+
+[scaffold.generators.mine.options]
+branch = "main"
+starter-files = ["README.md", "{name}.ts"]
+license = "MIT"
+package-json = true
+install = true
+
+[scaffold.generators.mine.options.remotes]
+origin = "git@github.com:YOUR-ACCOUNT/{name}"
+tngl = ""
+voodoo = ""
+```
+
+```sh
+tta new-project                   # use the configured default on a clean miss
+tta --scaffold=mine new-project    # choose a generator explicitly
+tta --scaffold=false new-project   # require an existing session or directory
+```
+
+The default build enables scaffolding on miss, but **an empty or absent registry
+creates nothing**. Bare `--scaffold` uses the configured default, or the sole
+entry. Multiple entries without a default require an explicit choice. Drop the
+`scaffold-by-default` build feature to make generation opt-in.
+
+### Generator adapters
+
+| Adapter | What it does |
+| --- | --- |
+| [`rekon-native`](scaffold/rekon-native/src/lib.rs) | Honors the project root; initializes Git and colocated jj, creates starter files and an initial commit, configures remotes and bookmark tracking, optionally authors `package.json` and runs `pnpm install --silent` |
+| [`rekon`](scaffold/rekon/src/lib.rs) | Runs the external `rekon NAME` script from PATH; the script owns setup and hardcodes `~/src`, so another tta root may disagree with its output |
+
+`rekon-native` needs Git, jj, and pnpm when package installation is enabled.
+Its options above show the branch, starter-file, license, package and install
+defaults. `author` can be set explicitly; otherwise it uses `AUTHOR`, then
+`git config user.name`, then omits the field. License falls back to `LICENSE`
+and then `MIT` when no explicit value is supplied.
+
+Remote entries **merge over** the adapter's personal-workflow defaults:
+`origin = "git@github.com:rektide/{name}"`,
+`tngl = "tngl:jauntywunderkind.bsky.social/{name}"`, and
+`voodoo = "https://archive.voodoowarez.com/{name}"`. An empty string disables
+one; extra keys add remotes. `{name}` is the supported template placeholder.
+Every configured remote gets local jj bookmark tracking; this neither creates
+remote repositories nor pushes. `origin` also receives Git tracking configuration.
+
+Registry names are yours; adapters must be compiled into the binary. Unknown
+adapters, registry keys, defaults, or selected generators fail before matching.
+Adapter options are validated when a new-project expression is built, including
+for `--print-shell`. The script-wrapping `rekon` adapter accepts no options.
+
+Generation is a short-circuiting plan: **generate → enter directory → create
+session → enter workspace**. Name/collision checks precede generation. A
+failure stops later steps, but does not roll back files or sessions already
+created. Interactive generators run in the foreground.
+
+The [scaffold design record](design/scaffold/proposal0.glm53max.md) explains the
+registry and adapter decisions; work anchor: `tta-scaffold`.
 
 ## Zim / Zsh completion
 
-The [Zsh module](shell/zsh/functions/_tta) completes **live tmux session names and
-immediate project directory basenames**, plus CLI options and their values.
-Type a prefix, substring, or wildcard pattern, then press **Tab**:
+Complete **live session names and project directory names**, using prefixes,
+substrings, or wildcard patterns:
 
 ```text
 tta pipe<Tab>          → tta pipewire-native
@@ -244,16 +270,11 @@ tta wire<Tab>          → tta pipewire-native
 tta *wire*nat*<Tab>    → tta pipewire-native
 ```
 
-Multiple matches remain available for selection through Zsh's completion UI.
-Inserted names are shell-escaped, including spaces and literal metacharacters.
-**Press Tab before Enter:** wildcard matching belongs to completion; the launcher
-still uses [literal exact/unique-substring matching](#matching-and-failure-behavior).
-Completion does not bypass tmux's new-session name restrictions; use
-`--session-name` when a project basename needs a different session name.
+**Press Tab before Enter.** Wildcards belong to completion; the launcher matches
+literal names. Multiple candidates remain available in Zsh's completion UI,
+and inserted names are shell-escaped. Options and `--scaffold=` names complete too.
 
-First install the updated binary with `cargo install --path app/cli --locked`.
-In your Zim configuration (`~/.zimrc`, or `$ZIM_CONFIG_FILE`), add the local module
-**before** the existing `zmodule completion` line:
+After installing the binary, put the local module in `.zimrc` before completion:
 
 ```zsh
 zmodule ~/src/tta --root shell/zsh
@@ -261,11 +282,8 @@ zmodule ~/src/tta --root shell/zsh
 zmodule completion
 ```
 
-Run `zimfw install`, then start a new shell. Alternatively, after this code is
-available upstream, use `zmodule rektide/tta --root shell/zsh` for a Zim-managed
-checkout. The module supplies completion definitions, not the Rust executable.
-
-For plain Zsh, before your existing `compinit` call:
+Run `zimfw install` and start a fresh shell. The module supplies completion, not
+the executable. For plain Zsh, add its functions directory before `compinit`:
 
 ```zsh
 fpath=( ~/src/tta/shell/zsh/functions $fpath )
@@ -273,410 +291,252 @@ autoload -Uz compinit
 compinit
 ```
 
-If Tab is bound to `expand-or-complete`, Zsh may expand a wildcard against the
-**current directory** before asking tta for candidates. For predictable wildcard
-project completion, put `bindkey '^I' complete-word` in `.zshrc` after your keymap
-setup. This changes Tab to completion-only for all commands; the module itself
-does not change your bindings or global completion styles.
+If Tab's `expand-or-complete` expands wildcards against your current directory
+first, `bindkey '^I' complete-word` after keymap setup makes Tab completion-only
+for all commands. The module does not change global bindings or styles.
 
-Candidates use the same [root and endpoint configuration](#environment-configuration)
-as launch, including `--root=PATH`, `--socket-path PATH`, and environment fallbacks.
-Session and project inventories are queried independently: an unavailable project
-root does not hide sessions, and a failed session query does not hide projects.
-`--scaffold=` completes configured generator names from the registry. Tab
-suppresses inventory diagnostics; run tta normally to see configuration or
-lookup errors. Completion only observes state: it never creates, attaches, or
-switches a session, and does not require a server for project candidates.
-Control-character names are omitted from the line-oriented candidate protocol.
+Completion uses launch's root/endpoint settings, queries sessions and projects
+independently, and never creates or enters a session. Inventory errors are
+suppressed for Tab; run tta normally to diagnose them. Control-character names
+are omitted from its line-oriented protocol. See the
+[module](shell/zsh/functions/_tta) and [PTY integration tests](app/cli/tests/completion.rs).
+Work anchor: `tta-zsh-completion`.
 
-The [completion integration tests](app/cli/tests/completion.rs) exercise real Zsh
-widgets in a private PTY, configuration precedence, symlinks, quoted names, and
-live and absent private tmux servers. Zsh and tmux are required for those tests.
-Work anchor: `tta-zsh-completion` on the project's Beads board.
+## How a fragment becomes an action
+
+**Sessions first. Exact names first. Otherwise, a unique literal substring.**
+
+```mermaid
+flowchart TD
+    sessionMatch{"Session match?"} -->|Selected| enterSession["Attach, switch, or create satellite"]
+    sessionMatch -->|Ambiguous| stopResolution["Report candidates; stop"]
+    sessionMatch -->|None| projectMatch{"Project directory match?"}
+    projectMatch -->|Selected| createSession["Create session and enter"]
+    projectMatch -->|Ambiguous| stopResolution
+    projectMatch -->|None| generatorReady{"Scaffold active and configured?"}
+    generatorReady -->|Yes| generateProject["Validate name and target; generate project"]
+    generateProject --> createSession
+    generatorReady -->|No| missingProject["Report missing project"]
+```
+
+For example, `tta foo` selects session `foo` ahead of `foobar`. With no exact
+match, `foobar` alone works; `foobar` and `myfoo` are ambiguous. A directory
+named `foo` does not override either session result.
+
+### Matching and failure behavior
+
+#### Session search comes first
+
+Matching is case-sensitive. An absent server or one with no sessions is an empty
+inventory. Permission, protocol, decoding, and other lookup errors stop the
+operation; they do not become permission to create a workspace. Session
+ambiguity stops before directory search. An existing-session match needs no
+project root or HOME, though registry/choice validation still happens first.
+
+#### Directory search is the fallback
+
+Only immediate directories under the configured root qualify. Directory
+symlinks count under their entry basename; files, dangling symlinks, deeper
+descendants, and non-UTF-8 names do not. Filesystem inspection errors stop the
+search. Missing or empty fragments are errors. Quote shell metacharacters and
+use `--` before a leading-`-` fragment: names are neither globs nor regexes.
+
+#### Creation and execution failures
+
+New sessions use the project basename unless `--session-name` overrides it.
+Empty names and names containing `.`, `:`, or control characters are rejected,
+as are collisions with existing sessions. Names are never silently normalized.
+A scaffold name must additionally be one path component, not `.` or `..`, and
+its target must not already exist, including as a file or dangling symlink.
+
+Existing sessions are targeted by canonical server-local IDs; satellites are
+entered by exact chosen names. A concurrent creation can still collide and
+fail. Failed creation prevents switching; failed switching or option-setting
+after creation can leave the new session behind. There is no automatic retry
+against another match or `new-session -A` fallback.
+
+#### Lookup backend details
+
+Native discovery uses tmax to query the server directly, without spawning a
+process or starting a server. Optional CLI discovery runs tmux with the same
+typed query/decoder. Backends are explicit; native errors do not trigger a
+hidden CLI fallback. Native discovery inherits tmax's bounded connection/output
+policy; CLI discovery currently has no equivalent timeout/output cap. CLI-only
+runtime lookup still compiles tmax's `client` feature, including native plumbing.
+
+Implementation: [matcher](session/launcher/src/matching.rs),
+[resolver](session/launcher/src/resolve.rs), [backends](session/launcher/src/backend.rs),
+and [launch planner](session/launcher/src/plan.rs).
 
 ## Environment configuration
 
-**Explicit CLI options win over environment values, then built-in defaults.**
-Unset and empty environment values both mean “not configured.” CLI values retain
-their ordinary meaning; paths and program values are literal, not shell source,
-and do not expand `~`, `$variables`, or embedded arguments.
+**Explicit CLI options > environment > built-in defaults.** Empty environment
+values mean unset. Paths and executable values are literal, not shell source;
+tta does not expand embedded `~`, variables, or argument strings.
 
 | Variable | CLI override | Meaning / default |
 | --- | --- | --- |
-| `TTA_ROOT` | `--root` | Project root; relative paths use the invocation cwd |
-| `PROJECTS_DIR` | `--root` or `TTA_ROOT` | Compatibility with dtachment: relative paths use `$HOME`; absolute paths are honored; default `src` under `$HOME` |
-| `TTA_BACKEND` | `--backend` | `native` or `cli`, only if compiled; default native when compiled, otherwise cli; no automatic fallback |
-| `TTA_SOCKET_NAME` | Either socket option | tmux `-L` label; otherwise normal tmux endpoint selection |
-| `TTA_SOCKET_PATH` | Either socket option | tmux `-S` path; relative paths use the invocation cwd |
-| `TTA_TMUX` | `--tmux` | Client executable (not a command string); default `tmux` on PATH |
-| `TTA_TMUX_CONFIG` | `--tmux-config` | Startup config passed with `-f`; relative paths use the invocation cwd; otherwise tmux defaults |
-| `TTA_TRACE` | `--trace` / `--trace=false` | JSON diagnostics on stderr; exactly `true`/`1` or `false`/`0`; default off |
-| `TTA_SCAFFOLD` | `--scaffold=NAME` / `--scaffold=false` | Scaffold posture: a configured generator name, `default`/`true`/`1` for the configured default, or `false`/`0`/`off`/`none` to disable; compiled default is on |
-| `TTA_CONFIG` | — | Scaffold registry TOML path; relative paths use the invocation cwd; default `$XDG_CONFIG_HOME/tta/config.toml`, or `$HOME/.config/tta/config.toml` |
+| `TTA_ROOT` | `--root` | Project root; relative to invocation cwd |
+| `PROJECTS_DIR` | `--root` or `TTA_ROOT` | dtachment compatibility: relative to HOME; absolute paths honored; default `$HOME/src` |
+| `TTA_BACKEND` | `--backend` | Compiled backend; native when available, otherwise cli |
+| `TTA_SOCKET_NAME` | Either socket option | tmux `-L` label |
+| `TTA_SOCKET_PATH` | Either socket option | tmux `-S` path; relative to invocation cwd |
+| `TTA_TMUX` | `--tmux` | Client executable, default `tmux` on PATH |
+| `TTA_TMUX_CONFIG` | `--tmux-config` | Startup configuration passed with `-f` |
+| `TTA_TRACE` | `--trace` / `--trace=false` | JSON stderr diagnostics; `true`/`1` or `false`/`0`; default off |
+| `TTA_SCAFFOLD` | `--scaffold[=NAME]` / `--scaffold=false` | Generator name; `default`/`true`/`1` for default; `false`/`0`/`off`/`none` to disable |
+| `TTA_CONFIG` | — | Scaffold registry path; default XDG/HOME location |
 
-Root precedence is **`--root` > `TTA_ROOT` > `PROJECTS_DIR` > `$HOME/src`**.
-HOME is needed only for a relative `PROJECTS_DIR` or the default root. Missing
-HOME or an unreadable root does not block an existing-session match: directory
-search still happens last.
+Root precedence is `--root` > `TTA_ROOT` > `PROJECTS_DIR` > `$HOME/src`.
+For example, `PROJECTS_DIR=work` searches `$HOME/work`, whereas `TTA_ROOT=./work`
+searches relative to the invocation cwd.
 
-The two socket selectors are one family: an explicit `--socket-name` or
-`--socket-path` suppresses **both** environment selectors. Without either CLI
-selector, setting both nonempty environment selectors is an error. Explicitly
-passing both CLI selectors remains a usage error. Invalid active backend or trace
-values fail before lookup; an explicit CLI override ignores the replaced value.
+Either explicit socket selector suppresses both environment socket selectors.
+Setting both selectors at the same active layer is an error. Invalid active
+backend/trace values fail before lookup; explicit overrides ignore replaced
+environment values. Grouping, initial directory, startup argv, session naming,
+and shell-output modes remain explicit per invocation.
+
+### Endpoint and client options
+
+- `--socket-name LABEL` follows tmux's `-L` socket-directory rules;
+  `--socket-path PATH` follows `-S` and needs an existing parent directory.
+- Relative socket paths, `TMUX_TMPDIR`, `--dir`, `--tmux-config`, and explicit
+  executable paths such as `--tmux ./bin/tmux` are frozen against invocation cwd
+  before a plan changes directory. Bare executables retain PATH lookup.
+- Inside tmux, a client can switch only within its current server. To deliberately
+  create a separate client, run outside tmux or unset both `TMUX` and `TMUX_PANE`.
+- `--trace` records lookup, resolution, planning, emission, handoff attempts and
+  failures on stderr. A handoff event records an attempt; it cannot prove what
+  happened after the Rust process was replaced.
+
+## Shell output
+
+The launch plan is a reusable expression: argv commands, environment assignments,
+physical directory changes, file writes, and short-circuit sequences. Normal
+execution runs it directly; `--print-shell` renders it without generating files,
+creating sessions, or attaching.
 
 ```sh
-export PROJECTS_DIR=work          # searches $HOME/work, like dtachment
-tta project
-TTA_ROOT=./checkout tta project   # invocation-cwd-relative, not home-relative
-TTA_SOCKET_NAME=work tta project
-TTA_TRACE=1 tta --trace=false project
-TTA_SCAFFOLD=rekon tta fresh      # scaffold misses with the rekon generator
-tta --scaffold=false fresh        # never scaffold this invocation
+tta --print-shell --group myproject
+# To evaluate a plan, preserving failure from lookup:
+tta_plan=$(tta --print-shell myproject) && eval "$tta_plan"
 ```
 
-`--session-name`, `--group`, `--dir`, startup argv, `--print-shell`, and `--exec-shell` stay explicit, not ambient
-environment preferences. Scaffold posture joins the ordinary CLI > environment >
-default layering because an empty registry keeps misses inert. See
-[scaffolding](#scaffolding-missing-projects) for the registry and posture,
-[endpoint/client options](#endpoint-and-client-options)
-for path freezing and [shell output](#shell-output) for safe evaluation.
-The [environment layer](app/cli/src/environment.rs) implements this small surface;
-[CLI integration tests](app/cli/tests/cli.rs) exercise precedence, empty/invalid
-values, literal paths, session-first behavior and observation-only plans.
+| Mode | Calling shell's cwd | Terminal handoff |
+| --- | --- | --- |
+| Direct `tta` | Unchanged | tta is replaced by the final tmux client |
+| Evaluate `--print-shell` | New-project plans change it | Evaluating shell survives |
+| Evaluate `--print-shell --exec-shell` | New-project plans change it | Evaluating shell is replaced by the final tmux client |
 
-## Matching and failure behavior
+Stdout contains only the complete expression; diagnostics use stderr. The
+guarded assignment matters: `eval "$(tta ...)"` alone can hide lookup failure.
+An emitted plan is a snapshot of the selected session and endpoint, not a fresh
+lookup when evaluated. Evaluate it in the same terminal/context.
 
-Matching is **case-sensitive and literal**. Each search prefers an exact name;
-only when there is no exact name must the substring match be unique.
+## Reusable pieces
 
-### Session search comes first
+The CLI and library share the workflow. Discovery supplies facts, resolution
+chooses work, adapters prepare new projects, and the planner turns that choice
+into executable operations.
 
-| Fragment / session lookup result | Outcome |
+| Crate / home | Responsibility |
 | --- | --- |
-| Fragment omitted | CLI usage error |
-| Empty fragment (`""`) | Error: provide a nonempty fragment |
-| Exact session name exists | Select it, even if other names contain the fragment |
-| No exact name; one session contains the fragment | Select that session |
-| No exact name; multiple sessions contain the fragment | Error with sorted candidates; do not search directories |
-| No session contains the fragment | Search project directories |
-| Server absent or has no sessions | Search project directories |
-| Permission, protocol, decoding, or other lookup failure | Error; do not search directories |
+| [`tta-launcher`](session/launcher/src/lib.rs) | Replaceable `SessionLookup`, matching, resolution, endpoint/client policy, satellite naming and launch plans |
+| [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Shared registry, generator choice, session-first resolution and creation prefix |
+| [`tta-command`](shell/command/src/lib.rs) | Bon-built command expressions, literal file writes, cwd and environment; direct run/Unix exec or POSIX rendering |
+| [`tta-scaffold-rekon`](scaffold/rekon/src/lib.rs) / [`tta-scaffold-rekon-native`](scaffold/rekon-native/src/lib.rs) | Feature-gated adapters returning command expressions |
+| [`tta`](app/cli/src/main.rs) | CLI/environment policy, tracing and terminal handoff |
+| [`shell/zsh`](shell/zsh/functions/_tta) | Live completion through read-only inventories |
+| [`tta-verify`](verification/driver/src/lib.rs) | Reusable runtime exercise/observation library and verification command |
 
-For example, `tta foo` selects session `foo` ahead of `foobar`. Without `foo`,
-it selects `foobar` if that is the only match; with both `foobar` and `myfoo`,
-it reports ambiguity. A directory named `foo` does not override either result.
-
-### Directory search is the fallback
-
-This search runs **only when no session matches**, under the
-[configured root](#environment-configuration), defaulting to `$HOME/src`.
-
-| Directory search result | Outcome |
-| --- | --- |
-| Exact directory basename exists | Select it, even if other basenames contain the fragment |
-| No exact basename; one directory contains the fragment | Select that directory |
-| No exact basename; multiple directories contain the fragment | Error with sorted candidates |
-| No directory contains the fragment | [Scaffold](#scaffolding-missing-projects) if active and ready; otherwise error: no matching session or project directory |
-| No root can be determined from CLI/environment | Error: cannot determine project root |
-| Root or a relevant entry cannot be inspected | Report the filesystem error |
-
-Only immediate directories qualify. Directory symlinks count, retaining their
-entry basename; dangling symlinks, regular files, and deeper descendants do not.
-
-Arguments are not globs or regular expressions. Quote shell metacharacters; use
-`--` before a fragment beginning with `-`. Project matching requires UTF-8 names;
-non-UTF-8 directory entries are skipped. New tmux start-directory paths must also
-be UTF-8. No project root or HOME is needed when an existing session matches.
-
-### Creation and execution failures
-
-| Condition | Outcome |
-| --- | --- |
-| Project selected, no `--session-name` | Use the directory basename as the new session name |
-| Project selected with `--session-name NAME` | Use `NAME`; fragment matching is unchanged |
-| Existing session selected with `--session-name` | Override has no effect |
-| New name empty or contains `.`, `:`, or control characters | Error; choose a distinct safe name with `--session-name` |
-| Override already belongs to another session | Error; choose another name |
-| Selected project's start-directory path is not UTF-8 | Error before launch |
-| Another process creates the same session name after lookup | Creation fails visibly; rerun to resolve again |
-| Scaffold fragment contains `/`, or is `.` or `..` | Error: a new project name must be a single path component |
-| Scaffold target exists under the root (file or dangling symlink) | Error: refuse to scaffold over something existing |
-| Session-name validation or collision fails in scaffold mode | Error before the generator runs; nothing is generated |
-| Generator exits nonzero, or the expected directory never appears | Stop at the generator or the following `cd`; no session is created |
-| Project cd or creation fails | Stop; subsequent commands do not run |
-| Detached creation succeeds, then switching fails | Report failure; the new detached session remains |
-| Client executable cannot start, or attach/switch fails | Report failure; do not choose another match automatically |
-
-Names are rejected rather than silently normalized into potentially colliding
-names. Existing sessions are targeted by canonical server-local IDs, not tmux's
-fuzzy name lookup. There is no `new-session -A` fallback that might change an
-existing session's cwd. Server restarts, rename/replacement between create and
-switch, and changes after shell emission remain races, not hidden reconciliation
-duties.
-
-### Lookup backend details
-
-Native discovery does not spawn a process or implicitly start a server. Missing
-or refused server sockets and a server with no sessions are empty inventories;
-permission, protocol, decode, and other errors are failures. CLI lookup uses the
-same strict typed decoder, `-u` for UTF-8 framing, and narrowly matched C-locale
-absence diagnostics. Native discovery inherits tmax's bounded connection/output
-policy; the optional CLI lookup currently has no equivalent timeout/output cap.
-
-The [matcher](session/launcher/src/matching.rs),
-[resolver](session/launcher/src/resolve.rs), and
-[launch planner](session/launcher/src/plan.rs) implement these rules.
-[CLI checks](app/cli/tests/cli.rs) cover input and emission behavior;
-[runtime acceptance](#runtime-verification) exercises actual attach, create,
-switch, and detach behavior.
-
-## Scaffolding missing projects
-
-When nothing matches at all — no session, no immediate directory, and no
-candidates to make ambiguous — scaffold mode runs a **generator** to materialize
-`<root>/<fragment>`, then continues into the ordinary new-project flow. Existing
-sessions and directories always win first: a valid scaffold choice never runs a
-generator for an existing match. Registry and choice validation still happen
-before matching, so invalid configuration or an unknown generator remains an error.
-
-Generators are **named registry entries** in a TOML file, each pointing at a
-compiled-in adapter crate:
-
-```toml
-# $XDG_CONFIG_HOME/tta/config.toml (TTA_CONFIG overrides)
-[scaffold]
-default = "rekon"
-
-[scaffold.generators.rekon]
-adapter = "rekon"
-```
-
-- **Registry**: entry names are your choice; `adapter` must name an adapter this
-  build includes (`rekon` or `rekon-native` in default installs). Unknown
-  adapters, defaults, and keys fail at startup, before any lookup. Entries may
-  carry an `options` table the adapter validates when the generator runs. An
-  absent file is an empty registry: misses keep the classic error.
-- **Default choice**: a bare miss (or bare `--scaffold`) uses `[scaffold] default`,
-  else the sole entry. Multiple entries without a default never guess; pass
-  `--scaffold=NAME`.
-- **Posture**: default installs scaffold on miss. Build without the
-  `scaffold-by-default` feature to flip the default to opt-in; `--scaffold=NAME`
-  always enables, `--scaffold=false` (or `TTA_SCAFFOLD=off`) always disables.
-  Precedence is CLI > environment > compiled default.
-- **The plan**: `generator && cd -P <root>/<fragment> && tmux new-session …`
-  The fragment becomes the directory and session name exactly as typed (no
-  normalization); `--session-name` overrides the session name only. Name
-  validation and collision checks run **before** the generator, so a collision
-  never generates anything. Direct mode runs the generator in the foreground —
-  interactive scaffolds work — and stops at the `cd` if the expected directory
-  never appeared. `--print-shell` emits the whole expression, so the evaluated
-  plan performs the generation; the snapshot semantics are unchanged.
-
-The `rekon` adapter wraps the user's
-[`rekon` script](file:///home/rektide/.local/bin/rekon) as `rekon <name>` — a
-bare PATH name resolved when the plan runs, from the invocation cwd. The script
-owns where the project lands (it hardcodes `~/src`) and everything afterwards:
-git/jj init, remotes, `npm init`, `pnpm i`, and an initial commit. A non-default
-`--root` therefore diverges; the adapter checks nothing, the following `cd`
-does.
-
-The `rekon-native` adapter is tta's own reimplementation of that workflow —
-parameterized and improved rather than reproduced. It honors the configured
-root, creates the initial branch with `git init -b`, templates remotes and
-starter files, authors `package.json` directly (no `npm init`/`jq`/`unexpand`),
-and installs with `pnpm install --silent` — the script's `pnpm i -q` is rejected
-by current pnpm and was silently failing anyway. Every knob is a per-entry
-option:
-
-```toml
-[scaffold.generators.mine]
-adapter = "rekon-native"
-
-[scaffold.generators.mine.options]
-branch = "main"                        # git init -b and the jj bookmark
-starter-files = ["README.md", "{name}.ts"]  # {name} templates
-author = "rektide"      # > AUTHOR env > git config user.name > omitted
-license = "MIT"         # > LICENSE env > MIT
-package-json = true     # module {name}.js, type module
-install = true          # pnpm install --silent after authoring
-
-[scaffold.generators.mine.options.remotes]
-# Merged over the defaults below; "" disables, new keys add remotes.
-# origin = "git@github.com:rektide/{name}"
-# tngl   = "tngl:jauntywunderkind.bsky.social/{name}"   # tangled.org SSH alias
-# voodoo = "https://archive.voodoowarez.com/{name}"
-```
-
-Remotes default to the live layout (GitHub `origin`, tangled `tngl`, archive
-`voodoo`): each is added with `git remote add`, `origin` gets git tracking
-configuration, and every remote gets `jj bookmark track main@NAME` — which is
-local-only and works before the remote repository exists. The initial branch
-is created as a jj bookmark before the init commit, so `main` lands on it and
-exports to git. Option mistakes surface when the generator runs (adapters
-validate at expression-build time), not at config load. More adapters grow
-from the board — each its own crate behind a feature; `start-it-up` is
-recorded there as interesting prior art, not the path. Work anchor:
-`tta-scaffold` on the project's Beads board; design decisions in
-[the scaffold proposal](design/scaffold/proposal0.glm53max.md).
+The generic expression model knows no tmux syntax. The launcher handles tmux
+targets, format operands and trailing-semicolon parsing separately: shell
+quoting alone does not make a tmux format literal.
 
 ### Shared scaffold API
 
-[`tta_launcher::scaffold`](session/launcher/src/scaffold.rs) owns the registry,
-choice policy, and create-prefix preparation used by the CLI and embedded
-consumers. Enable the launcher's **`scaffold-rekon`** feature to include that
-adapter; the CLI feature of the same name forwards to it. The library's default
-features do not enable an adapter or choose a scaffold posture for its caller.
+Embedded callers can use the same registry and selection policy, then supply
+their own client mode and launch options. In this outline, `lookup`, `socket`,
+and the other inputs are supplied by the caller:
 
 ```rust,ignore
 let resolved = tta_launcher::scaffold::resolve()
     .lookup(lookup)
     .argument(fragment)
     .maybe_root(root)                  // Option<&Path>
-    .maybe_session_name(session_name)  // Option<&str>
-    .choice(choice)                    // "false", "default", or registry name
+    .choice("default")                // or "false" or a registry name
     .call()?;
 
+let satellite = match (&resolved.selection, grouped) {
+    (tta_launcher::Selection::Existing(session), true) =>
+        Some(tta_launcher::satellite_name(&session.name, &lookup.sessions()?)),
+    _ => None,
+};
 let plan = tta_launcher::launch()
     .selection(&resolved.selection)
     .socket(&socket)
     .client_mode(mode)
     .program(tmux_program)
     .maybe_prefix(resolved.prefix.as_ref())
+    .grouped(grouped)
+    .maybe_satellite_name(satellite.as_deref())
     .startup(&startup_argv)
-    .maybe_directory(initial_directory)
+    .maybe_directory(initial_directory) // absolute Option<&Path>
     .call()?;
+
+let shell = plan.shell(tta_command::Handoff::Run)?;
+// Or run with plan.execute(...), choosing Run or Exec for the caller's lifecycle.
 ```
 
-The caller layers its explicit option and `TTA_SCAFFOLD` before supplying
-`choice`. The CLI retains its `scaffold-by-default` feature: it supplies `default`
-when enabled and `false` otherwise. The shared resolver loads the same
-`TTA_CONFIG`/XDG/HOME registry unless passed `.config(&config)` with an already
-loaded `scaffold::Config`. `Config::names()` also supplies scaffold completion.
+Library defaults enable neither scaffold adapters nor scaffold posture. Enable
+`scaffold-rekon` or `scaffold-rekon-native` as needed and layer caller preferences
+before passing `choice`. Registry loading honors `TTA_CONFIG`/XDG/HOME, or accepts
+`.config(&config)` with an already loaded `scaffold::Config`.
 
-`Resolved` exposes `selection`, `prefix: Option<tta_command::Expression>`, and
-`generator: Option<scaffold::Entry>` for tracing. Only `Selection::Create` has a
-prefix and generator; resolution itself executes neither. Passing the prefix to
-`launch` places it before the directory change and tmux creation, with failures
-short-circuiting the remainder. `scaffold::Error` implements
-`std::error::Error + Send + Sync`, preserving underlying causes for `?` into
-callers such as eyre.
-
-[Shared policy tests](session/launcher/tests/scaffold.rs) exercise existing
-matches, clean and ambiguous misses, choice errors, retained causes, and prefix
-ordering/failure in direct and shell execution using private `rekon` and tmux
-shims. [CLI scaffold tests](app/cli/tests/scaffold.rs) check configuration
-precedence, completion, and feature-controlled defaults.
-
-## Shell output
-
-| Invocation mode | What `tta` does now | Effect on the calling shell |
-| --- | --- | --- |
-| `tta FRAGMENT` | Resolve and execute; replace `tta` with the final tmux client | Its cwd is unchanged |
-| `tta --print-shell FRAGMENT` | Resolve and print an expression only | When evaluated, a new-project plan changes its cwd; the shell survives the tmux command |
-| `tta --print-shell --exec-shell FRAGMENT` | Resolve and print an expression ending in `exec` | When evaluated, explicitly replace the shell with the final tmux client |
-
-No shell is needed for normal execution. To change the calling shell's directory
-as well when entering a new project, evaluate the emitted POSIX shell expression:
-
-```sh
-tta_plan=$(tta --print-shell project) && eval "$tta_plan"
-```
-
-The guard matters: `eval "$(tta ...)"` alone can conceal a failed lookup.
-Printing only observes state and emits a plan; it does not create or attach.
-Stdout contains only the complete command expression. Errors and optional tracing
-use stderr. Ordinary output never replaces the evaluating shell; explicitly add
-`--exec-shell` if replacement is wanted.
-
-New-project output models `cd -P ... && tmux ...`; direct execution supplies the
-same physical cwd to child processes without changing the parent shell's cwd.
-Shell output is a snapshot, not a fresh lookup at evaluation time. Evaluate it in
-the same terminal/context rather than saving it as a durable session identity.
-
-## Endpoint and client options
-
-- `--socket-name LABEL` selects tmux's `-L` label; tmux still creates/checks its
-  private socket directory on cold startup. Relative `TMUX_TMPDIR` is frozen
-  against the invocation cwd.
-- `--socket-path PATH` selects `-S`; relative paths are frozen before project cd.
-  As with tmux itself, an explicit socket path needs an existing parent directory.
-- Inside tmux, selecting another server fails explicitly: clients cannot switch
-  between servers. Run outside tmux, or deliberately unset `TMUX` and `TMUX_PANE`
-  before creating a separate client.
-- `--tmux PROGRAM` chooses the client executable (also used by CLI lookup).
-  Explicit relative paths such as `./bin/tmux` are frozen before cd. Bare names
-  retain normal PATH lookup: relative PATH entries can resolve differently after
-  entering a project; use an absolute executable path when that matters.
-- `--tmux-config PATH` passes `-f` to the final client; relative configuration
-  paths also belong to the invocation cwd. `/dev/null` is useful for isolation.
-- `--trace` (or `TTA_TRACE=1`) emits structured JSON events on stderr: lookup,
-  match decision, operations, emission, handoff attempt, and failure. A handoff event means an
-  **attempt**, not proof that tmux attached after replacing the Rust process.
-
-## Reusable pieces
-
-| Home | Responsibility |
-| --- | --- |
-| [shell/command](shell/command/src/lib.rs) | Bon-built argv commands, validated environment assignments, physical cd, short-circuit conjunction; direct run/Unix exec or POSIX shell rendering |
-| [shell/zsh](shell/zsh/functions/_tta) | Zim-compatible option, live session, project and wildcard Tab completion |
-| [scaffold/rekon](scaffold/rekon/src/lib.rs) | rekon-script scaffold adapter: one argv expression, `rekon <name>` |
-| [scaffold/rekon-native](scaffold/rekon-native/src/lib.rs) | Parameterized native rekon reimplementation: templated remotes/branch/starter files, authored package.json, validated options |
-| [session/launcher](session/launcher/src/lib.rs) | `SessionLookup`, native/CLI acquisition, deterministic resolution, endpoint policy and launch planning |
-| [session/launcher scaffold API](session/launcher/src/scaffold.rs) | Shared scaffold registry, generator choice, session-first resolution and creation prefix |
-| [app/cli](app/cli/src/main.rs) | Arguments, environment/feature posture, structured diagnostics and interactive handoff |
-| [verification/driver](verification/driver/src/lib.rs) | Shared Rust runtime exercise/observation library plus `tta-verify` command |
-
-The generic command model knows no tmux syntax. The launcher separately handles
-tmux's argv trailing-semicolon rule, exact targets, and format operands (`-s` and
-`-c`). Shell quoting alone does not make tmux formats literal.
-
-[Launcher research: language boundaries, native/CLI lookup and runtime acceptance](design/launcher/research0.gpt6a.md)
-provides the independent rationale, residual races, and focused review findings;
-it is design evidence, not a replacement owner for this guide.
+Resolution executes no generator. `Resolved` contains the selection, optional
+generator expression prefix, and generator metadata. Pass the prefix into
+`launch`; creation without it fails. Grouped existing-session plans likewise
+require an explicitly chosen satellite name. Errors retain underlying causes
+through `std::error::Error + Send + Sync` at the scaffold boundary.
 
 ## Runtime verification
 
-`cargo verify` runs the Rust **runtime driver**, not a formatter/test orchestrator.
-It exercises the actual built `tta` executable with a PTY on exclusively owned
-private tmux sockets:
+Terminal behavior is exercised against **real tmux on private sockets**.
+`cargo verify` runs the Rust PTY driver against the built tta executable:
 
 ```sh
 cargo build -p tta --all-features
 cargo verify --backend native
 cargo verify --backend cli --inside --report report.json
-# Narrow a reproduction:
 cargo verify --tta target/debug/tta --backend native --mode shell --scenario new
 ```
 
-By default it covers direct and evaluated-shell execution for both cold creation
-and an existing session. `--inside` instead starts a real attached origin pane,
-invokes tta there, and verifies switching the **same client**, preserving the
-original pane/shell. The [integration tests](app/cli/tests/acceptance.rs) call that
-same library for both contexts and both compiled backends.
+The default exercises cold creation and existing-session entry, both directly
+and through evaluated shell plans. `--inside` starts a real attached origin pane
+and checks that tta switches the **same client**, preserving its original shell.
+The [acceptance tests](app/cli/tests/acceptance.rs) use the same driver.
 
-The JSON report contains process lifecycle events, captured output/PTY transcript,
-actual session/client/pane IDs and cwd before/after detach, parsed child tracing,
-and cleanup results. Outside direct mode verifies exec preserves the client PID;
-shell mode verifies the evaluator survives. Detach must preserve the same session
-and pane. Traces are compared against those independent tmux observations rather
-than treated as completion evidence themselves.
+Reports retain PTY/process output, actual session/client/pane IDs, cwd, tracing,
+and cleanup results. Direct mode checks exec/PID continuity; shell mode checks
+the evaluator survives; detach checks the session and pane persist. Independent
+tmux observations establish outcomes rather than treating trace messages as proof.
 
-Queries/lifecycle phases have bounded timeouts (`--timeout`, default 10 seconds);
-retained process/PTY output is bounded to 256 KiB per stream. Fixtures use
-`/dev/null` tmux config and isolated homes. CLI tests and runtime fixtures remove
-inherited `TTA_*` and `PROJECTS_DIR` settings, so local preferences do not steer
-acceptance. Only owned endpoints are cleaned up.
-Reports retain diagnostics after fixture removal. Missing tmux, unsupported
-backends, failed assertions and failed cleanup return nonzero, not skipped
-acceptance reported as success.
+Additional suites cover [satellite lifecycle and literal startup argv](session/launcher/tests/satellites.rs),
+[shared scaffold policy](session/launcher/tests/scaffold.rs),
+[CLI scaffold behavior](app/cli/tests/scaffold.rs),
+[real Git/jj generator setup](scaffold/rekon-native/tests/live.rs), and
+[Zsh completion in a PTY](app/cli/tests/completion.rs).
 
-## Development checks
+Runtime fixtures isolate homes/configuration and own their sockets. The driver
+bounds lifecycle phases (`--timeout`, default 10 seconds) and retained output
+(256 KiB per stream). Missing tools, failed assertions, and failed cleanup return
+nonzero. Only owned endpoints are cleaned up.
 
-Tests and recorders are Rust/Cargo artifacts; no Python harness is required.
-Live tests need tmux on PATH. Native tests require its supported Linux platform.
-Scoped `tracing-mock` expectations and the complementary `tracing-test` diagnostic
-test live in separate test binaries; child JSON is captured by the runtime driver.
+### Development checks
+
+Live checks need tmux; completion tests also need Zsh. Native tests require the
+supported Linux platform. Generator live tests use Git and jj.
 
 ```sh
 # Name owned packages: --all can traverse the sibling tmax dependency.
@@ -687,5 +547,22 @@ cargo nextest run --workspace --no-default-features --features cli
 cargo test --workspace --all-features --doc
 ```
 
-The development tmax dependency currently emits its own compiler warnings;
-`--no-deps` keeps clippy's deny-warnings policy scoped to this workspace.
+`--no-deps` scopes clippy's deny-warnings policy to this workspace; the development
+tmax dependency currently emits its own compiler warnings.
+
+## Precedent: dtachment
+
+[dtachment](https://github.com/jauntywunderkind/dtachment) established the
+project-entry habit: find a project, resume its workspace, or create one and
+enter it. Its `dta` function finds directories under `~/${PROJECTS_DIR:-src}`,
+starts an editor, and attaches through a per-directory `.dtach.sock`.
+
+tta carries that habit into tmux: session-first discovery, shared-window groups,
+same-client switching, configurable project generation, and reusable launch
+plans. It retains `PROJECTS_DIR` compatibility; tmux's defaults or explicit
+startup argv choose the program to run.
+
+The [launcher research](design/launcher/research0.gpt6a.md) records the language
+boundaries, native/CLI discovery tradeoffs, and runtime-acceptance rationale.
+It and the [scaffold proposal](design/scaffold/proposal0.glm53max.md) are design
+evidence; this guide describes the current implementation.
