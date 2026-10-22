@@ -10,14 +10,19 @@ repository.workspace = true
 default = ["native"]
 native = []
 cli = []
+scaffold-rekon = ["dep:tta-scaffold-rekon"]
 
 [dependencies]
+anyhow.workspace = true
 bon.workspace = true
 rustix.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tmax.workspace = true
+toml.workspace = true
 tracing.workspace = true
 tta-command.workspace = true
+tta-scaffold-rekon = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

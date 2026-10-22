@@ -831,15 +831,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "serde",
  "tempfile",
  "tmax",
- "toml",
  "tracing",
  "tracing-subscriber",
  "tta-command",
  "tta-launcher",
- "tta-scaffold-rekon",
  "tta-verify",
 ]
 
@@ -856,15 +853,19 @@ dependencies = [
 name = "tta-launcher"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bon",
  "rustix",
+ "serde",
  "tempfile",
  "thiserror 2.0.21",
  "tmax",
+ "toml",
  "tracing",
  "tracing-mock",
  "tracing-test",
  "tta-command",
+ "tta-scaffold-rekon",
 ]
 
 [[package]]

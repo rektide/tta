@@ -38,7 +38,7 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
         && let Some(value) = value("TTA_SCAFFOLD")
     {
         let text = value.to_str().ok_or_else(|| anyhow!("TTA_SCAFFOLD must be UTF-8"))?;
-        crate::ScaffoldChoice::parse(text).map_err(|error| anyhow!("TTA_SCAFFOLD: {error}"))?;
+        tta_launcher::scaffold::Choice::parse(text).map_err(|error| anyhow!("TTA_SCAFFOLD: {error}"))?;
         args.scaffold = Some(text.to_owned());
     }
     args.tmux = args.tmux.or_else(|| value("TTA_TMUX"));

@@ -10,12 +10,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
-use tta_launcher::{backend, launch, resolve, socket};
+use tta_launcher::{backend, launch, scaffold, socket};
 
-mod config;
 mod environment;
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -94,26 +93,6 @@ enum CompletionCandidates {
     Scaffolds,
 }
 
-/// Scaffold posture for one invocation. The compiled default comes from the
-/// `scaffold-by-default` feature; CLI and TTA_SCAFFOLD values override it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ScaffoldChoice {
-    Off,
-    Default,
-    Named(String),
-}
-
-impl ScaffoldChoice {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "" => Err("empty scaffold value; use a generator name, 'default', or 'false'".to_owned()),
-            "default" | "true" | "1" => Ok(Self::Default),
-            "false" | "0" | "off" | "none" => Ok(Self::Off),
-            name => Ok(Self::Named(name.to_owned())),
-        }
-    }
-}
-
 fn print_candidates(mut names: Vec<String>) {
     names.sort();
     names.dedup();
@@ -157,7 +136,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         print_candidates(tta_launcher::project_names(root)?);
         return Ok(ExitCode::SUCCESS);
     }
-    let config = config::Config::load()?;
+    let config = scaffold::Config::load()?;
     if matches!(args.completion_candidates, Some(CompletionCandidates::Scaffolds)) {
         print_candidates(config.names());
         return Ok(ExitCode::SUCCESS);
@@ -203,35 +182,23 @@ fn run(mut args: Args) -> Result<ExitCode> {
     let mode = mode.expect("launch mode was checked before lookup");
     tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument);
     // Scaffold selection: CLI > environment > compiled default posture.
-    let choice = match args.scaffold.as_deref() {
-        Some(token) => ScaffoldChoice::parse(token).map_err(|error| anyhow!("--scaffold: {error}"))?,
-        None if cfg!(feature = "scaffold-by-default") => ScaffoldChoice::Default,
-        None => ScaffoldChoice::Off,
-    };
-    let generator = match &choice {
-        ScaffoldChoice::Off => None,
-        ScaffoldChoice::Named(name) => Some(config.entry(name)?),
-        ScaffoldChoice::Default => config.default_entry()?,
-    };
+    let choice = args
+        .scaffold
+        .as_deref()
+        .unwrap_or(if cfg!(feature = "scaffold-by-default") { "default" } else { "false" });
     // The configured root is inspected only after session matching fails.
-    let resolved = match resolve()
+    let scaffold::Resolved {
+        selection: resolved,
+        prefix,
+        generator,
+    } = scaffold::resolve()
         .lookup(lookup.as_ref())
         .argument(argument)
         .maybe_root(args.root.as_deref())
         .maybe_session_name(args.session_name.as_deref())
-        .create(generator.is_some())
-        .call()
-    {
-        Ok(resolved) => resolved,
-        Err(error @ tta_launcher::ResolveError::Missing { .. }) if matches!(choice, ScaffoldChoice::Default) && config.is_empty() => {
-            return Err(anyhow::Error::new(error).context(format!(
-                "scaffold mode is on but no generators are configured; add [scaffold.generators] to {} or disable with --scaffold=false",
-                config.path_description()
-            )));
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let mut prefix = None;
+        .choice(choice)
+        .config(&config)
+        .call()?;
     match &resolved {
         tta_launcher::Selection::Existing(session) => {
             tracing::info!(event = "resolution", decision = "existing", session_id = %session.id, session_name = %session.name)
@@ -241,13 +208,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         }
         tta_launcher::Selection::Create { directory, session_name } => {
             let entry = generator.as_ref().expect("create selections require a chosen generator");
-            let project = directory
-                .file_name()
-                .and_then(std::ffi::OsStr::to_str)
-                .with_context(|| format!("created project directory {directory:?} must have a UTF-8 name"))?;
-            let root = directory.parent().context("created project directory has no parent")?;
             tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
-            prefix = Some(entry.scaffold(project, root)?);
         }
     }
     let expression = launch()
