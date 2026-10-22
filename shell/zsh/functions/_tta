@@ -7,7 +7,10 @@ local option
 
 _arguments -s -S -C \
   '--root=[Project root]:project root:_directories' \
+  '--group[Create a grouped satellite for an existing session]' \
+  '--dir=[Initial directory for a new session]:initial directory:_directories' \
   '--session-name=[Override new session name]:session name:' \
+  '--scaffold=-[Scaffold a missing project before creating its session]:generator:->scaffold' \
   '--print-shell[Print a plan without creating or attaching]' \
   '--exec-shell[Use exec in the printed plan]' \
   '--backend=[Session lookup backend]:backend:->backend' \
@@ -24,6 +27,11 @@ if [[ $state == backend ]]; then
   local -a backends
   backends=( "${(@f)$(command tta --completion-candidates backends 2>/dev/null)}" )
   _wanted backends expl 'compiled lookup backend' compadd -a backends && ret=0
+elif [[ $state == scaffold ]]; then
+  local -a generators
+  generators=( "${(@f)$(command tta --completion-candidates scaffolds 2>/dev/null)}" )
+  generators=( "${(@)generators:#}" )
+  _wanted scaffolds expl 'configured scaffold generator' compadd -a generators && ret=0
 elif [[ $state == target ]]; then
   # Forward only lookup configuration, never an action or the typed pattern.
   # _arguments accepts both --root VALUE and --root=VALUE, including quoting.

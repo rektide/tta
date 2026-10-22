@@ -163,6 +163,153 @@ fn assert_plan(command: &mut Command) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+#[cfg(all(feature = "cli", feature = "scaffold-rekon"))]
+#[test]
+fn scaffold_mode_plans_generation_before_the_new_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[scaffold]\ndefault = \"rk\"\n\n[scaffold.generators.rk]\nadapter = \"rekon\"\n").unwrap();
+    let socket = temp.path().join("socket");
+    let printed = tta()
+        .env("TTA_CONFIG", &config)
+        .args(["--backend", "cli", "--root"])
+        .arg(&root)
+        .arg("--socket-path")
+        .arg(&socket)
+        .args(["--print-shell", "fresh"])
+        .output()
+        .unwrap();
+    assert!(printed.status.success(), "{}", String::from_utf8_lossy(&printed.stderr));
+    let source = String::from_utf8(printed.stdout).unwrap();
+    assert!(source.starts_with("'rekon' 'fresh' && "), "{source}");
+    assert!(
+        source.contains(&format!("cd -P '{}'", root.canonicalize().unwrap().join("fresh").display())),
+        "{source}"
+    );
+    assert!(source.contains("new-session"), "{source}");
+    // Printing observes; it neither generates nor starts a server.
+    assert!(!root.join("fresh").exists());
+    assert!(!socket.exists());
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn scaffold_selection_is_deliberate_and_never_guesses() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let socket = temp.path().join("socket");
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[scaffold.generators.rk]\nadapter = \"rekon\"\n[scaffold.generators.alt]\nadapter = \"rekon\"\n",
+    )
+    .unwrap();
+    let mut base = tta();
+    base.env("TTA_CONFIG", &config)
+        .env("TTA_ROOT", &root)
+        .env("TTA_SOCKET_PATH", &socket)
+        .args(["--print-shell"]);
+    // Multiple generators without a default refuse to guess...
+    let ambiguous = base.args(["fresh"]).output().unwrap();
+    assert!(!ambiguous.status.success());
+    assert!(
+        String::from_utf8_lossy(&ambiguous.stderr).contains("--scaffold=NAME"),
+        "{}",
+        String::from_utf8_lossy(&ambiguous.stderr)
+    );
+    // ...and an unknown name lists the configured choices.
+    let unknown = base.args(["--scaffold=bogus", "fresh"]).output().unwrap();
+    assert!(!unknown.status.success());
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(stderr.contains("bogus") && stderr.contains("alt") && stderr.contains("rk"), "{stderr}");
+    // Explicit choice wins over an off environment value.
+    let source = {
+        let mut command = tta();
+        command
+            .env("TTA_CONFIG", &config)
+            .env("TTA_ROOT", &root)
+            .env("TTA_SOCKET_PATH", &socket)
+            .env("TTA_SCAFFOLD", "off")
+            .args(["--backend", "cli", "--scaffold=alt", "--print-shell", "fresh"]);
+        assert_plan(&mut command)
+    };
+    assert!(source.starts_with("'rekon' 'fresh'"), "{source}");
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn scaffold_disabling_and_missing_registries_keep_classic_misses() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let socket = temp.path().join("socket");
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[scaffold.generators.rk]\nadapter = \"rekon\"\n").unwrap();
+    // An explicit --scaffold=false keeps the plain miss error even when configured.
+    let output = tta()
+        .env("TTA_CONFIG", &config)
+        .env("TTA_ROOT", &root)
+        .env("TTA_SOCKET_PATH", &socket)
+        .args(["--backend", "cli", "--scaffold=false", "--print-shell", "fresh"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no session or immediate project directory matches"), "{stderr}");
+    assert!(!stderr.contains("--scaffold=false"), "{stderr}");
+    // The default posture with nothing configured explains how to proceed.
+    let output = tta()
+        .env("TTA_CONFIG", temp.path().join("absent.toml"))
+        .env("TTA_ROOT", &root)
+        .env("TTA_SOCKET_PATH", &socket)
+        .args(["--backend", "cli", "--print-shell", "fresh"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no generators are configured"), "{stderr}");
+    assert!(stderr.contains("--scaffold=false"), "{stderr}");
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn scaffold_mode_still_prefers_sessions_directories_and_safe_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    std::fs::create_dir_all(root.join("present")).unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[scaffold.generators.rk]\nadapter = \"rekon\"\n").unwrap();
+    let socket = temp.path().join("socket");
+    // An existing directory wins; the generator never runs.
+    let source = {
+        let mut command = tta();
+        command.env("TTA_CONFIG", &config).env("TTA_ROOT", &root).env("TTA_SOCKET_PATH", &socket).args([
+            "--backend",
+            "cli",
+            "--scaffold=rk",
+            "--print-shell",
+            "present",
+        ]);
+        assert_plan(&mut command)
+    };
+    assert!(source.contains("cd -P "), "{source}");
+    assert!(!source.contains("rekon"), "{source}");
+    // Fragments must be single path components, even in scaffold mode.
+    let output = tta()
+        .env("TTA_CONFIG", &config)
+        .env("TTA_ROOT", &root)
+        .env("TTA_SOCKET_PATH", &socket)
+        .args(["--backend", "cli", "--scaffold=rk", "--print-shell", "nested/path"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("single path component"));
+}
+
 #[test]
 fn environment_roots_layer_without_changing_their_path_meaning() {
     let temp = tempfile::tempdir().unwrap();

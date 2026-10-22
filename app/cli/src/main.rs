@@ -10,11 +10,12 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
 use tta_launcher::{backend, launch, resolve, socket};
 
+mod config;
 mod environment;
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -38,7 +39,7 @@ struct Args {
     #[arg(required_unless_present = "completion_candidates")]
     argument: Option<String>,
     /// Read-only shell completion inventory (one name per line)
-    #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name"])]
+    #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name", "scaffold"])]
     completion_candidates: Option<CompletionCandidates>,
     /// Project root [env: TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
     #[arg(long)]
@@ -46,6 +47,19 @@ struct Args {
     /// Override the name of a new session (does not change session matching)
     #[arg(long)]
     session_name: Option<String>,
+    /// Scaffold a missing project before creating its session
+    /// [env: TTA_SCAFFOLD; --scaffold=NAME picks a configured generator, a bare --scaffold uses the configured default, --scaffold=false disables]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "default")]
+    scaffold: Option<String>,
+    /// Create a grouped satellite when an existing session matches
+    #[arg(long)]
+    group: bool,
+    /// Initial directory for new projects or grouped satellites
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    /// Startup executable and arguments for a new project session only
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    command: Vec<OsString>,
     /// Emit POSIX shell commands for eval; do not create or attach
     #[arg(long)]
     print_shell: bool,
@@ -77,6 +91,27 @@ enum CompletionCandidates {
     Backends,
     Projects,
     Sessions,
+    Scaffolds,
+}
+
+/// Scaffold posture for one invocation. The compiled default comes from the
+/// `scaffold-by-default` feature; CLI and TTA_SCAFFOLD values override it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ScaffoldChoice {
+    Off,
+    Default,
+    Named(String),
+}
+
+impl ScaffoldChoice {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "" => Err("empty scaffold value; use a generator name, 'default', or 'false'".to_owned()),
+            "default" | "true" | "1" => Ok(Self::Default),
+            "false" | "0" | "off" | "none" => Ok(Self::Off),
+            name => Ok(Self::Named(name.to_owned())),
+        }
+    }
 }
 
 fn print_candidates(mut names: Vec<String>) {
@@ -122,6 +157,11 @@ fn run(mut args: Args) -> Result<ExitCode> {
         print_candidates(tta_launcher::project_names(root)?);
         return Ok(ExitCode::SUCCESS);
     }
+    let config = config::Config::load()?;
+    if matches!(args.completion_candidates, Some(CompletionCandidates::Scaffolds)) {
+        print_candidates(config.names());
+        return Ok(ExitCode::SUCCESS);
+    }
     let context = socket::Context::from_environment()?;
     let backend = args.backend.unwrap_or_default();
     let mut tmux = args.tmux.unwrap_or_else(|| OsString::from("tmux"));
@@ -131,6 +171,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         tmux = context.cwd.join(&tmux).into_os_string();
     }
     args.tmux_config = args.tmux_config.map(|path| context.cwd.join(path));
+    args.dir = args.dir.map(|path| context.cwd.join(path));
     let selection = match (args.socket_name, args.socket_path) {
         (Some(name), _) => socket::Selection::Name(name),
         (_, Some(path)) => socket::Selection::Path(path),
@@ -161,19 +202,52 @@ fn run(mut args: Args) -> Result<ExitCode> {
     let argument = args.argument.as_deref().expect("clap requires a fragment outside completion mode");
     let mode = mode.expect("launch mode was checked before lookup");
     tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument);
+    // Scaffold selection: CLI > environment > compiled default posture.
+    let choice = match args.scaffold.as_deref() {
+        Some(token) => ScaffoldChoice::parse(token).map_err(|error| anyhow!("--scaffold: {error}"))?,
+        None if cfg!(feature = "scaffold-by-default") => ScaffoldChoice::Default,
+        None => ScaffoldChoice::Off,
+    };
+    let generator = match &choice {
+        ScaffoldChoice::Off => None,
+        ScaffoldChoice::Named(name) => Some(config.entry(name)?),
+        ScaffoldChoice::Default => config.default_entry()?,
+    };
     // The configured root is inspected only after session matching fails.
-    let resolved = resolve()
+    let resolved = match resolve()
         .lookup(lookup.as_ref())
         .argument(argument)
         .maybe_root(args.root.as_deref())
         .maybe_session_name(args.session_name.as_deref())
-        .call()?;
+        .create(generator.is_some())
+        .call()
+    {
+        Ok(resolved) => resolved,
+        Err(error @ tta_launcher::ResolveError::Missing { .. }) if matches!(choice, ScaffoldChoice::Default) && config.is_empty() => {
+            return Err(anyhow::Error::new(error).context(format!(
+                "scaffold mode is on but no generators are configured; add [scaffold.generators] to {} or disable with --scaffold=false",
+                config.path_description()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut prefix = None;
     match &resolved {
         tta_launcher::Selection::Existing(session) => {
             tracing::info!(event = "resolution", decision = "existing", session_id = %session.id, session_name = %session.name)
         }
         tta_launcher::Selection::Project { directory, session_name } => {
             tracing::info!(event = "resolution", decision = "new", directory = ?directory, session_name = %session_name)
+        }
+        tta_launcher::Selection::Create { directory, session_name } => {
+            let entry = generator.as_ref().expect("create selections require a chosen generator");
+            let project = directory
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .with_context(|| format!("created project directory {directory:?} must have a UTF-8 name"))?;
+            let root = directory.parent().context("created project directory has no parent")?;
+            tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
+            prefix = Some(entry.scaffold(project, root)?);
         }
     }
     let expression = launch()
@@ -182,12 +256,20 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .client_mode(mode)
         .program(&tmux)
         .maybe_config(args.tmux_config.as_deref())
+        .maybe_prefix(prefix.as_ref())
+        .grouped(args.group)
+        .startup(&args.command)
+        .maybe_directory(args.dir.as_deref())
         .call()?;
     let operation = match (&resolved, mode) {
+        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session+attach",
+        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group => "new-grouped-session-detached+switch-client",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) => "attach-session",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) => "switch-client",
         (tta_launcher::Selection::Project { .. }, tta_launcher::ClientMode::Attach) => "new-session+attach",
         (tta_launcher::Selection::Project { .. }, tta_launcher::ClientMode::Switch) => "new-session-detached+switch-client",
+        (tta_launcher::Selection::Create { .. }, tta_launcher::ClientMode::Attach) => "scaffold+new-session+attach",
+        (tta_launcher::Selection::Create { .. }, tta_launcher::ClientMode::Switch) => "scaffold+new-session-detached+switch-client",
     };
     tracing::info!(event = "plan", operation, client_mode = ?mode);
     if args.print_shell {

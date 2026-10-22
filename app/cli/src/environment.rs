@@ -34,6 +34,13 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
             bail!("TTA_SOCKET_NAME and TTA_SOCKET_PATH conflict; set only one or override with --socket-name/--socket-path");
         }
     }
+    if args.scaffold.is_none()
+        && let Some(value) = value("TTA_SCAFFOLD")
+    {
+        let text = value.to_str().ok_or_else(|| anyhow!("TTA_SCAFFOLD must be UTF-8"))?;
+        crate::ScaffoldChoice::parse(text).map_err(|error| anyhow!("TTA_SCAFFOLD: {error}"))?;
+        args.scaffold = Some(text.to_owned());
+    }
     args.tmux = args.tmux.or_else(|| value("TTA_TMUX"));
     args.tmux_config = args.tmux_config.or_else(|| value("TTA_TMUX_CONFIG").map(PathBuf::from));
     if args.trace.is_none()

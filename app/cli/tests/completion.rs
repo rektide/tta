@@ -151,6 +151,34 @@ fn candidate_errors_leave_stdout_empty_and_backends_match_build_features() {
     assert_eq!(backends.contains("cli"), cfg!(feature = "cli"));
 }
 
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn scaffold_inventory_lists_configured_generators_and_fails_loudly() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(
+        &config,
+        "[scaffold.generators.zeta]\nadapter = \"rekon\"\n[scaffold.generators.alpha]\nadapter = \"rekon\"\n",
+    )
+    .unwrap();
+    let output = names(tta().env("TTA_CONFIG", &config).arg("--completion-candidates=scaffolds"));
+    assert_eq!(output, "alpha\nzeta\n");
+    let conflict = tta()
+        .env("TTA_CONFIG", &config)
+        .arg("--completion-candidates=scaffolds")
+        .arg("alpha")
+        .output()
+        .unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
+    assert!(conflict.stdout.is_empty());
+    // A broken configuration fails the inventory with an error, not silence.
+    fs::write(&config, "[scaffold.generators.x]\nadapter = \"nope\"\n").unwrap();
+    let output = tta().env("TTA_CONFIG", &config).arg("--completion-candidates=scaffolds").output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("which this tta build does not include"));
+}
+
 #[test]
 fn zsh_completes_patterns_fragments_options_and_quoted_names() {
     let temp = tempfile::tempdir().unwrap();
