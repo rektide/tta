@@ -125,3 +125,44 @@ fn environment_names_cannot_be_shell_source() {
     }
     assert!(Assignment::new("_A_2", Word::new("").unwrap()).is_ok());
 }
+
+#[test]
+fn file_writes_agree_between_direct_and_shell_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("proj ' $; 雪");
+    fs::create_dir(&dir).unwrap();
+    let contents = "{\n  \"name\": \"proj ' $; \\\"quoted\\\" 雪\",\n}\n";
+    let expression: Expression = And::builder()
+        .steps(vec![
+            ChangeDir::builder().path(Word::new(dir.as_os_str()).unwrap()).build().into(),
+            tta_command::WriteFile::builder()
+                .path(Word::new("package.json").unwrap())
+                .contents(Word::new(contents).unwrap())
+                .build()
+                .into(),
+        ])
+        .build()
+        .into();
+    assert_eq!(expression.execute(Handoff::Run).unwrap(), None);
+    assert_eq!(fs::read_to_string(dir.join("package.json")).unwrap(), contents);
+    fs::remove_file(dir.join("package.json")).unwrap();
+    let rendered = expression.shell(Handoff::Run).unwrap();
+    assert!(rendered.contains("'printf' '%s'"), "{rendered}");
+    assert!(
+        Process::new("sh").args(["-c", &rendered]).status().unwrap().success(),
+        "{rendered}"
+    );
+    assert_eq!(fs::read_to_string(dir.join("package.json")).unwrap(), contents);
+}
+
+#[test]
+fn file_writes_fail_visibly_when_the_parent_does_not_exist() {
+    let temp = tempfile::tempdir().unwrap();
+    let expression: Expression = tta_command::WriteFile::builder()
+        .path(Word::new(temp.path().join("missing/package.json")).unwrap())
+        .contents(Word::new("{}").unwrap())
+        .build()
+        .into();
+    let error = expression.execute(Handoff::Run).unwrap_err().to_string();
+    assert!(error.contains("cannot write file"), "{error}");
+}

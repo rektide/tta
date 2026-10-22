@@ -32,6 +32,12 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("cannot write file {path:?}: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("cannot execute {program:?}: {source}")]
     Execute {
         program: OsString,
@@ -121,6 +127,15 @@ pub struct ChangeDir {
     pub path: Word,
 }
 
+/// A file materialized with literal contents. Direct execution writes in
+/// process; shell rendering is `printf '%s' CONTENTS > PATH`, so contents
+/// stay one quoted value, never heredoc or eval source.
+#[derive(Clone, Debug, Eq, PartialEq, Builder)]
+pub struct WriteFile {
+    pub path: Word,
+    pub contents: Word,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Builder)]
 pub struct And {
     pub steps: Vec<Expression>,
@@ -132,6 +147,7 @@ pub struct And {
 pub enum Expression {
     Command(Command),
     ChangeDir(ChangeDir),
+    Write(WriteFile),
     And(And),
 }
 
@@ -158,6 +174,9 @@ impl Expression {
                     // ./ avoids option parsing and CDPATH for relative operands.
                     let path = if path.is_absolute() { path.to_owned() } else { Path::new(".").join(path) };
                     format!("cd -P {}", Word::new(path.into_os_string())?.shell()?)
+                }
+                Self::Write(write) => {
+                    format!("'printf' '%s' {} > {}", write.contents.shell()?, write.path.shell()?)
                 }
                 Self::And(_) => unreachable!("flattened expressions contain no And"),
             });
@@ -191,6 +210,17 @@ impl Expression {
                         });
                     }
                     cwd = Some(canonical);
+                    status = None;
+                }
+                Self::Write(write) => {
+                    let path = match &cwd {
+                        Some(cwd) => cwd.join(write.path.as_os_str()),
+                        None => PathBuf::from(write.path.as_os_str()),
+                    };
+                    std::fs::write(&path, write.contents.as_os_str().as_encoded_bytes()).map_err(|source| Error::Write {
+                        path: path.clone(),
+                        source,
+                    })?;
                     status = None;
                 }
                 Self::Command(command) => {
@@ -240,6 +270,12 @@ impl From<Command> for Expression {
 impl From<ChangeDir> for Expression {
     fn from(cd: ChangeDir) -> Self {
         Self::ChangeDir(cd)
+    }
+}
+
+impl From<WriteFile> for Expression {
+    fn from(write: WriteFile) -> Self {
+        Self::Write(write)
     }
 }
 
