@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use bon::builder;
 use serde::Deserialize;
+use toml::Table;
 use tta_command::Expression;
 
 use crate::{Selection, backend::SessionLookup};
@@ -138,7 +139,9 @@ pub struct Config {
 pub struct Entry {
     pub name: String,
     pub adapter: String,
-    scaffold: fn(&str, &Path) -> Result<Expression>,
+    /// Per-entry adapter options, validated by the adapter itself.
+    pub options: Table,
+    scaffold: fn(&str, &Path, &Table) -> Result<Expression>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -161,30 +164,42 @@ struct FileScaffold {
 #[serde(deny_unknown_fields)]
 struct FileGenerator {
     adapter: String,
+    /// Adapter-defined options; see the adapter's documentation.
+    #[serde(default)]
+    options: Table,
 }
 
 fn compiled_adapters() -> &'static [&'static str] {
     &[
         #[cfg(feature = "scaffold-rekon")]
         "rekon",
+        #[cfg(feature = "scaffold-rekon-native")]
+        "rekon-native",
     ]
 }
 
-type Adapter = fn(&str, &Path) -> Result<Expression>;
+type Adapter = fn(&str, &Path, &Table) -> Result<Expression>;
 
 // Keep feature-dependent dispatch out of the insertion loop so a build with no
 // adapters still typechecks without unreachable-code/unused-mut warnings.
 fn adapter(name: &str) -> Option<Adapter> {
     match name {
         #[cfg(feature = "scaffold-rekon")]
-        "rekon" => Some(|project, root| tta_scaffold_rekon::scaffold(project, root).map_err(anyhow::Error::from)),
+        "rekon" => Some(|project, root, options| {
+            if !options.is_empty() {
+                bail!("generator uses adapter \"rekon\", which takes no options; found {options:?}");
+            }
+            tta_scaffold_rekon::scaffold(project, root).map_err(anyhow::Error::from)
+        }),
+        #[cfg(feature = "scaffold-rekon-native")]
+        "rekon-native" => Some(|project, root, options| tta_scaffold_rekon_native::scaffold(project, root, options).map_err(anyhow::Error::from)),
         _ => None,
     }
 }
 
 impl Entry {
     pub fn scaffold(&self, project: &str, root: &Path) -> Result<Expression> {
-        (self.scaffold)(project, root)
+        (self.scaffold)(project, root, &self.options)
     }
 }
 
@@ -231,6 +246,7 @@ impl Config {
                 Entry {
                     name,
                     adapter: adapter_name,
+                    options: generator.options,
                     scaffold,
                 },
             );
@@ -311,7 +327,7 @@ fn path_from_environment() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "scaffold-rekon")]
+    #[cfg(any(feature = "scaffold-rekon", feature = "scaffold-rekon-native"))]
     fn load(text: &str) -> Config {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
@@ -395,5 +411,37 @@ adapter = \"rekon\"
         std::fs::write(&path, "[scaffold]\ndefault = \"absent\"\n[scaffold.generators.x]\nadapter = \"rekon\"\n").unwrap();
         let error = Config::load_from(Some(&path)).unwrap_err().to_string();
         assert!(error.contains("is not configured"), "{error}");
+    }
+
+    #[cfg(feature = "scaffold-rekon")]
+    #[test]
+    fn adapters_reject_options_they_do_not_take() {
+        // Structure parses at load; the adapter refuses when it is selected.
+        let config = load("[scaffold.generators.rk]\nadapter = \"rekon\"\n\n[scaffold.generators.rk.options]\nanything = 1\n");
+        let error = config.entry("rk").unwrap().scaffold("fresh", Path::new("/root")).unwrap_err().to_string();
+        assert!(error.contains("takes no options"), "{error}");
+    }
+
+    #[cfg(feature = "scaffold-rekon-native")]
+    #[test]
+    fn native_options_reach_the_adapter_and_direct_its_steps() {
+        let config = load(
+            "[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbranch = \"trunk\"\norigin-remote = \"\"\npackage-json = false\n",
+        );
+        let expression = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root")).unwrap();
+        let script = expression.shell(tta_command::Handoff::Run).unwrap();
+        assert!(script.contains("'git' 'init' '-b' 'trunk'"), "{script}");
+        assert!(!script.contains("'remote' 'add' 'origin'"), "{script}");
+        assert!(!script.contains("branch.main"), "{script}");
+        assert!(!script.contains("printf"), "{script}");
+        assert!(!script.contains("pnpm"), "{script}");
+    }
+
+    #[cfg(feature = "scaffold-rekon-native")]
+    #[test]
+    fn native_option_mistakes_are_reported_when_the_generator_runs() {
+        let config = load("[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbrunch = \"main\"\n");
+        let error = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root")).unwrap_err().to_string();
+        assert!(error.contains("unknown field"), "{error}");
     }
 }

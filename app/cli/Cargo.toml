@@ -8,10 +8,11 @@ repository.workspace = true
 readme = "../../README.md"
 
 [features]
-default = ["native", "scaffold-rekon", "scaffold-by-default"]
+default = ["native", "scaffold-rekon", "scaffold-rekon-native", "scaffold-by-default"]
 native = ["tta-launcher/native"]
 cli = ["tta-launcher/cli"]
 scaffold-rekon = ["tta-launcher/scaffold-rekon"]
+scaffold-rekon-native = ["tta-launcher/scaffold-rekon-native"]
 scaffold-by-default = []
 
 [dependencies]

@@ -866,6 +866,7 @@ dependencies = [
  "tracing-test",
  "tta-command",
  "tta-scaffold-rekon",
+ "tta-scaffold-rekon-native",
 ]
 
 [[package]]
