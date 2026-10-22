@@ -86,20 +86,23 @@ Recorded from the commissioning session, with the fork that shaped each:
 
 ## Open ends
 
-- **Native rekon port** honoring the configured root and dropping the script
-  dependency; the wrap is the starting point, not the destination.
-- **More adapters** from the survey: the board ticket `tta-scaffold-survey`
-  carries the search for other homegrown scaffolding and the winter
-  "assembly kit" reference, identified as
-  [start-it-up](file:///home/rektide/src/start-it-up/ARCHITECTURE.md) — a
-  plugin-per-behavior scaffolding CLI whose design (2026-01-04) predates this
-  work. Literal "assembly kit" phrase matches elsewhere (`fgunn`, `yee`) are
-  dated summer 2026 and about composition systems, not project scaffolding.
-- **Per-adapter configuration** (template sources, arguments) extends the
-  registry entry table when an adapter needs parameters.
+- ~~**Native rekon port** honoring the configured root~~ — built as the
+  parameterized `rekon-native` adapter: not a faithful reproduction but an
+  improvement (user direction: "parameterize/improve over it not reproduce it
+  exactly — it's kind of trash"). `git init -b`, templated remotes and starter
+  files, authored package.json, `pnpm install --silent` (the script's `pnpm i
+  -q` is rejected by pnpm 12 and was silently failing under the script's
+  no-`set -e` discipline). The script-wrapping `rekon` adapter remains.
+- ~~**Per-adapter configuration**~~ — registry entries carry an `options`
+  table the adapter validates when the generator runs.
+- **More adapters**: `tta-start-it-up-ref` on the board keeps
+  [start-it-up](file:///home/rektide/src/start-it-up/ARCHITECTURE.md) —
+  confirmed by the user as the remembered winter "assembly kit" — as an
+  interesting prior-art mention, explicitly **not** the path for tta; no
+  specific plans. Other homegrown scaffolding may still become adapters.
 - **Runtime-verification scenario** exercising a real generator end to end
   (directory created, session entered, cleanup) in `verification/driver`; the
   CLI-level tests cover planning and selection only.
 
-Work anchor: `tta-scaffold` (epic) and `tta-scaffold-survey` (child) on the
-project's Beads board.
+Work anchor: `tta-scaffold` (epic), with `tta-scaffold-rekon-native` and
+`tta-start-it-up-ref` as children, on the project's Beads board.

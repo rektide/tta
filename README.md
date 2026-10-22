@@ -210,7 +210,8 @@ cargo install --path app/cli --locked --no-default-features --features cli
 error. CLI-only execution still uses tmax's shared typed schema/decoder, whose
 current `client` compilation feature also includes native plumbing.
 
-Default features also include `scaffold-rekon` (the rekon generator adapter)
+Default features also include `scaffold-rekon` (the script-wrapping rekon
+generator), `scaffold-rekon-native` (tta's own parameterized reimplementation),
 and `scaffold-by-default` (scaffold on a clean miss; drop the feature to make
 scaffolding opt-in per invocation). Adapters are separate crates under
 `scaffold/`; `--no-default-features` builds omit them and any configuration
@@ -437,9 +438,10 @@ adapter = "rekon"
 ```
 
 - **Registry**: entry names are your choice; `adapter` must name an adapter this
-  build includes (`rekon` when the `scaffold-rekon` feature is compiled, as in
-  default installs). Unknown adapters, defaults, and keys fail at startup, before
-  any lookup. An absent file is an empty registry: misses keep the classic error.
+  build includes (`rekon` or `rekon-native` in default installs). Unknown
+  adapters, defaults, and keys fail at startup, before any lookup. Entries may
+  carry an `options` table the adapter validates when the generator runs. An
+  absent file is an empty registry: misses keep the classic error.
 - **Default choice**: a bare miss (or bare `--scaffold`) uses `[scaffold] default`,
   else the sole entry. Multiple entries without a default never guess; pass
   `--scaffold=NAME`.
@@ -461,11 +463,38 @@ The `rekon` adapter wraps the user's
 bare PATH name resolved when the plan runs, from the invocation cwd. The script
 owns where the project lands (it hardcodes `~/src`) and everything afterwards:
 git/jj init, remotes, `npm init`, `pnpm i`, and an initial commit. A non-default
-`--root` therefore diverges until the script is ported natively — the adapter
-checks nothing, the following `cd` does. More adapters and a per-adapter
-configuration surface grow from the survey; each will be its own crate behind a
-feature. Work anchor: `tta-scaffold` on the project's Beads board; design
-decisions in [the scaffold proposal](design/scaffold/proposal0.glm53max.md).
+`--root` therefore diverges; the adapter checks nothing, the following `cd`
+does.
+
+The `rekon-native` adapter is tta's own reimplementation of that workflow —
+parameterized and improved rather than reproduced. It honors the configured
+root, creates the initial branch with `git init -b`, templates remotes and
+starter files, authors `package.json` directly (no `npm init`/`jq`/`unexpand`),
+and installs with `pnpm install --silent` — the script's `pnpm i -q` is rejected
+by current pnpm and was silently failing anyway. Every knob is a per-entry
+option:
+
+```toml
+[scaffold.generators.mine]
+adapter = "rekon-native"
+
+[scaffold.generators.mine.options]
+branch = "main"                                  # git init -b; default main
+origin-remote = "git@github.com:rektide/{name}"  # {name} templates; "" disables
+voodoo-remote = "https://archive.voodoowarez.com/{name}"  # "" disables
+starter-files = ["README.md", "{name}.ts"]       # {name} templates
+author = "rektide"      # > AUTHOR env > git config user.name > omitted
+license = "MIT"         # > LICENSE env > MIT
+package-json = true     # module {name}.js, type module
+install = true          # pnpm install --silent after authoring
+```
+
+Option mistakes surface when the generator runs (adapters validate at
+expression-build time), not at config load. More adapters grow from the
+board — each its own crate behind a feature; `start-it-up` is recorded there
+as interesting prior art, not the path. Work anchor: `tta-scaffold` on the
+project's Beads board; design decisions in
+[the scaffold proposal](design/scaffold/proposal0.glm53max.md).
 
 ### Shared scaffold API
 
@@ -568,6 +597,7 @@ the same terminal/context rather than saving it as a durable session identity.
 | [shell/command](shell/command/src/lib.rs) | Bon-built argv commands, validated environment assignments, physical cd, short-circuit conjunction; direct run/Unix exec or POSIX shell rendering |
 | [shell/zsh](shell/zsh/functions/_tta) | Zim-compatible option, live session, project and wildcard Tab completion |
 | [scaffold/rekon](scaffold/rekon/src/lib.rs) | rekon-script scaffold adapter: one argv expression, `rekon <name>` |
+| [scaffold/rekon-native](scaffold/rekon-native/src/lib.rs) | Parameterized native rekon reimplementation: templated remotes/branch/starter files, authored package.json, validated options |
 | [session/launcher](session/launcher/src/lib.rs) | `SessionLookup`, native/CLI acquisition, deterministic resolution, endpoint policy and launch planning |
 | [session/launcher scaffold API](session/launcher/src/scaffold.rs) | Shared scaffold registry, generator choice, session-first resolution and creation prefix |
 | [app/cli](app/cli/src/main.rs) | Arguments, environment/feature posture, structured diagnostics and interactive handoff |
@@ -626,7 +656,7 @@ test live in separate test binaries; child JSON is captured by the runtime drive
 
 ```sh
 # Name owned packages: --all can traverse the sibling tmax dependency.
-cargo fmt -p tta-command -p tta-launcher -p tta-scaffold-rekon -p tta -p tta-verify --check
+cargo fmt -p tta-command -p tta-launcher -p tta-scaffold-rekon -p tta-scaffold-rekon-native -p tta -p tta-verify --check
 cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo nextest run --workspace --all-features
 cargo nextest run --workspace --no-default-features --features cli
