@@ -71,15 +71,7 @@ pub fn launch(
             // tmux treats a single shell-command operand as shell source. Keep
             // even a lone executable (including spaces) an argv value instead.
             if startup.len() == 1 {
-                args.extend(
-                    Invocation::new("placeholder")?
-                        .args(["/bin/sh", "-c", "exec \"$0\""])
-                        .argv()?
-                        .into_iter()
-                        .skip(1)
-                        .map(Word::new)
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+                args.extend(["/bin/sh", "-c", "exec \"$0\""].into_iter().map(Word::new).collect::<Result<Vec<_>, _>>()?);
             }
             args.extend(startup.iter().map(startup_word).collect::<Result<Vec<_>, _>>()?);
         }
@@ -130,7 +122,9 @@ pub fn launch(
                 create = create.args(["-d", "-s", &name]);
                 invocations.push(create);
                 invocations.push(Invocation::new("switch-client")?.args(["-t", &target]));
-                keep = keep.args(["-t", &target]);
+                // set-option parses a pane target; the colon fixes the exact
+                // session component rather than treating the name as a pane.
+                keep = keep.args(["-t", &format!("{target}:")]);
             } else {
                 invocations.push(create);
             }
