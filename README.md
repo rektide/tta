@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-10-22, by: "model:openai/gpt-6-astra#high" }
 sources:
+  - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
+    title: Audit native-default and CLI lookup features, clarify tmux launch execution, and repair scaffold tests for native-only builds; track tta-lookup-backends
   - resource: opencode://ses_e9b671d21ffeJXXTDi6GZnjm60
     title: Commission and implement scaffold mode for missing projects — adapter crate, TOML generator registry, CLI posture, and documentation; track tta-scaffold
   - resource: opencode://ses_e9ae02eceffextjZz5w45jVByw
@@ -191,6 +193,7 @@ Live tests here use tmux **3.7c**; they do not establish every version's behavio
 This development workspace depends on `../tmux-interface-control`, package
 `tmax` 0.4.0, with only its `client` feature. Keep that sibling checkout available;
 this is not a claim that its current API is published on crates.io.
+In this workspace, `~/src/tmax` is a symlink to that same checkout.
 
 The workspace root is a virtual manifest, so `cargo install --path .` does not
 work here. The `cargo install-tta` alias (see `.cargo/config.toml`) runs the
@@ -209,6 +212,18 @@ cargo install --path app/cli --locked --no-default-features --features cli
 `--backend native` or `--backend cli`. There is no hidden fallback after a native
 error. CLI-only execution still uses tmax's shared typed schema/decoder, whose
 current `client` compilation feature also includes native plumbing.
+
+The feature switch controls **session lookup**, including completion inventories:
+
+| Operation | `native` (default) | `cli` |
+| --- | --- | --- |
+| Query sessions | tmax connects directly to the server socket | Spawn `tmux list-sessions` |
+| Create, attach, switch, and configure satellites | Execute the tmux client | Execute the tmux client |
+| `--print-shell` | Query natively, then emit tmux commands | Query through tmux, then emit tmux commands |
+
+Direct launch uses argv-based process execution; it does not evaluate the plan
+through a shell. Outside tmux, the final client replaces tta via Unix exec.
+Feature audit and verification: `tta-lookup-backends` on the project's Beads board.
 
 Default features also include `scaffold-rekon` (the script-wrapping rekon
 generator), `scaffold-rekon-native` (tta's own parameterized reimplementation),

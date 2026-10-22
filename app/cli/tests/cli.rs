@@ -233,7 +233,7 @@ fn scaffold_selection_is_deliberate_and_never_guesses() {
             .env("TTA_ROOT", &root)
             .env("TTA_SOCKET_PATH", &socket)
             .env("TTA_SCAFFOLD", "off")
-            .args(["--backend", "cli", "--scaffold=alt", "--print-shell", "fresh"]);
+            .args(["--scaffold=alt", "--print-shell", "fresh"]);
         assert_plan(&mut command)
     };
     assert!(source.starts_with("'rekon' 'fresh'"), "{source}");
@@ -253,7 +253,7 @@ fn scaffold_disabling_and_missing_registries_keep_classic_misses() {
         .env("TTA_CONFIG", &config)
         .env("TTA_ROOT", &root)
         .env("TTA_SOCKET_PATH", &socket)
-        .args(["--backend", "cli", "--scaffold=false", "--print-shell", "fresh"])
+        .args(["--scaffold=false", "--print-shell", "fresh"])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -266,7 +266,7 @@ fn scaffold_disabling_and_missing_registries_keep_classic_misses() {
         .env("TTA_CONFIG", temp.path().join("absent.toml"))
         .env("TTA_ROOT", &root)
         .env("TTA_SOCKET_PATH", &socket)
-        .args(["--backend", "cli", "--print-shell", "fresh"])
+        .args(["--print-shell", "fresh"])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -287,13 +287,11 @@ fn scaffold_mode_still_prefers_sessions_directories_and_safe_names() {
     // An existing directory wins; the generator never runs.
     let source = {
         let mut command = tta();
-        command.env("TTA_CONFIG", &config).env("TTA_ROOT", &root).env("TTA_SOCKET_PATH", &socket).args([
-            "--backend",
-            "cli",
-            "--scaffold=rk",
-            "--print-shell",
-            "present",
-        ]);
+        command
+            .env("TTA_CONFIG", &config)
+            .env("TTA_ROOT", &root)
+            .env("TTA_SOCKET_PATH", &socket)
+            .args(["--scaffold=rk", "--print-shell", "present"]);
         assert_plan(&mut command)
     };
     assert!(source.contains("cd -P "), "{source}");
@@ -303,7 +301,7 @@ fn scaffold_mode_still_prefers_sessions_directories_and_safe_names() {
         .env("TTA_CONFIG", &config)
         .env("TTA_ROOT", &root)
         .env("TTA_SOCKET_PATH", &socket)
-        .args(["--backend", "cli", "--scaffold=rk", "--print-shell", "nested/path"])
+        .args(["--scaffold=rk", "--print-shell", "nested/path"])
         .output()
         .unwrap();
     assert!(!output.status.success());
