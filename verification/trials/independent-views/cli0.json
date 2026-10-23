@@ -1,0 +1,114 @@
+{
+  "version": "tmux 3.7c",
+  "cases": [
+    {
+      "grouped": false,
+      "backend": "cli",
+      "distinct_sessions": false,
+      "independent_windows": false,
+      "entered": {
+        "3344695": {
+          "pid": "3344695",
+          "name": "/dev/pts/196",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@0",
+          "pane": "%0"
+        },
+        "3345135": {
+          "pid": "3345135",
+          "name": "/dev/pts/200",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@0",
+          "pane": "%0"
+        }
+      },
+      "after_second_select": {
+        "3344695": {
+          "pid": "3344695",
+          "name": "/dev/pts/196",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@1",
+          "pane": "%1"
+        },
+        "3345135": {
+          "pid": "3345135",
+          "name": "/dev/pts/200",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@1",
+          "pane": "%1"
+        }
+      }
+    },
+    {
+      "grouped": true,
+      "backend": "cli",
+      "distinct_sessions": true,
+      "independent_windows": true,
+      "entered": {
+        "3345285": {
+          "pid": "3345285",
+          "name": "/dev/pts/196",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@0",
+          "pane": "%0"
+        },
+        "3345373": {
+          "pid": "3345373",
+          "name": "/dev/pts/199",
+          "session": "_work-1",
+          "session_id": "$1",
+          "window": "@0",
+          "pane": "%0"
+        }
+      },
+      "after_second_select": {
+        "3345285": {
+          "pid": "3345285",
+          "name": "/dev/pts/196",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@0",
+          "pane": "%0"
+        },
+        "3345373": {
+          "pid": "3345373",
+          "name": "/dev/pts/199",
+          "session": "_work-1",
+          "session_id": "$1",
+          "window": "@2",
+          "pane": "%2"
+        }
+      },
+      "identical_process_context": [
+        "/tmp/opencode/tta-view-proof-5jem6_dd/sock,3345305,0",
+        "%0",
+        "/dev/pts/198"
+      ],
+      "requested_from_pid": 3345285,
+      "switched_to_other_pid": 3345373,
+      "after_inside_switch": {
+        "3345285": {
+          "pid": "3345285",
+          "name": "/dev/pts/196",
+          "session": "work",
+          "session_id": "$0",
+          "window": "@0",
+          "pane": "%0"
+        },
+        "3345373": {
+          "pid": "3345373",
+          "name": "/dev/pts/199",
+          "session": "other",
+          "session_id": "$2",
+          "window": "@3",
+          "pane": "%3"
+        }
+      }
+    }
+  ]
+}

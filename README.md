@@ -6,12 +6,12 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-22, by: "model:openai/gpt-6.1-sol#xhigh" }
+updated: { at: 2026-10-23, by: "model:openai/gpt-6.1-sol#xhigh" }
 sources:
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
-    title: Implement native-default detached inside creation with preserved cwd, literal argv, cold-start and grouped-queue boundaries; verify backend execution and failures
+    title: Implement native detached creation and verify its boundaries; then reproduce independent grouped views and an existing wrong-client inside switch with two real terminals
   - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
-    title: Parent commissions practical native tmax launch improvement with an optional CLI backend and verifies the prior lookup-only boundary
+    title: Parent commissions native tmax launch improvement and then clarifies independent per-terminal window selection as the primary outcome
   - resource: opencode://ses_e9a607209ffeABss72x2fVkW70
     title: Rebuild the README around project-entry workflows and tmux session groups; inspect current planner, satellite tests, scaffold adapters, command expressions and completion to correct stale contracts
   - resource: /session/launcher/src/plan.rs
@@ -146,18 +146,32 @@ bytes; shell rendering requires UTF-8. Initial-directory paths require UTF-8.
 
 ### Action matrix
 
-tta works both outside and inside tmux. Inside, it moves the **current client**
-within the same server, so entering another workspace does not nest a client.
+tta works both outside and inside tmux. Inside, it switches an existing client
+within the same server rather than nesting a client. Automatic client inference
+is currently heuristic, not a reliable input-origin identity.
 
 | Selected work | Outside tmux | Inside the same server |
 | --- | --- | --- |
-| Existing session | Attach by session ID | Switch the current client by session ID |
-| Existing session with `--group` | Create a satellite, then attach | Create a satellite, then switch the current client |
+| Existing session | Attach by session ID | Switch a client by session ID |
+| Existing session with `--group` | Create a satellite, then attach | Create a satellite, then switch a client |
 | Project directory | Create and attach | Create detached, then switch on success |
 | Missing project, configured scaffold active | Generate, then create and attach | Generate, create detached, then switch |
 
 The real tmux client owns the terminal: direct execution replaces tta with it.
 Switching to a different server from inside tmux is an error.
+
+**Independent views today:** use `tta --group PROJECT` from each outside terminal.
+Plain `tta PROJECT` still shares one session's current-window selection. The
+[independent-view follow-up](design/launcher/launch-backends1.gpt61sol.md) proposes
+making independent views the default, but that default is not yet changed.
+
+**Known inside-switch limitation:** when two clients show the same shared pane,
+they use the same shell/environment/tty. Recent activity can make tmux choose
+the other terminal for a switch. This is reproduced with two real terminals on
+both backends; using CLI switching does not solve the identity ambiguity. The
+[recorded trial](verification/trials/independent-views/README.md) and follow-up
+hold the explicit-client targeting decision rather than pretending a native
+client-name query would prove which terminal invoked tta.
 
 ## Build and install
 
