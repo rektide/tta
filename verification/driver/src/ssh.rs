@@ -48,6 +48,25 @@ fn checked(command: &mut Command, timeout: Duration) -> Result<ProcessOutput> {
     Ok(output)
 }
 
+const NO_TTA: &str =
+    "command -v tta; tta_status=$?; printf '\\ncommand-v-tta-status=%s\\n' \"$tta_status\"; [ \"$tta_status\" -eq 1 ] || [ \"$tta_status\" -eq 127 ]";
+
+fn verify_no_tta(output: &ProcessOutput) -> Result<()> {
+    // Require exactly the controlled selected-shell startup line, then EMPTY
+    // command stdout and a shell-appropriate absence status. Extra output,
+    // command-not-found errors from setup, and incomplete capture cannot pass.
+    ensure!(
+        output.success
+            && output.complete
+            && matches!(
+                output.stdout.strip_prefix("selected target startup\n"),
+                Some("\ncommand-v-tta-status=1\n" | "\ncommand-v-tta-status=127\n")
+            ),
+        "target tta absence not proved after selected shell setup: {output:?}"
+    );
+    Ok(())
+}
+
 fn executable(path: &Path, source: &str) -> Result<()> {
     std::fs::write(path, source)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
@@ -504,15 +523,8 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     report
         .checks
         .push(json!({"check": "exact owned endpoint absence before any mutation", "output": proof}));
-    let no_tta = fixture.remote(
-        &fixture
-            .setup
-            .shell_command("command -v tta; tta_status=$?; printf '\\ncommand-v-tta-status=%s\\n' \"$tta_status\"; [ \"$tta_status\" -ne 0 ]")?,
-    )?;
-    ensure!(
-        no_tta.success && no_tta.stdout.contains("command-v-tta-status=127"),
-        "target tta remained available: {no_tta:?}"
-    );
+    let no_tta = fixture.remote(&fixture.setup.shell_command(NO_TTA)?)?;
+    verify_no_tta(&no_tta)?;
     report
         .checks
         .push(json!({"check": "no target tta after selected shell setup and restricted PATH", "output": no_tta}));
@@ -763,4 +775,40 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     ensure!(new_sessions == expected, "unexpected tmux creation replay: {new_sessions}, expected {expected}");
     report.checks.push(json!({"check": "recorded target tmux argv: exactly one mutation invocation per authorized attempt", "new_session_invocations": new_sessions, "argv_bytes": calls}));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_target_tta_accepts_posix_absence_only_after_startup_with_empty_output() {
+        for status in [1, 127] {
+            let absent = ProcessOutput {
+                success: true,
+                complete: true,
+                stdout: format!("selected target startup\n\ncommand-v-tta-status={status}\n"),
+                ..Default::default()
+            };
+            verify_no_tta(&absent).unwrap();
+            for stdout in [
+                format!("selected target startup\n/usr/local/bin/tta\n\ncommand-v-tta-status={status}\n"),
+                format!("\ncommand-v-tta-status={status}\n"),
+                "selected target startup\n\ncommand-v-tta-status=2\n".into(),
+            ] {
+                assert!(verify_no_tta(&ProcessOutput { stdout, ..absent.clone() }).is_err());
+            }
+            assert!(verify_no_tta(&ProcessOutput { complete: false, ..absent }).is_err());
+        }
+        // Actual installed POSIX shells, no SSH and no external command lookup:
+        // command is a builtin and PATH excludes every executable, including tta.
+        for shell in ["/bin/sh", "/bin/bash"] {
+            let output = checked(
+                Command::new(shell).args(["-c", &format!("printf 'selected target startup\\n'; PATH=/nonexistent; {NO_TTA}")]),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            verify_no_tta(&output).unwrap();
+        }
+    }
 }

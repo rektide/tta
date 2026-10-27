@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Correct the POSIX absence-status assertion and document encoded capture budgets and uncertified Fish/Nu execution
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
     title: Implement and run the actual loopback SSH toolkit, target setup/framing and embedded consumer handoff
   - resource: /design/launcher/runner-core0.gpt6a.md
@@ -58,11 +60,15 @@ SSH; this is not evidence for a different operating system or network topology.
   validates complete read-only `tmux -S OWNED_ABSOLUTE_PATH list-sessions` failure
   naming exactly the owned endpoint. Both cold and existing fixture setup obey it.
 - **No target tta:** after selected-shell setup, target PATH contains only a private
-  tool directory and `/usr/bin:/bin`. `command -v tta` must return **127**; the
+  tool directory and `/usr/bin:/bin`. `command -v tta` must return **1 or 127**
+  with empty command output after the recorded selected-shell startup; the
   installed `/usr/local/bin/tta` is unreachable. Only jj is deliberately admitted
   from that directory. The target-shell fixture records login/interactive argv,
   applies private startup/environment/cwd and emits intentional diagnostics; it
   is not a claim to test every real-world Bash/Zsh/Fish/Nu startup configuration.
+  Fish and Nu are not installed: their carrier construction, **not execution**,
+  is covered. The historical actual SSH run returned **127** on dash; accepting
+  Bash's **1** does not revise that recorded observation.
 - **Cold/project:** embedded runner preparation, target HOME/root/config/cwd versus
   contradictory local values, literal quoted/empty startup arguments and relative
   `--dir`, observed independently through target artifacts and tmux queries.
@@ -92,6 +98,14 @@ prints its evidence instead of discarding diagnostics. Private files are removed
 afterward; reports retain paths as evidence, not durable usable credentials.
 
 ## Complementary checks and limits
+
+Front-end acquisition defaults are 10000 milliseconds per probe and 262144
+retained bytes per channel stream; both are configurable as documented in the
+[SSH guide](../../README.md#ssh-targets). The byte cap is on **encoded** output:
+operation stderr travels in stdout as hex at roughly 3× its decoded size, so
+about 87 KiB alone can fill the default stdout budget (less with other output).
+The independent remote metadata ceiling is 786432 characters. Incomplete/capped
+captures fail closed; retention is not a promised decoded-diagnostic allowance.
 
 ```sh
 cargo nextest run -p tta-runner --all-features \

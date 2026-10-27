@@ -528,6 +528,14 @@ empty environment values are ignored. These settings bound **each** read-only
 acquisition, including SSH connection and target startup, not the terminal action
 or the whole launch. They are not target-side matching/default inputs.
 
+Retention counts **encoded SSH channel bytes**, not decoded diagnostic bytes:
+operation stderr is hex metadata in channel stdout at roughly **3×** expansion.
+With the default 256 KiB cap, about **87 KiB** of operation stderr alone can
+exhaust it; operation stdout, framing and startup/trailing chatter share that
+same budget. The probe also has an independent 786432-character metadata ceiling;
+raising local retention does not raise that protocol ceiling. Either truncation
+fails closed, never authorizing mutation.
+
 The declared worker-free probe profile is POSIX `/bin/sh`, `pwd`, `id`, `cat`,
 `od`, `head`, **GNU find**, and **GNU stat** for symlink referents, plus tmux and
 Git when needed. No Python, Perl or target worker is installed or assumed. Successful
@@ -536,6 +544,8 @@ remain present, and inaccessible/non-directory/looping paths fail closed. Remote
 shell output and context/configuration values require UTF-8; binary framing
 preserves supported newlines, quotes, tabs and literal content. The SSH command
 shell must accept POSIX quoting; selected-shell startup supports POSIX, Fish and Nu.
+Fish/Nu carrier construction is implemented, but their execution is **not
+certified** by the installed-shell fixtures (neither shell was installed).
 
 GNU find's `%Y=N` alone is not used as proof of a missing referent: it also covers
 non-directory ancestors. A separately framed, single-operand GNU stat call uses
