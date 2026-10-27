@@ -559,6 +559,8 @@ already selected workspace. `workflow::Input` and `Workflow` add pure progressio
 the caller supplies target context and a parsed registry, then answers session,
 project, destination and generator-default observations until a plan is ready.
 See the [runner-free toolkit](verification/core/README.md) for runnable examples.
+The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records
+interfaces, verification and the remaining target-setup/SSH transport slice.
 Neither core crate contains filesystem/environment acquisition or process/native
 execution. `tta_runner::command::{execute, process}` interprets generic commands;
 its `Execute` and `ProcessCommand` traits are optional conveniences.
