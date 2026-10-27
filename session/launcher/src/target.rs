@@ -66,11 +66,11 @@ impl TargetSetup {
         for variable in &self.environment {
             Assignment::new(&variable.name, Word::new(variable.value.as_deref().unwrap_or(""))?)?;
             match &variable.value {
-                Some(value) => body.push_str(&format!("export {}={}\n", variable.name, quote(value.as_str())?)),
-                None => body.push_str(&format!("unset {}\n", variable.name)),
+                Some(value) => body.push_str(&format!("export {}={} || exit $?\n", variable.name, quote(value.as_str())?)),
+                None => body.push_str(&format!("unset {} || exit $?\n", variable.name)),
             }
         }
-        body.push_str("unset TMUX TMUX_PANE\n");
+        body.push_str("unset TMUX TMUX_PANE || exit $?\n");
         if let Some(cwd) = &self.cwd {
             // ./ prevents option/CDPATH interpretation without expanding ~.
             let path = if cwd.is_absolute() { cwd.clone() } else { Path::new(".").join(cwd) };
