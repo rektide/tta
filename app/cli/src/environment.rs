@@ -13,6 +13,12 @@ fn value(name: &str) -> Option<OsString> {
 }
 
 pub(crate) fn configure(mut args: Args) -> Result<Args> {
+    // A transport target is a distinct environment. Only local tracing policy
+    // belongs here; all launch defaults are observed after target shell setup.
+    if args.ssh.is_some() {
+        configure_trace(&mut args)?;
+        return Ok(args);
+    }
     args.root = args.root.or_else(|| value("TTA_ROOT").map(PathBuf::from)).or_else(|| {
         let projects = value("PROJECTS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("src"));
         if projects.is_absolute() {
@@ -43,6 +49,11 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
     }
     args.tmux = args.tmux.or_else(|| value("TTA_TMUX"));
     args.tmux_config = args.tmux_config.or_else(|| value("TTA_TMUX_CONFIG").map(PathBuf::from));
+    configure_trace(&mut args)?;
+    Ok(args)
+}
+
+fn configure_trace(args: &mut Args) -> Result<()> {
     if args.trace.is_none()
         && let Some(value) = value("TTA_TRACE")
     {
@@ -52,5 +63,5 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
             _ => bail!("TTA_TRACE must be true, false, 1, or 0"),
         });
     }
-    Ok(args)
+    Ok(())
 }

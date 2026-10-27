@@ -4,9 +4,11 @@
 mod matching;
 mod plan;
 mod prepared;
+pub mod probe;
 mod resolve;
 pub mod scaffold;
 pub mod socket;
+pub mod target;
 pub mod workflow;
 
 pub use plan::{ClientMode, PlanError, WindowName, launch, prepare_launch, satellite_name};

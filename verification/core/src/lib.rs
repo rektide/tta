@@ -126,6 +126,8 @@ pub struct Report {
     pub selection: String,
     pub shell: String,
     pub checks: Vec<&'static str>,
+    /// Pure construction, not a claim that these probes were executed.
+    pub emitted_probes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +228,22 @@ pub fn exercise(scenario: Scenario) -> Result<Report> {
         selection: format!("{:?}", prepared.selection),
         shell: prepared.plan.expression().shell(Handoff::Run)?,
         checks,
+        emitted_probes: transcript
+            .iter()
+            .enumerate()
+            .map(|(index, exchange)| {
+                tta_launcher::probe::Probe::new(
+                    tta_launcher::probe::Request::Workflow(exchange.request.clone()),
+                    format!("witness-token-{index}"),
+                )?
+                .shell(
+                    &tta_launcher::target::TargetSetup::builder()
+                        .shell("/target/shell".into())
+                        .cwd("/target/invocation".into())
+                        .build(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
     })
 }
 

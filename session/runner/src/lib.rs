@@ -9,5 +9,6 @@ pub mod execution;
 pub mod resolve;
 pub mod scaffold;
 pub mod socket;
+pub mod ssh;
 
 pub use driver::{drive, prepare};
