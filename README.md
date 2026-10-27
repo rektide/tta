@@ -758,12 +758,13 @@ supported Linux platform. Generator live tests use Git and jj.
 
 ```sh
 # Name owned packages: --all can traverse the sibling tmax dependency.
-cargo fmt -p tta-command -p tta-launcher -p tta-runner -p tta-scaffold-rekon -p tta-scaffold-rekon-native -p tta -p tta-verify -p tta-core-witness --check
+cargo fmt -p tta-command -p tta-launcher -p tta-runner -p tta-scaffold-rekon -p tta-scaffold-rekon-native -p tta -p tta-verify -p tta-core-witness -p tta-probe-witness --check
 cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo nextest run --workspace --all-features
 cargo nextest run --workspace --no-default-features --features cli
 cargo test --workspace --all-features --doc
 ./verification/core/check.sh --report /tmp/opencode/tta-core-report.json
+./verification/probes/check.sh --report /tmp/opencode/tta-probe-report.json
 ```
 
 `--no-deps` scopes clippy's deny-warnings policy to this workspace; the development
