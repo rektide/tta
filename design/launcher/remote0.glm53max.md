@@ -126,6 +126,15 @@ Forward the remote tmux server socket over ssh (relay/socat-style) so tmax's
 existing native client connects to a remote server as if local. The tmux
 control protocol is server-local; forwarding is a known technique.
 
+*Verified 2026-10-27 (local relay trial, ses_e818d4b00ffe1ewolZWtBj7BsP):*
+through a socat `UNIX-LISTEN`→`UNIX-CONNECT` relay of an isolated server's
+socket, `ls` and `list-panes` behaved identically — the protocol survives
+socket relaying, which is the load-bearing assumption. ssh itself was not in
+the path (no local sshd); `ssh -N -L <local.sock>:<remote.sock>` is the same
+relay over the transport. The trial also re-demonstrated why generated
+carriers must quote `'=$name'`: zsh's `=word` expansion rejects bare exact-name
+targets.
+
 - *Gains:* maximal reuse — lookup, query, and detached creation work
   unchanged against the remote server; tta learns almost nothing new.
 - *Costs:* constraint #3 becomes the headline — the forwarded socket is full
