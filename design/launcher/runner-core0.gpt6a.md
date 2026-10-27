@@ -236,10 +236,13 @@ the launch suite's recording wrapper proving one grouped tmux invocation.
 
 ## Agent rotation
 
-The human requests Sol xhigh, rotated after a returned context above 200k tokens
-unless only a constrained follow-up remains, ideally kept below 350k. Return at
-coherent checkpoints with committed work and a durable handoff; check context
-before a long continuation rather than stretching one session indefinitely.
+The human requests Sol xhigh and a general rollover once returned context exceeds
+200k tokens: use a fresh session for the next substantial assignment. The human
+clarifies that the current agent should finish its coherent slice comfortably;
+crossing 200k is not an interruption threshold, and finishing headroom below 350k
+is welcome. A constrained finishing correction may remain in the same session.
+Return at coherent checkpoints with committed work and a durable handoff; check
+context before a long continuation rather than stretching one session indefinitely.
 
 ## Local checkpoint review and next commission
 
