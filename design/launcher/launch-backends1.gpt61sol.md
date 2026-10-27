@@ -7,6 +7,8 @@ status: decision-needed
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-23
 sources:
+  - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
+    title: Add forward pointer after the human selects default independent outside views and guarded native switching, then requests design-only preparation
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
     title: Implement initial native creation, then investigate the clarified independent-view requirement and reproduce wrong-client switching with two real terminal clients
   - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
@@ -30,6 +32,12 @@ sources:
 ---
 
 # The user clarified the outcome
+
+**October 27 continuation:** the human chose independent outside views and native
+switching guarded by exactly one client displaying the invoking window. The
+[implementation brief](launch-backends2.gpt6a.md) records that decision and the
+separate, tentative input-origin investigation. The earlier decision request below
+is historical; implementation is currently paused at the human's request.
 
 On October 23 the human clarified that separate tta terminals should each choose
 which window they show, while sharing the project work. Grouping is a possible

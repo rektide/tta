@@ -7,6 +7,8 @@ status: defect-reproduced
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-23
 sources:
+  - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
+    title: Connect preserved wrong-client reproduction to the human-selected visibility guard and next implementation brief
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
     title: Reproduce current default coupled windows, correct grouped independent views and wrong-client inside switching with two real terminal clients on both backends
   - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
@@ -21,6 +23,11 @@ sources:
 
 Work: **tta-launch-backends-independent-views**, child of **tta-launch-backends**.
 Decision checkpoint: [independent views and client origin](/design/launcher/launch-backends1.gpt61sol.md).
+
+The October 27 [implementation brief](/design/launcher/launch-backends2.gpt6a.md)
+selects independent outside views and guarded native switching. This trial remains
+historical defect evidence; future acceptance must assert rejection of ambiguous
+inside calls, not success in reproducing the wrong-client switch.
 
 This trial runs **two real PTYs**, each executing the actual tta binary, against
 fresh exclusively owned sockets under `/tmp/opencode`. It uses Python's standard
