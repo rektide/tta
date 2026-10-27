@@ -112,4 +112,5 @@ The
 [runner-free toolkit](../core/README.md) constructs probes without executing them.
 Neither resolved-plan emission nor this harness implements a complete deferred
 shell workflow. Mosh still needs a separately selected SSH observation channel;
-the existing mosh carrier remains available but retains its target-tta dependency.
+the existing mosh `tta-cli` path still requires target tta, while its classic
+availability fallback remains as before.

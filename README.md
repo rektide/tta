@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-10-27, by: "model:openai/gpt-6.1-sol#xhigh" }
 sources:
+  - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
+    title: Implement target-local setup and framed probes, bounded capture, SSH CLI and embedded consumer handoff; verify actual owned loopback SSH without target tta
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
     title: Extract pure planning, registry parsing and explicit generator defaults; add optional runner, shared CLI/embedded orchestration and runner-free verification
   - resource: opencode://ses_e8112b4b3ffexPxCA32QZKg13t
@@ -71,6 +73,7 @@ done; tmux keeps the work alive.
 ```sh
 tta myproject                            # resume it, or start it from ~/src
 tta --group myproject                    # another view of its running windows
+tta --ssh work myproject                 # target needs tmux, not installed tta
 tta myproject -- nvim 'file with spaces'  # start nvim only if creating a session
 tta --scaffold=mine new-project           # generate a project, then enter it
 tta --print-shell myproject               # inspect the launch plan
@@ -83,7 +86,7 @@ directly or render as POSIX shell.
 **Start here:** [Install](#build-and-install) · [How tmux works](#how-we-use-tmux) ·
 [Scaffolding](#scaffolding-missing-projects) · [Zsh completion](#zim--zsh-completion)
 
-**Go deeper:** [Configuration](#environment-configuration) ·
+**Go deeper:** [Configuration](#environment-configuration) · [SSH](#ssh-targets) ·
 [Matching](#matching-and-failure-behavior) · [Shell plans](#shell-output) ·
 [Rust pieces](#reusable-pieces) · [Verification](#runtime-verification)
 
@@ -427,7 +430,9 @@ Native discovery uses tmax to query the server directly, without spawning a
 process or starting a server. Optional CLI discovery runs tmux with the same
 typed query/decoder. Backends are explicit; native errors do not trigger a
 hidden CLI fallback. Native discovery inherits tmax's bounded connection/output
-policy; CLI discovery currently has no equivalent timeout/output cap. CLI-only
+policy; CLI discovery uses complete-EOF bounded capture (10 seconds and 256 KiB
+retained per stream by default). Child exit with pipe-holding descendants is
+incomplete at the deadline, not a successful empty inventory. CLI-only
 runtime execution no longer compiles tmax's `client` feature or native plumbing.
 Native detached creation uses the same endpoint policy and a client-directory
 override, without changing the Rust process's cwd. The
@@ -480,6 +485,77 @@ and shell-output modes remain explicit per invocation.
   failures on stderr. A handoff event records an attempt; it cannot prove what
   happened after the Rust process was replaced.
 
+## SSH targets
+
+**Observe remotely, decide locally, then hand the terminal to one target action.**
+The target needs tmux and the selected generator's tools, **not an installed tta**:
+
+```sh
+tta --ssh work myproject
+tta --ssh work --group myproject
+tta --ssh work --target-shell /bin/zsh --target-interactive myproject
+tta --ssh work --target-cwd /srv/work --dir ./editor myproject -- nvim 'literal file'
+tta --ssh work --ssh-option=-F --ssh-option=/path/to/private-ssh-config myproject
+tta --ssh work --target-env PATH=/usr/bin:/bin --scaffold=false myproject
+```
+
+The default shell is the **target's** `$SHELL`, then `/bin/sh`; login startup is
+enabled (`--target-login=false` disables it), interactive startup is opt-in.
+`--target-env NAME=VALUE` and `--target-unset NAME` apply after startup. The same
+setup runs for every non-PTY probe and the final PTY action. The first observed
+physical cwd is frozen for subsequent operations. `--target-cwd` selects invocation
+cwd; `--dir` only selects a created pane's initial cwd. Relative target paths are
+never canonicalized locally, and embedded `~` is not expanded.
+
+Target HOME, UID, root, socket policy, config/registry, author/license and Git
+identity supply defaults; explicit caller options override them. Local `TTA_*`,
+HOME, PATH and TMUX do not supply remote launch defaults (local `TTA_TRACE` still
+controls diagnostics). A fresh SSH terminal **attaches**, never switches a local
+tmux client; TMUX and TMUX_PANE are cleared after setup. `--backend native` is not
+an SSH backend. Connection options, including the caller's SSH config and
+ControlMaster settings, are shared by observation and handoff.
+Probe acquisition has closed stdin and its own process group. Authentication must
+be available through keys/agent or an already authenticated ControlMaster; a
+separate interactive password/passphrase bootstrap is not implemented or tested.
+
+The declared worker-free probe profile is POSIX `/bin/sh`, `pwd`, `id`, `cat`,
+`od`, `head`, **GNU find**, and **GNU stat** for symlink referents, plus tmux and
+Git when needed. No Python, Perl or target worker is installed or assumed. Successful
+NUL-delimited directory enumeration proves an absent entry; dangling symlinks
+remain present, and inaccessible/non-directory/looping paths fail closed. Remote
+shell output and context/configuration values require UTF-8; binary framing
+preserves supported newlines, quotes, tabs and literal content. The SSH command
+shell must accept POSIX quoting; selected-shell startup supports POSIX, Fish and Nu.
+
+GNU find's `%Y=N` alone is not used as proof of a missing referent: it also covers
+non-directory ancestors. A separately framed, single-operand GNU stat call uses
+real status/mode and its C-locale errno diagnostic. Only classified `ENOENT` may
+be skipped; unknown diagnostics, `ENOTDIR`, permission errors and loops stop the
+relevant observation. Exact destination presence still uses lstat semantics.
+
+Versioned, nonce-bound frames separate startup chatter, command stdout/stderr and
+command status. Complete EOF, carrier failure, malformed/truncated frames, failed
+commands and exact endpoint absence are distinct. Diagnostics go to stderr, not
+shell-output stdout. The runner retains every captured observation on failure.
+Each probe uses bounded capture; no observation failure authorizes mutation.
+
+`--ssh --print-shell` performs read-only observations and prints a **resolved local
+SSH invocation**, including its target setup/action block. `--exec-shell` replaces
+the evaluating local shell with SSH. It is a snapshot, **not** a deferred workflow
+that will repeat discovery later:
+
+```sh
+plan=$(tta --ssh work --print-shell myproject) && eval "$plan"
+```
+
+Generation and creation short-circuit before handoff. Grouped create → attach →
+`keep-last` remains one tmux queue. Transport loss after action start can leave
+target mutation uncertain; the runner never replays the block, falls back to a
+second backend, rolls back or prunes. SSH process-group cleanup concerns only
+locally owned acquisition processes, not a remote server or arbitrary escaped
+descendants. Actual SSH evidence and rerun recipes:
+[SSH verification toolkit](verification/ssh/README.md).
+
 ## Shell output
 
 Every launch retains a reusable CLI expression: argv commands, environment
@@ -516,7 +592,7 @@ into executable operations.
 | [`tta-launcher`](session/launcher/src/lib.rs) | Pure observation requests/replies, progression, matching, endpoint/client policy and semantic plans; no runner dependency |
 | [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Supplied registry text parsing, generator choice and explicit-default creation prefixes |
 | [`tta-command`](shell/command/src/lib.rs) | Pure literal argv/environment/cwd/file-write/sequence expressions and POSIX rendering |
-| [`tta-runner`](session/runner/src/lib.rs) | Local environment/filesystem/config acquisition, driver, native/process execution and terminal handoff |
+| [`tta-runner`](session/runner/src/lib.rs) | Local acquisition/driver, bounded process capture, native execution and SSH probe/prepared-terminal adapters |
 | [`tta-scaffold-rekon`](scaffold/rekon/src/lib.rs) / [`tta-scaffold-rekon-native`](scaffold/rekon-native/src/lib.rs) | Feature-gated adapters returning command expressions |
 | [`tta`](app/cli/src/main.rs) | CLI/environment policy, tracing and terminal handoff |
 | [`shell/zsh`](shell/zsh/functions/_tta) | Live completion through read-only inventories |
@@ -559,8 +635,9 @@ already selected workspace. `workflow::Input` and `Workflow` add pure progressio
 the caller supplies target context and a parsed registry, then answers session,
 project, destination and generator-default observations until a plan is ready.
 See the [runner-free toolkit](verification/core/README.md) for runnable examples.
-The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records
-interfaces, verification and the remaining target-setup/SSH transport slice.
+The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records the
+first milestone; the [SSH checkpoint](design/launcher/runner-core2.gpt61sol.md)
+records the implemented transport boundary and remaining decisions.
 Neither core crate contains filesystem/environment acquisition or process/native
 execution. `tta_runner::command::{execute, process}` interprets generic commands;
 its `Execute` and `ProcessCommand` traits are optional conveniences.
@@ -576,6 +653,39 @@ generator expression prefix, and generator metadata. Pass the prefix into
 chosen satellite name; the workflow requests a fresh inventory and supplies it.
 Errors retain underlying causes
 through `std::error::Error + Send + Sync` at the scaffold boundary.
+
+### Runner-free target setup and shared SSH preparation
+
+`target::Bootstrap` yields context/registry `Request`s or a complete workflow
+`Input`. Feed explicit `Reply`s through `supply()`; `Facts::input()` also lowers
+already supplied target facts directly. `probe::Probe::new(request, token)` emits
+the versioned script or setup-wrapped shell command; `decode()` takes captured
+bytes, actual carrier status and explicit EOF completeness. None of these core
+APIs performs I/O or needs `tta-runner`.
+
+The optional runner composes that prelude and the ordinary workflow:
+
+```rust,ignore
+let ssh = tta_runner::ssh::Ssh::builder()
+    .destination("work".into()).options(ssh_options).build();
+let setup = tta_launcher::target::TargetSetup::builder()
+    .shell("/bin/zsh".into()).login(true).interactive(true).build();
+let options = tta_launcher::target::Options::builder()
+    .argument("myproject".into()).default_scaffold("default".into()).build();
+let prepared = tta_runner::ssh::prepare(ssh, setup, options, Default::default())?;
+// No mutation yet. Retains launch.plan, semantic creation data, target facts,
+// setup and captured/decoded observations. The consumer owns execution/PTY:
+let terminal_command = prepared.command()?;
+let local_shell = prepared.shell(tta_command::Handoff::Run)?;
+```
+
+`ssh::Error::observations` retains the failed acquisition and prior evidence.
+`PreparedRemote::command()` is the mutation/terminal boundary; after it starts,
+the caller owns uncertainty and must not blindly replay it. Version 0.4.0 marks
+these public interfaces; coordinated workspace dependencies are exact-pinned.
+The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
+[launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
+implemented adoption and the separate mosh observation-channel choice.
 
 ## Runtime verification
 
