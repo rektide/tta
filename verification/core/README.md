@@ -7,6 +7,10 @@ status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
+    title: Promote canonical-root and adversarial replay assertions plus a reusable poisoned-environment and optional syscall witness after independent LC2 review
+  - resource: /verification/reviews/local-core0.gpt6a.md
+    title: Independent checks and toolkit coverage findings used for deliberate promotion
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
     title: Extract the pure core and optional runner and implement supplied-facts replay, semantic checks and a package-only verification hook
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
@@ -25,6 +29,7 @@ This toolkit compiles and exercises `tta-launcher` and `tta-command` **without
 ```sh
 ./verification/core/check.sh --report /tmp/opencode/tta-core-report.json
 cargo run -p tta-core-witness --no-default-features -- --scenario create
+python3 verification/core/poison.py --trace --report /tmp/opencode/tta-pure-poison.json
 ```
 
 The script checks package-only feature isolation, tests replay, and emits JSON.
@@ -36,6 +41,18 @@ roots, clean creation with explicit target author/license defaults, and fresh
 satellite inventory. Checks inspect semantic command data, literal package JSON,
 and the single grouped create → attach → `keep-last` queue. Truncated, extra and
 mismatched replies fail; string snapshots alone are not the oracle.
+Project and Create explicitly check both selection and `ChangeDir` against the
+supplied physical root. Adversarial tests cover every pending wrong reply kind,
+every truncated prefix, wrong endpoint identity, fresh grouped suffixes, rootless
+session entry, and explicit generator defaults suppressing default acquisition.
+
+[`poison.py`](poison.py) runs all four scenarios in two disagreeing environments
+with failing executable canaries, compares byte-identical reports, and checks the
+package-only feature graph. It needs Python **locally for verification only**,
+not on a launch target. `--trace` additionally checks target access, network I/O
+and child execution when `strace` is available; availability and the actual trace
+are recorded, never inferred from a missing tool. Build the witness first via
+`check.sh` or `cargo build -p tta-core-witness --no-default-features`.
 
 ## Library hooks
 
