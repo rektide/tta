@@ -12,7 +12,9 @@ sources:
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
     title: Sol xhigh implements the pure core and optional local runner, migrates the consumer and returns for rotation above 200k context
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
-    title: Fresh Sol xhigh commissioned for target setup, framed probes, bounded capture, SSH and embedded remote handoff
+    title: Rotated Sol xhigh implements target setup, framed probes, bounded capture, SSH, embedded remote handoff and actual loopback SSH toolkit; returns at roughly 343k context
+  - resource: opencode://ses_e8088432bffeXANRjlyh66v273
+    title: Fresh GLM 5.3 max commissioned for independent verification of the committed SSH milestone
   - resource: opencode://ses_e80e6a338ffeMZsVeoLYisi7h8
     title: Independent read-only verification scout identifies input-error and capture gaps, reusable fixtures, and installed prerequisites for owned loopback SSH
   - resource: /design/launcher/remote0.glm53max.md
@@ -272,6 +274,32 @@ and return the remaining choice; do not degrade current mosh or present it as an
 exec transport. Complete deferred shell-workflow compilation remains the later
 compiler checkpoint. A new remote interpreter/worker requirement must be raised
 explicitly rather than silently added to the accepted target tool profile.
+
+## SSH checkpoint and independent review
+
+The [second implementation checkpoint](runner-core2.gpt61sol.md) records the
+working SSH milestone and exact commit ledger. The parent read the actual
+`TargetSetup`, supplied target facts/bootstrap and `PreparedRemote` interfaces:
+setup is now independently inspectable and pure; the runner drives setup and
+workflow, retains observation evidence, and returns one explicit terminal command.
+This fulfills the selected local-decisions/remote-commands structure without a
+target tta or worker binary. The declared POSIX-shell plus GNU-find/stat profile
+is a concrete Unix-tool contract rather than a claim of universal shell portability.
+
+The implementer reports 147 workspace tests, 20 focused checks, 44 consumer
+launcher cases, and an actual private-loopback SSH run with 14 checks, 66 recorded
+API probes and 7 PTY scenarios. The target's post-startup `command -v tta`
+returned 127. These are implementation evidence, not independent review. The
+checked-in [SSH toolkit](/verification/ssh/README.md) owns the rerun recipes and
+explicit limits. LC1/LC2 and meaningful reviewer scratch witnesses have been
+integrated into maintained verification homes.
+
+Sol returned at roughly 343k context after finishing the coherent slice. That
+session is retired; any substantial correction uses a fresh Sol. A fresh GLM 5.3
+max now independently reviews the committed remote milestone with concern-driven
+checks, trusting existing reported runs rather than duplicating broad suites.
+Mosh's separate observation channel, complete deferred workflow compilation, and
+additional real master/shell-profile coverage remain distinct followups.
 
 ## Connections
 
