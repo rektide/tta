@@ -8,7 +8,9 @@ author: model:openai/gpt-6-astra#xhigh
 date: 2026-10-27
 sources:
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
-    title: Human accepts the pure core and optional runner structure and commissions Sol xhigh implementation with independent G verification and checked-in toolkits
+    title: Source inspection including the former launcher execution.rs; human accepts and commissions the architecture; parent directs Sol xhigh, integrates G scout findings and defines toolkit outcomes
+  - resource: opencode://ses_e80e6a338ffeMZsVeoLYisi7h8
+    title: Independent read-only verification scout identifies input-error and capture gaps, reusable fixtures, and installed prerequisites for owned loopback SSH
   - resource: /design/launcher/remote0.glm53max.md
     title: Remote targeting situation, transport alternatives, and later local socket-relay evidence
   - resource: /design/launcher/launch-backends1.gpt61sol.md
@@ -17,8 +19,6 @@ sources:
     title: Current session-first matching mixed with filesystem observation
   - resource: /session/launcher/src/plan.rs
     title: Pure command planning and grouped queue ordering
-  - resource: /session/launcher/src/execution.rs
-    title: Existing native eligibility, preflight reads, mutation uncertainty and terminal handoff
   - resource: /session/launcher/src/scaffold.rs
     title: Registry loading, validation, adapter selection and generator prefixes
   - resource: /session/launcher/src/socket.rs
@@ -203,6 +203,32 @@ reviews independently and should use the checked-in toolkit to reproduce evidenc
 the parent trusts reported checks and adds only checks for specific unresolved
 questions. Maintain native session provenance in knowledge documents and run
 Rekon document checks on explicit owned Markdown.
+
+### Independent scout findings to carry into implementation
+
+G's initial read-only scout identified these concrete boundaries; it did not
+run builds/tests, start an SSH daemon, contact a host, or query a tmux inventory:
+
+- `resolve.rs` currently uses `symlink_metadata(...).is_ok()` for a scaffold
+  target. Extraction must correct the conflation of inspection errors with
+  absence, not preserve it in a new observation type.
+- Existing capture helpers can finish before EOF or block while descendants
+  retain pipes. New reusable capture needs explicit completeness and bounded
+  stdout/stderr, including the child-exited/pipe-still-open case.
+- Probe and handoff must share the consumer's selected shell/environment setup;
+  equal SSH destinations alone do not establish equal PATH/cwd/configuration.
+- The installed environment contains OpenSSH client/server 10.5p1 and key tools,
+  a writable `/tmp/opencode`, and `/run/sshd`. A read-only empty-config inspection
+  stopped for lack of host keys. An owned loopback fixture is plausible, but
+  startup and authentication remain to be verified. `/usr/local/bin/tta` exists,
+  so the no-target-tta witness must inspect its restricted PATH after shell setup.
+- Preserve pure query decoder coverage when extracting tmax features. A core-only
+  dependency/build witness must be run outside an all-features graph that could
+  conceal accidental native dependency activation.
+
+The parent forwarded these findings to Sol as implementation input. Useful
+existing witnesses are the satellite suite's independent views/lifecycle and
+the launch suite's recording wrapper proving one grouped tmux invocation.
 
 ## Agent rotation
 
