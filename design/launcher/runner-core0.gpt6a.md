@@ -3,18 +3,20 @@ type: ImplementationBrief
 title: Runner-free planning and remote execution
 description: Commissioned crate boundaries, implementation sequence, and reusable verification outcomes for observation-driven tta and its term-preserver consumer
 resource: /design/launcher/runner-core0.gpt6a.md
-status: implementation-in-progress
+status: implemented
 author: model:openai/gpt-6-astra#xhigh
 date: 2026-10-27
 sources:
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
-    title: Source inspection and accepted commission; parent integrates G findings, reviews the local checkpoint, rotates Sol and directs SSH implementation with reusable toolkit outcomes
+    title: Accepted commission and architectural stewardship; parent reviews local and SSH interfaces, rotates agents, selects and checks finishing corrections, and closes the delivered pure-core/SSH scope
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
     title: Sol xhigh implements the pure core and optional local runner, migrates the consumer and returns for rotation above 200k context
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
     title: Rotated Sol xhigh implements target setup, framed probes, bounded capture, SSH, embedded remote handoff and actual loopback SSH toolkit; returns at roughly 343k context
   - resource: opencode://ses_e8088432bffeXANRjlyh66v273
-    title: Fresh GLM 5.3 max commissioned for independent verification of the committed SSH milestone
+    title: GLM 5.3 max independently verifies the SSH milestone, identifies bounded followups and contributes a runner-free full probe round-trip witness
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Fresh Sol xhigh completes shared diagnostics, configurable limits, guide/fixture corrections and deliberate promotion into verification/probes
   - resource: opencode://ses_e80e6a338ffeMZsVeoLYisi7h8
     title: Independent read-only verification scout identifies input-error and capture gaps, reusable fixtures, and installed prerequisites for owned loopback SSH
   - resource: /design/launcher/remote0.glm53max.md
@@ -56,6 +58,13 @@ intended operations as data, works with no runner, and can be driven locally or
 over SSH without an installed tta on the target. term-preserver is the first
 embedded remote consumer. Reusable checked-in verification capabilities are
 part of delivery, not just a final collection of ephemeral test results.
+
+**Delivered:** the pure core, optional process/native/SSH runner, CLI and embedded
+SSH consumer, and maintained verification toolkits. Current use belongs to the
+[tta guide](/README.md#ssh-targets) and
+[consumer launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md).
+The commission and checkpoint sequence below preserve how that result was reached;
+the completion section records final review corrections and verification scope.
 
 ## Crate structure
 
@@ -295,11 +304,60 @@ explicit limits. LC1/LC2 and meaningful reviewer scratch witnesses have been
 integrated into maintained verification homes.
 
 Sol returned at roughly 343k context after finishing the coherent slice. That
-session is retired; any substantial correction uses a fresh Sol. A fresh GLM 5.3
-max now independently reviews the committed remote milestone with concern-driven
-checks, trusting existing reported runs rather than duplicating broad suites.
+session was retired. A fresh GLM 5.3 max independently reviewed the committed remote
+milestone with concern-driven checks, trusting existing reported runs rather than
+duplicating broad suites. Its [review](/verification/reviews/ssh0.glm53m.md) found
+no correctness blocker and contributed a full public-core probe round-trip witness.
 Mosh's separate observation channel, complete deferred workflow compilation, and
 additional real master/shell-profile coverage remain distinct followups.
+
+## Completion and bounded finishing
+
+A third Sol xhigh completed the selected review followups and returned at roughly
+182k context. The parent checked the shared diagnostics API, front-end plumbing,
+maintained witness separation and source-preserving promotion records.
+
+- **S1:** `ssh::write_diagnostics` shares failure/success evidence reporting between
+  tta and term-preserver. Failed preparation reports retained capture/framing and
+  cleanup evidence while preserving the primary error; a worker regression proves
+  no handoff. tta `ddd2764f`, consumer `f92ef101`.
+- **S2:** positive per-probe timeout milliseconds and per-stream retained channel
+  bytes now reach capture from both front ends, with explicit configuration
+  precedence. Defaults remain 10000 ms and 262144 bytes. tta `7c71da11`, consumer
+  `4148285a`; coordinated versions are tta 0.5.0 and term-preserver 0.2.0.
+- **S3–S5:** guides distinguish encoded-channel retention from decoded diagnostic
+  budget and state Fish/Nu execution limits; the no-target-tta fixture accepts the
+  supported shells' absence statuses with empty output. tta `ebbb0972`, consumer
+  `416045c1`; regression lint correction `72a373a4`.
+- **Witness promotion:** tta `5f6bdfd1` moves the single reviewed implementation
+  into [verification/probes](/verification/probes/README.md), with a reusable
+  library, CLI, dependency-isolation hook and reports. The historical review home
+  retains revision binding and provenance. Recipes updated in `461c9374`.
+
+The finishing pass reports seven targeted regression tests passed, the promoted
+witness passed **7 checks / 22 observations / no runner dependency**, and the
+rebuilt pure poison witness passed **4 scenarios × 2 environments** with identical
+output and an actual syscall trace. Relevant builds, clippy, formatting, doctest
+commands and document checks passed. It did not repeat the earlier broad suites
+or actual SSH run; their results remain attributed to the earlier checkpoints.
+
+Maintained toolkit entrypoints:
+
+```sh
+./verification/core/check.sh --report /tmp/opencode/tta-core-report.json
+./verification/probes/check.sh --report /tmp/opencode/tta-probe-report.json
+cargo run -p tta-verify --bin tta-verify-ssh -- \
+  --tta target/debug/tta --term-preserver ../term-preserver/target/debug/tper \
+  --report /tmp/opencode/tta-ssh-report.json
+```
+
+The [core toolkit](/verification/core/README.md) proves supplied-facts planning
+without runtime I/O, the [probe toolkit](/verification/probes/README.md) proves
+caller-driven observation execution without linking the runner, and the
+[SSH toolkit](/verification/ssh/README.md) owns real transport/PTY/action evidence.
+This closes the commissioned pure-core and SSH-target implementation. It does
+not promote resolved-plan emission into a whole-workflow compiler or claim the
+separately recorded mosh/master/shell-profile followups are implemented.
 
 ## Connections
 
