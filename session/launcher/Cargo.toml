@@ -1,22 +1,19 @@
 [package]
 name = "tta-launcher"
-description = "Resolve tmux sessions and project directories into executable launch plans"
+description = "Pure observation-driven tmux session and project launch planning"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["native"]
-native = []
-cli = []
+default = []
 scaffold-rekon = ["dep:tta-scaffold-rekon"]
 scaffold-rekon-native = ["dep:tta-scaffold-rekon-native"]
 
 [dependencies]
 anyhow.workspace = true
 bon.workspace = true
-rustix.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tmax.workspace = true

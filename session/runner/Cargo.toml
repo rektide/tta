@@ -1,0 +1,37 @@
+[package]
+name = "tta-runner"
+description = "Optional I/O, observation and execution adapters for tta's pure launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["native"]
+native = ["tmax/client"]
+cli = []
+scaffold-rekon = ["tta-launcher/scaffold-rekon"]
+scaffold-rekon-native = ["tta-launcher/scaffold-rekon-native"]
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+rustix.workspace = true
+thiserror.workspace = true
+tmax.workspace = true
+tracing.workspace = true
+tta-command.workspace = true
+tta-launcher.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+tracing-mock = "=0.1.0-beta.3"
+tracing-test = { version = "=0.2.6", features = ["no-env-filter"] }
+toml.workspace = true
+tta-scaffold-rekon-native.workspace = true
+
+[[bin]]
+name = "tta-command-test-recorder"
+path = "tests/support/recorder.rs"
+test = false

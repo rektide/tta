@@ -1,16 +1,17 @@
-//! Session discovery is replaceable; matching and launch planning are shared.
+//! Runner-free observation contracts, matching, registry parsing and launch planning.
 #![forbid(unsafe_code)]
 
-pub mod backend;
-pub mod execution;
 mod matching;
 mod plan;
+mod prepared;
 mod resolve;
 pub mod scaffold;
 pub mod socket;
+pub mod workflow;
 
 pub use plan::{ClientMode, PlanError, WindowName, launch, prepare_launch, satellite_name};
-pub use resolve::{ResolveError, Selection, project_names, resolve};
+pub use prepared::{LaunchPlan, NativeCreation};
+pub use resolve::{DestinationState, ProjectInventory, Resolution, ResolveError, Selection, resolve};
 pub use tmax::operation::SessionId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

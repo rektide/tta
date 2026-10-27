@@ -57,16 +57,6 @@ pub enum Error {
 }
 
 impl Context {
-    #[cfg(unix)]
-    pub fn from_environment() -> std::io::Result<Self> {
-        Ok(Self {
-            cwd: std::env::current_dir()?,
-            uid: rustix::process::geteuid().as_raw(),
-            tmux: std::env::var_os("TMUX"),
-            tmpdir: std::env::var_os("TMUX_TMPDIR").filter(|value| !value.is_empty()).map(PathBuf::from),
-        })
-    }
-
     pub fn resolve(&self, selection: &Selection) -> Result<Resolved, Error> {
         let name = match selection {
             Selection::Path(path) => {
@@ -103,8 +93,16 @@ impl Context {
         let Some(current) = self.current_server() else {
             return Ok(crate::ClientMode::Attach);
         };
-        let identity = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        if identity(&current) != identity(selected) {
+        self.client_mode_with_identity(selected, &current, selected)
+    }
+
+    /// Compare supplied physical identities. Observers may canonicalize existing
+    /// paths; the core must never canonicalize a target path on the local host.
+    pub fn client_mode_with_identity(&self, selected: &Path, current_identity: &Path, selected_identity: &Path) -> Result<crate::ClientMode, Error> {
+        let Some(current) = self.current_server() else {
+            return Ok(crate::ClientMode::Attach);
+        };
+        if current_identity != selected_identity {
             return Err(Error::DifferentServer {
                 current,
                 selected: selected.to_owned(),

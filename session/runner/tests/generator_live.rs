@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use tta_command::Handoff;
+use tta_runner::command::Execute;
 use tta_scaffold_rekon_native::scaffold;
 
 fn git(directory: &Path, args: &[&str]) -> String {
@@ -27,7 +28,7 @@ fn the_generated_sequence_builds_a_tracked_colocated_project() {
         .parse::<toml::Table>()
         .unwrap();
 
-    let expression = scaffold("fresh", &root, &options).unwrap();
+    let expression = scaffold("fresh", &root, &options, &tta_scaffold_rekon_native::Defaults::default()).unwrap();
     expression.execute(Handoff::Run).unwrap();
 
     let project = root.join("fresh");

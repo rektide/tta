@@ -13,8 +13,9 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
-use tta_launcher::execution::LaunchBackend;
-use tta_launcher::{backend, prepare_launch, scaffold, socket};
+use tta_launcher::workflow::PreparedLaunch;
+use tta_runner::execution::{ExecuteLaunch, LaunchBackend};
+use tta_runner::{backend, scaffold, socket};
 
 mod environment;
 
@@ -138,15 +139,15 @@ fn run(mut args: Args) -> Result<ExitCode> {
     }
     if matches!(args.completion_candidates, Some(CompletionCandidates::Projects)) {
         let root = args.root.as_deref().ok_or(tta_launcher::ResolveError::MissingRoot)?;
-        print_candidates(tta_launcher::project_names(root)?);
+        print_candidates(tta_runner::resolve::project_names(root)?);
         return Ok(ExitCode::SUCCESS);
     }
-    let config = scaffold::Config::load()?;
+    let config = scaffold::load_config()?;
     if matches!(args.completion_candidates, Some(CompletionCandidates::Scaffolds)) {
         print_candidates(config.names());
         return Ok(ExitCode::SUCCESS);
     }
-    let context = socket::Context::from_environment()?;
+    let context = socket::context()?;
     let backend = args.backend.unwrap_or_default();
     let mut tmux = args.tmux.unwrap_or_else(|| OsString::from("tmux"));
     // Explicit relative executable/config paths belong to the invocation cwd,
@@ -164,7 +165,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
     let socket = context.resolve(&selection)?;
     // Inventory is allowed for another server: it never switches this client.
     let mode = if args.completion_candidates.is_none() {
-        Some(context.client_mode(&socket.path)?)
+        Some(socket::client_mode(&context, &socket.path)?)
     } else {
         None
     };
@@ -192,17 +193,28 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .as_deref()
         .unwrap_or(if cfg!(feature = "scaffold-by-default") { "default" } else { "false" });
     // The configured root is inspected only after session matching fails.
-    let scaffold::Resolved {
+    let PreparedLaunch {
         selection: resolved,
-        prefix,
         generator,
-    } = scaffold::resolve()
+        plan,
+    } = tta_runner::prepare()
         .lookup(lookup.as_ref())
         .argument(argument)
+        .socket(&socket)
+        .client_mode(mode)
+        .program(&tmux)
         .maybe_root(args.root.as_deref())
         .maybe_session_name(args.session_name.as_deref())
         .choice(choice)
         .config(&config)
+        .maybe_tmux_config(args.tmux_config.as_deref())
+        .grouped(args.group)
+        .startup(&args.command)
+        .maybe_directory(args.dir.as_deref())
+        .window_name(match args.window_name.as_deref() {
+            Some(value) => tta_launcher::WindowName::parse(value)?,
+            None => tta_launcher::WindowName::Session,
+        })
         .call()?;
     match &resolved {
         tta_launcher::Selection::Existing(session) => {
@@ -216,33 +228,6 @@ fn run(mut args: Args) -> Result<ExitCode> {
             tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
         }
     }
-    let satellite = match (&resolved, args.group) {
-        (tta_launcher::Selection::Existing(session), true) => {
-            // A fresh inventory names the satellite with the counter no live
-            // session holds, keeping the base name an unambiguous prefix.
-            let sessions = lookup.sessions()?;
-            let name = tta_launcher::satellite_name(&session.name, &sessions);
-            tracing::info!(event = "satellite.named", base = %session.name, name = %name);
-            Some(name)
-        }
-        _ => None,
-    };
-    let plan = prepare_launch()
-        .selection(&resolved)
-        .socket(&socket)
-        .client_mode(mode)
-        .program(&tmux)
-        .maybe_config(args.tmux_config.as_deref())
-        .maybe_prefix(prefix.as_ref())
-        .grouped(args.group)
-        .maybe_satellite_name(satellite.as_deref())
-        .startup(&args.command)
-        .maybe_directory(args.dir.as_deref())
-        .window_name(match args.window_name.as_deref() {
-            Some(value) => tta_launcher::WindowName::parse(value)?,
-            None => tta_launcher::WindowName::Session,
-        })
-        .call()?;
     let operation = match (&resolved, mode) {
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session-detached+attach",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group => "new-grouped-session-detached+switch-client",

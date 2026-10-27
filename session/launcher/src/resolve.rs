@@ -1,25 +1,34 @@
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-
-use bon::builder;
-
-use crate::backend::{LookupError, SessionLookup};
 use crate::{Session, matching};
+use bon::builder;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Selection {
     Existing(Session),
-    Project {
-        directory: PathBuf,
-        session_name: String,
-    },
-    /// A missing project that scaffold mode intends to materialize before the
-    /// session starts. Planning needs the generator command as a prefix.
-    Create {
-        directory: PathBuf,
-        session_name: String,
-    },
+    Project { directory: PathBuf, session_name: String },
+    Create { directory: PathBuf, session_name: String },
+}
+
+/// Observed canonical root and immediate directory/symlink basenames. The
+/// observer must fail on inspection errors, not manufacture an empty inventory.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectInventory {
+    pub root: PathBuf,
+    pub names: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DestinationState {
+    Absent,
+    Present,
+}
+
+/// A resolution step is either a selection or the next required fact. No I/O.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Resolution {
+    Selected(Selection),
+    NeedProjects(PathBuf),
+    NeedDestination(PathBuf),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,8 +37,8 @@ pub enum ResolveError {
     Empty,
     #[error("cannot determine the project root: set HOME or pass --root")]
     MissingRoot,
-    #[error(transparent)]
-    Lookup(#[from] LookupError),
+    #[error("observation failed: {0}")]
+    Observation(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("ambiguous session fragment {argument:?}: {candidates:?}; provide a more specific name")]
     Sessions { argument: String, candidates: Vec<String> },
     #[error("ambiguous project fragment {argument:?} under {root:?}: {candidates:?}; provide a more specific name")]
@@ -44,42 +53,37 @@ pub enum ResolveError {
     Directory {
         path: PathBuf,
         #[source]
-        source: io::Error,
+        source: std::io::Error,
     },
+    #[error("project inventory requires an absolute canonical root and immediate basenames")]
+    InvalidInventory,
     #[error("session name {0:?} is empty or contains '.', ':', or control characters; pass --session-name with a distinct tmux-safe name")]
     InvalidName(String),
     #[error("session name {name:?} already belongs to session {id}; choose another --session-name")]
     Collision { name: String, id: crate::SessionId },
 }
 
-#[derive(Debug)]
-struct Project {
-    name: String,
-    path: PathBuf,
-}
-
-/// Inspect once, prefer existing sessions, and only then enumerate the project
-/// root. This is observation, not authorization to create or mutate a session.
-/// With `create` set, an otherwise-clean miss becomes a `Create` selection
-/// after validating the fragment as a fresh, nonexisting project name.
+/// Prefer sessions before requiring any filesystem facts. Call again with the
+/// requested observations; supplied facts never imply filesystem access.
 #[builder]
 pub fn resolve(
-    lookup: &dyn SessionLookup,
+    sessions: &[Session],
     argument: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     #[builder(default)] create: bool,
-) -> Result<Selection, ResolveError> {
+    projects: Option<&ProjectInventory>,
+    destination: Option<DestinationState>,
+) -> Result<Resolution, ResolveError> {
     let _span = tracing::info_span!("resolve", argument).entered();
     if argument.is_empty() {
         return Err(ResolveError::Empty);
     }
-    let sessions = lookup.sessions()?;
     tracing::info!(event = "lookup.complete", count = sessions.len());
-    match matching::select(sessions.clone(), argument, |session| &session.name) {
+    match matching::select(sessions.to_vec(), argument, |session| &session.name) {
         Ok(Some(session)) => {
             tracing::info!(event = "match.existing", session_id = %session.id, session_name = %session.name);
-            return Ok(Selection::Existing(session));
+            return Ok(Resolution::Selected(Selection::Existing(session)));
         }
         Err(candidates) => {
             tracing::warn!(event = "match.ambiguous", domain = "session", count = candidates.len());
@@ -90,30 +94,41 @@ pub fn resolve(
         }
         Ok(None) => {}
     }
-
-    let root = root.ok_or(ResolveError::MissingRoot)?;
-    let root = root
-        .canonicalize()
-        .map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
-    let projects = projects(&root, argument)?;
-    let (project, created) = match matching::select(projects, argument, |project| &project.name).map_err(|projects| {
-        tracing::warn!(event = "match.ambiguous", domain = "project", count = projects.len());
+    let Some(projects) = projects else {
+        return Ok(Resolution::NeedProjects(root.ok_or(ResolveError::MissingRoot)?.to_owned()));
+    };
+    if !projects.root.is_absolute() || projects.names.iter().any(|name| !component(name)) {
+        return Err(ResolveError::InvalidInventory);
+    }
+    let root = &projects.root;
+    let (project_name, created) = match matching::select(projects.names.clone(), argument, |name| name).map_err(|candidates| {
+        tracing::warn!(event = "match.ambiguous", domain = "project", count = candidates.len());
         ResolveError::Projects {
             argument: argument.to_owned(),
             root: root.clone(),
-            candidates: projects.into_iter().map(|project| project.name).collect(),
+            candidates,
         }
     })? {
-        Some(project) => (project, false),
-        None if create => (new_project(&root, argument)?, true),
+        Some(name) => (name, false),
+        None if create => {
+            if !component(argument) {
+                return Err(ResolveError::UnsafeName { argument: argument.to_owned() });
+            }
+            let path = root.join(argument);
+            match destination {
+                None => return Ok(Resolution::NeedDestination(path)),
+                Some(DestinationState::Present) => return Err(ResolveError::Exists { path }),
+                Some(DestinationState::Absent) => (argument.to_owned(), true),
+            }
+        }
         None => {
             return Err(ResolveError::Missing {
                 argument: argument.to_owned(),
-                root,
+                root: root.clone(),
             });
         }
     };
-    let name = session_name.unwrap_or(&project.name);
+    let name = session_name.unwrap_or(&project_name);
     validate_name(name)?;
     if let Some(session) = sessions.iter().find(|session| session.name == name) {
         return Err(ResolveError::Collision {
@@ -121,72 +136,25 @@ pub fn resolve(
             id: session.id,
         });
     }
-    if created {
-        tracing::info!(event = "match.create", directory = ?project.path, session_name = name);
-        return Ok(Selection::Create {
-            directory: project.path,
+    let directory = root.join(&project_name);
+    let selection = if created {
+        tracing::info!(event = "match.create", ?directory, session_name = name);
+        Selection::Create {
+            directory,
             session_name: name.to_owned(),
-        });
-    }
-    tracing::info!(event = "match.project", directory = ?project.path, session_name = name);
-    Ok(Selection::Project {
-        directory: project.path,
-        session_name: name.to_owned(),
-    })
-}
-
-/// A scaffold target must be one fresh directory component under the root.
-/// Dangling symlinks count as existing: they would collide with creation.
-fn new_project(root: &Path, argument: &str) -> Result<Project, ResolveError> {
-    if argument == "." || argument == ".." || argument.contains('/') {
-        return Err(ResolveError::UnsafeName { argument: argument.to_owned() });
-    }
-    let path = root.join(argument);
-    if fs::symlink_metadata(&path).is_ok() {
-        return Err(ResolveError::Exists { path });
-    }
-    Ok(Project {
-        name: argument.to_owned(),
-        path,
-    })
-}
-
-/// Sorted immediate project basenames, using the same directory/symlink policy
-/// as resolution. Inventory only: no tmux connection or session-name validation.
-pub fn project_names(root: &Path) -> Result<Vec<String>, ResolveError> {
-    let mut names: Vec<_> = projects(root, "")?.into_iter().map(|project| project.name).collect();
-    names.sort();
-    Ok(names)
-}
-
-fn projects(root: &Path, argument: &str) -> Result<Vec<Project>, ResolveError> {
-    let entries = fs::read_dir(root).map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
-    let mut projects = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            // A UTF-8 CLI fragment cannot name this directory faithfully.
-            continue;
-        };
-        if !name.contains(argument) {
-            continue;
         }
-        let path = entry.path();
-        let kind = entry.file_type().map_err(|source| ResolveError::Directory { path: path.clone(), source })?;
-        let is_directory = if kind.is_symlink() {
-            match fs::metadata(&path) {
-                Ok(metadata) => metadata.is_dir(),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-                Err(source) => return Err(ResolveError::Directory { path, source }),
-            }
-        } else {
-            kind.is_dir()
-        };
-        if is_directory {
-            projects.push(Project { name, path });
+    } else {
+        tracing::info!(event = "match.project", ?directory, session_name = name);
+        Selection::Project {
+            directory,
+            session_name: name.to_owned(),
         }
-    }
-    Ok(projects)
+    };
+    Ok(Resolution::Selected(selection))
+}
+
+fn component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), ResolveError> {

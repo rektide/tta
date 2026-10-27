@@ -51,7 +51,13 @@ fn window_name_defaults_to_the_session_and_overrides_or_disables() {
     // Absent and bare flag both name the initial window after the session.
     for extra in [&[][..], &["--window-name"][..]] {
         let source = plan(extra);
-        assert!(source.contains(&format!("'new-session' '-s' 'project' '-n' 'project' '-c' '{}'", temp.path().join("project").display())), "{source}");
+        assert!(
+            source.contains(&format!(
+                "'new-session' '-s' 'project' '-n' 'project' '-c' '{}'",
+                temp.path().join("project").display()
+            )),
+            "{source}"
+        );
     }
     // A custom name wins and stays one argv word.
     let source = plan(&["--window-name=main editor"]);

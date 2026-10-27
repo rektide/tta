@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use tta_command::{Expression, Word};
 use tta_launcher::{ClientMode, Selection, Session, launch, socket};
+use tta_runner::command::ProcessCommand;
 
 struct Server {
     directory: tempfile::TempDir,

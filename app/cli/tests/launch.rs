@@ -30,6 +30,14 @@ impl Fixture {
         fs::write(&wrapper, "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$TTA_TEST_RECORDS/$$\"\nexec tmux \"$@\"\n").unwrap();
         fs::set_permissions(wrapper, fs::Permissions::from_mode(0o700)).unwrap();
         let fixture = Self { temp, socket, client: None };
+        let absent = fixture.command().arg("ls").output().unwrap();
+        assert!(!absent.status.success());
+        let diagnostic = String::from_utf8(absent.stderr).unwrap();
+        assert!(diagnostic.contains(fixture.socket.to_str().unwrap()), "{diagnostic}");
+        assert!(
+            diagnostic.contains("no server running") || diagnostic.contains("No such file or directory"),
+            "{diagnostic}"
+        );
         fixture.run(&["new-session", "-d", "-s", "origin", "sleep", "120"]);
         fixture
     }
@@ -110,7 +118,11 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // This fixture proved the socket absent before creating its sole server.
-        let _ = self.command().arg("kill-server").output();
+        match self.command().arg("kill-server").status() {
+            Ok(status) if !status.success() => eprintln!("owned cleanup {}: {status}", self.socket.display()),
+            Err(error) => eprintln!("owned cleanup {}: {error}", self.socket.display()),
+            _ => {}
+        }
         if let Some(client) = &mut self.client {
             if client.try_wait().unwrap().is_none() {
                 let _ = client.kill();
@@ -281,8 +293,8 @@ fn grouped_launch_retains_one_cli_queue_even_with_destroy_unattached_on() {
 #[test]
 fn failed_native_create_never_hands_off_and_failed_handoff_leaves_creation() {
     use tta_command::{Command as Step, Expression, Handoff, Word};
-    use tta_launcher::execution::{ExecuteError, LaunchBackend};
     use tta_launcher::{ClientMode, Selection, prepare_launch, socket};
+    use tta_runner::execution::{ExecuteError, ExecuteLaunch, LaunchBackend};
 
     let mut fixture = Fixture::new();
     fixture.attach();
@@ -318,7 +330,7 @@ fn failed_native_create_never_hands_off_and_failed_handoff_leaves_creation() {
     let plan = make_plan(&prefix, &fixture.temp.path().join("tmux-client"));
     assert!(matches!(
         plan.execute(LaunchBackend::Native, Handoff::Run),
-        Err(ExecuteError::Command(tta_command::Error::Directory { .. }))
+        Err(ExecuteError::Command(tta_runner::command::Error::Directory { .. }))
     ));
     assert!(fixture.records().is_empty());
 

@@ -1,10 +1,10 @@
 //! Scoped structural mocks do not share tracing-test's global subscriber.
 use tracing::Level;
 use tracing_mock::{expect, subscriber};
-use tta_launcher::{
-    Selection, Session,
+use tta_launcher::{Selection, Session};
+use tta_runner::{
     backend::{LookupError, SessionLookup},
-    resolve,
+    resolve::resolve,
 };
 
 struct Inventory;

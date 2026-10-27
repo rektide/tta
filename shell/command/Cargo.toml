@@ -1,6 +1,6 @@
 [package]
 name = "tta-command"
-description = "Structured commands with shell-free execution and POSIX shell rendering"
+description = "Pure literal command expressions and POSIX shell rendering"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,3 @@ repository.workspace = true
 [dependencies]
 bon.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-
-# Cargo-built process fixture, not installed by the tta CLI package.
-[[bin]]
-name = "tta-command-test-recorder"
-path = "tests/support/recorder.rs"
-test = false

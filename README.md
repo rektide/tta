@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-27, by: "model:zai-coding-plan/glm-5.3#max" }
+updated: { at: 2026-10-27, by: "model:openai/gpt-6.1-sol#xhigh" }
 sources:
+  - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
+    title: Extract pure planning, registry parsing and explicit generator defaults; add optional runner, shared CLI/embedded orchestration and runner-free verification
   - resource: opencode://ses_e8112b4b3ffexPxCA32QZKg13t
     title: Add created-session initial-window naming (default session name, --window-name override/disable) with launcher, CLI, tests and end-to-end tmux verification
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
@@ -18,7 +20,7 @@ sources:
     title: Rebuild the README around project-entry workflows and tmux session groups; inspect current planner, satellite tests, scaffold adapters, command expressions and completion to correct stale contracts
   - resource: /session/launcher/src/plan.rs
     title: Current attach/switch plans, explicit satellite naming, startup argv and initial-directory behavior
-  - resource: /session/launcher/tests/satellites.rs
+  - resource: /session/runner/tests/satellites.rs
     title: Read runtime assertions for shared windows, independent selection, same-client switching and keep-last lifecycle
   - resource: /scaffold/rekon-native/src/lib.rs
     title: Current generator options, default remotes, file authoring and local bookmark tracking
@@ -193,8 +195,8 @@ This launch-backend slice was verified with a pinned tmux **3.7c** fixture and
 also exercised against the current system tmux **3.8**.
 
 This development workspace has a path dependency on `../tmux-interface-control`
-(package `tmax` 0.5.0, `client` feature). Keep that sibling checkout available;
-the dependency uses its development API.
+(package `tmax` 0.6.0). The pure launcher uses `operations`; only the optional
+runner's `native` feature enables `client`. Keep that sibling checkout available.
 
 ```sh
 cargo install --path app/cli --locked
@@ -294,6 +296,10 @@ Its options above show the branch, starter-file, license, package and install
 defaults. `author` can be set explicitly; otherwise it uses `AUTHOR`, then
 `git config user.name`, then omits the field. License falls back to `LICENSE`
 and then `MIT` when no explicit value is supplied.
+
+Generator planning itself is pure. The optional runner observes those defaults
+only when a clean creation actually needs them, then supplies ordinary values to
+the adapter. Supplied-facts callers pass their own target defaults explicitly.
 
 Remote entries **merge over** the adapter's personal-workflow defaults:
 `origin = "git@github.com:rektide/{name}"`,
@@ -422,15 +428,15 @@ process or starting a server. Optional CLI discovery runs tmux with the same
 typed query/decoder. Backends are explicit; native errors do not trigger a
 hidden CLI fallback. Native discovery inherits tmax's bounded connection/output
 policy; CLI discovery currently has no equivalent timeout/output cap. CLI-only
-runtime execution still compiles tmax's `client` feature, including native plumbing.
+runtime execution no longer compiles tmax's `client` feature or native plumbing.
 Native detached creation uses the same endpoint policy and a client-directory
 override, without changing the Rust process's cwd. The
 [operation matrix](#which-operations-use-tmax) states the deliberate CLI boundaries.
 
 Implementation: [matcher](session/launcher/src/matching.rs),
-[resolver](session/launcher/src/resolve.rs), [backends](session/launcher/src/backend.rs),
+[resolver](session/launcher/src/resolve.rs), [backends](session/runner/src/backend.rs),
 and [launch planner](session/launcher/src/plan.rs) /
-[execution policy](session/launcher/src/execution.rs).
+[execution policy](session/runner/src/execution.rs).
 
 ## Environment configuration
 
@@ -507,70 +513,66 @@ into executable operations.
 
 | Crate / home | Responsibility |
 | --- | --- |
-| [`tta-launcher`](session/launcher/src/lib.rs) | Replaceable `SessionLookup`, matching, resolution, endpoint/client policy, satellite naming, pure plans and native/CLI execution |
-| [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Shared registry, generator choice, session-first resolution and creation prefix |
-| [`tta-command`](shell/command/src/lib.rs) | Bon-built command expressions, literal file writes, cwd and environment; direct run/Unix exec or POSIX rendering |
+| [`tta-launcher`](session/launcher/src/lib.rs) | Pure observation requests/replies, progression, matching, endpoint/client policy and semantic plans; no runner dependency |
+| [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Supplied registry text parsing, generator choice and explicit-default creation prefixes |
+| [`tta-command`](shell/command/src/lib.rs) | Pure literal argv/environment/cwd/file-write/sequence expressions and POSIX rendering |
+| [`tta-runner`](session/runner/src/lib.rs) | Local environment/filesystem/config acquisition, driver, native/process execution and terminal handoff |
 | [`tta-scaffold-rekon`](scaffold/rekon/src/lib.rs) / [`tta-scaffold-rekon-native`](scaffold/rekon-native/src/lib.rs) | Feature-gated adapters returning command expressions |
 | [`tta`](app/cli/src/main.rs) | CLI/environment policy, tracing and terminal handoff |
 | [`shell/zsh`](shell/zsh/functions/_tta) | Live completion through read-only inventories |
 | [`tta-verify`](verification/driver/src/lib.rs) | Reusable runtime exercise/observation library and verification command |
+| [`tta-core-witness`](verification/core/README.md) | No-runner transcript replay and semantic checks, with a package-only dependency witness |
 
 The generic expression model knows no tmux syntax. The launcher handles tmux
 targets, format operands and trailing-semicolon parsing separately: shell
 quoting alone does not make a tmux format literal.
 
-### Shared scaffold API
+### Shared local runner API
 
 Embedded callers can use the same registry and selection policy, then supply
 their own client mode and launch options. In this outline, `lookup`, `socket`,
 and the other inputs are supplied by the caller:
 
 ```rust,ignore
-let resolved = tta_launcher::scaffold::resolve()
+let prepared = tta_runner::prepare()
     .lookup(lookup)
     .argument(fragment)
-    .maybe_root(root)                  // Option<&Path>
-    .choice("default")                // or "false" or a registry name
-    .call()?;
-
-let satellite = match (&resolved.selection, grouped) {
-    (tta_launcher::Selection::Existing(session), true) =>
-        Some(tta_launcher::satellite_name(&session.name, &lookup.sessions()?)),
-    _ => None,
-};
-let plan = tta_launcher::launch()
-    .selection(&resolved.selection)
     .socket(&socket)
     .client_mode(mode)
     .program(tmux_program)
-    .maybe_prefix(resolved.prefix.as_ref())
+    .maybe_root(root)                  // Option<&Path>
+    .choice("default")                // or "false" or a registry name
     .grouped(grouped)
-    .maybe_satellite_name(satellite.as_deref())
     .startup(&startup_argv)
     .maybe_directory(initial_directory) // absolute Option<&Path>
     .call()?;
 
-let shell = plan.shell(tta_command::Handoff::Run)?;
-// Or run with plan.execute(...), choosing Run or Exec for the caller's lifecycle.
+let shell = prepared.plan.expression().shell(tta_command::Handoff::Run)?;
+// Execution is explicitly supplied by the optional runner:
+use tta_runner::execution::ExecuteLaunch;
+prepared.plan.execute(tta_runner::execution::LaunchBackend::default(),
+                      tta_command::Handoff::Exec)?;
 ```
 
-`launch()` remains the portable CLI-expression API. For native execution, use
-`prepare_launch()` with the same builder inputs, then
-`plan.execute(tta_launcher::execution::LaunchBackend::default(), handoff)`.
-`plan.expression()` exposes the complete unchanged CLI expression for inspection
-or rendering. Library callers can choose launch execution independently of lookup;
-the CLI deliberately uses one backend selection for both. The generic command
-crate has no native/tmux execution hooks.
+`tta_launcher::launch()` and `prepare_launch()` remain pure lowering APIs for an
+already selected workspace. `workflow::Input` and `Workflow` add pure progression:
+the caller supplies target context and a parsed registry, then answers session,
+project, destination and generator-default observations until a plan is ready.
+See the [runner-free toolkit](verification/core/README.md) for runnable examples.
+Neither core crate contains filesystem/environment acquisition or process/native
+execution. `tta_runner::command::{execute, process}` interprets generic commands;
+its `Execute` and `ProcessCommand` traits are optional conveniences.
 
 Library defaults enable neither scaffold adapters nor scaffold posture. Enable
 `scaffold-rekon` or `scaffold-rekon-native` as needed and layer caller preferences
-before passing `choice`. Registry loading honors `TTA_CONFIG`/XDG/HOME, or accepts
+before passing `choice`. Runner registry loading honors `TTA_CONFIG`/XDG/HOME, or accepts
 `.config(&config)` with an already loaded `scaffold::Config`.
 
-Resolution executes no generator. `Resolved` contains the selection, optional
+Resolution executes no generator. `scaffold::Resolved` contains the selection, optional
 generator expression prefix, and generator metadata. Pass the prefix into
-`launch`; creation without it fails. Grouped existing-session plans likewise
-require an explicitly chosen satellite name. Errors retain underlying causes
+`launch`; creation without it fails. Low-level grouped plans require an explicitly
+chosen satellite name; the workflow requests a fresh inventory and supplies it.
+Errors retain underlying causes
 through `std::error::Error + Send + Sync` at the scaffold boundary.
 
 ## Runtime verification
@@ -595,11 +597,11 @@ and cleanup results. Direct mode checks exec/PID continuity; shell mode checks
 the evaluator survives; detach checks the session and pane persist. Independent
 tmux observations establish outcomes rather than treating trace messages as proof.
 
-Additional suites cover [satellite lifecycle and literal startup argv](session/launcher/tests/satellites.rs),
+Additional suites cover [satellite lifecycle and literal startup argv](session/runner/tests/satellites.rs),
 [native/CLI launch execution and failure ordering](app/cli/tests/launch.rs),
-[shared scaffold policy](session/launcher/tests/scaffold.rs),
+[shared scaffold policy](session/runner/tests/scaffold.rs),
 [CLI scaffold behavior](app/cli/tests/scaffold.rs),
-[real Git/jj generator setup](scaffold/rekon-native/tests/live.rs), and
+[real Git/jj generator setup](session/runner/tests/generator_live.rs), and
 [Zsh completion in a PTY](app/cli/tests/completion.rs).
 
 Runtime fixtures isolate homes/configuration and own their sockets. The driver
@@ -614,11 +616,12 @@ supported Linux platform. Generator live tests use Git and jj.
 
 ```sh
 # Name owned packages: --all can traverse the sibling tmax dependency.
-cargo fmt -p tta-command -p tta-launcher -p tta-scaffold-rekon -p tta-scaffold-rekon-native -p tta -p tta-verify --check
+cargo fmt -p tta-command -p tta-launcher -p tta-runner -p tta-scaffold-rekon -p tta-scaffold-rekon-native -p tta -p tta-verify -p tta-core-witness --check
 cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
 cargo nextest run --workspace --all-features
 cargo nextest run --workspace --no-default-features --features cli
 cargo test --workspace --all-features --doc
+./verification/core/check.sh --report /tmp/opencode/tta-core-report.json
 ```
 
 `--no-deps` scopes clippy's deny-warnings policy to this workspace; the development

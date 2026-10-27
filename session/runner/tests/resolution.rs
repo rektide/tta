@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use tta_launcher::{
-    ResolveError, Selection, Session,
+use tta_launcher::{ResolveError, Selection, Session};
+use tta_runner::{
     backend::{LookupError, SessionLookup},
-    resolve,
+    resolve::resolve,
 };
 
 struct Inventory(Vec<Session>);
@@ -192,6 +192,22 @@ fn create_mode_refuses_unsafe_names_and_occupied_paths() {
         resolve().lookup(&empty).argument("dangling").root(root.path()).create(true).call(),
         Err(ResolveError::Exists { .. })
     ));
+}
+
+#[test]
+fn destination_inspection_errors_are_not_absence() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("file");
+    fs::write(&file, "not a directory").unwrap();
+    assert!(matches!(
+        tta_runner::resolve::destination_state(&file.join("child")),
+        Err(ResolveError::Directory { .. })
+    ));
+    assert_eq!(
+        tta_runner::resolve::destination_state(&root.path().join("missing")).unwrap(),
+        tta_launcher::DestinationState::Absent
+    );
+    assert_eq!(tta_runner::resolve::destination_state(&file).unwrap(), tta_launcher::DestinationState::Present);
 }
 
 #[test]

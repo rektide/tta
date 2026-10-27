@@ -2,6 +2,7 @@ use std::fs;
 use std::process::Command as Process;
 
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Handoff, Word};
+use tta_runner::command::Execute;
 
 fn command(program: &str, args: &[&str]) -> Expression {
     Command::builder()

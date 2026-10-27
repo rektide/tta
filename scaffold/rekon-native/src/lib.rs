@@ -62,10 +62,9 @@ struct Options {
     /// An empty list creates none.
     #[serde(default = "default_starter_files")]
     starter_files: Vec<String>,
-    /// package.json `author`: parameter > `AUTHOR` environment >
-    /// `git config user.name` > omitted. Empty means unset.
+    /// package.json `author`: parameter > supplied defaults > omitted.
     author: Option<String>,
-    /// package.json `license`: parameter > `LICENSE` environment > `"MIT"`.
+    /// package.json `license`: parameter > supplied defaults > `"MIT"`.
     /// Empty means unset.
     license: Option<String>,
     /// Author a package.json with `module` `{name}.js` and type `module`.
@@ -101,7 +100,14 @@ fn default_true() -> bool {
 }
 
 /// Build the generator expression for `project` under `root`.
-pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expression, Error> {
+/// Defaults are observations supplied by the caller, never acquired here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Defaults {
+    pub author: Option<String>,
+    pub license: Option<String>,
+}
+
+pub fn scaffold(project: &str, root: &Path, options: &Table, defaults: &Defaults) -> Result<Expression, Error> {
     let options = Options::deserialize(toml::Value::Table(options.clone())).map_err(|error| Error::Options(error.to_string()))?;
     validate_branch(&options.branch)?;
     let directory = root.join(project);
@@ -164,15 +170,8 @@ pub fn scaffold(project: &str, root: &Path, options: &Table) -> Result<Expressio
     steps.push(command("jj", vec!["bookmark".into(), "create".into(), OsString::from(&options.branch)])?);
 
     if options.package_json {
-        let author = resolve_author(
-            options.author.as_deref(),
-            std::env::var_os("AUTHOR").as_ref().and_then(|value| value.to_str()),
-            git_user_name().as_deref(),
-        );
-        let license = resolve_license(
-            options.license.as_deref(),
-            std::env::var_os("LICENSE").as_ref().and_then(|value| value.to_str()),
-        );
+        let author = resolve_author(options.author.as_deref(), defaults.author.as_deref(), None);
+        let license = resolve_license(options.license.as_deref(), defaults.license.as_deref());
         steps.push(
             WriteFile::builder()
                 .path(Word::new("package.json")?)
@@ -212,23 +211,6 @@ fn resolve_author(parameter: Option<&str>, environment: Option<&str>, git: Optio
 
 fn resolve_license(parameter: Option<&str>, environment: Option<&str>) -> String {
     parameter.or(environment).filter(|value| !value.is_empty()).unwrap_or("MIT").to_owned()
-}
-
-/// A failed or missing git identity simply omits the author field.
-fn git_user_name() -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["config", "--get", "user.name"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout)
-        .ok()
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
 }
 
 fn package_json(name: &str, author: Option<&str>, license: &str) -> Result<Word, Error> {
@@ -292,7 +274,10 @@ mod tests {
     }
 
     fn rendered(options: &Table) -> String {
-        scaffold("fresh", Path::new("/root"), options).unwrap().shell(Handoff::Run).unwrap()
+        scaffold("fresh", Path::new("/root"), options, &Defaults::default())
+            .unwrap()
+            .shell(Handoff::Run)
+            .unwrap()
     }
 
     #[test]
@@ -364,7 +349,9 @@ dl = "github.com:rektide/dl-{name}"
             "[remotes]\n\"bad name\" = \"https://x/{name}\"",
             "starter-files = [\"{name}.{ext}\"]",
         ] {
-            let error = scaffold("fresh", Path::new("/root"), &options(table)).unwrap_err().to_string();
+            let error = scaffold("fresh", Path::new("/root"), &options(table), &Defaults::default())
+                .unwrap_err()
+                .to_string();
             assert!(!error.is_empty());
         }
         // Disabling the origin remote also skips its config keys.

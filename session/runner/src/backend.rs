@@ -1,16 +1,22 @@
 use std::io;
 
-use crate::Session;
+use tta_launcher::Session;
 
 /// Lookup acquires session facts only. Launch execution is a separate seam in
 /// [`crate::execution`]; an absent server is an empty inventory, not permission
 /// to retry a failed mutation.
 pub trait SessionLookup {
     fn sessions(&self) -> Result<Vec<Session>, LookupError>;
+
+    /// Override when the observer can distinguish classified server absence.
+    fn inventory(&self) -> Result<tta_launcher::workflow::SessionInventory, LookupError> {
+        self.sessions().map(tta_launcher::workflow::SessionInventory::Present)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum LookupError {
+    #[cfg(feature = "native")]
     #[error(transparent)]
     Native(#[from] tmax::error::OperationError),
     #[error("cannot run tmux session lookup: {0}")]
@@ -34,15 +40,26 @@ pub struct Native {
 #[cfg(feature = "native")]
 impl SessionLookup for Native {
     fn sessions(&self) -> Result<Vec<Session>, LookupError> {
+        Ok(self.inventory()?.sessions().to_vec())
+    }
+
+    fn inventory(&self) -> Result<tta_launcher::workflow::SessionInventory, LookupError> {
+        use tta_launcher::workflow::SessionInventory;
         match self.endpoint.query(tmax::query::Sessions::new()) {
-            Ok(sessions) => Ok(sessions.into_iter().map(Session::from).collect()),
-            Err(error) if absent_server(&error) => Ok(Vec::new()),
+            Ok(sessions) => Ok(SessionInventory::Present(sessions.into_iter().map(Session::from).collect())),
+            Err(error) if absent_server(&error) => {
+                if matches!(error, tmax::error::OperationError::Rejected(_)) {
+                    Ok(SessionInventory::Present(Vec::new()))
+                } else {
+                    Ok(SessionInventory::Absent)
+                }
+            }
             Err(error) => Err(error.into()),
         }
     }
 }
 
-#[cfg(any(feature = "native", test))]
+#[cfg(feature = "native")]
 fn absent_server(error: &tmax::error::OperationError) -> bool {
     use tmax::error::OperationError;
     match error {
@@ -65,7 +82,12 @@ pub struct Cli {
 #[cfg(feature = "cli")]
 impl SessionLookup for Cli {
     fn sessions(&self) -> Result<Vec<Session>, LookupError> {
+        Ok(self.inventory()?.sessions().to_vec())
+    }
+
+    fn inventory(&self) -> Result<tta_launcher::workflow::SessionInventory, LookupError> {
         use tmax::operation::{ReplyDecoder, TypedOperation};
+        use tta_launcher::workflow::SessionInventory;
         let query = tmax::query::Sessions::new();
         let output = std::process::Command::new(&self.program)
             // Match native's explicit CLIENT_UTF8 even with C-locale errors.
@@ -80,7 +102,11 @@ impl SessionLookup for Cli {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             if output.status.code() == Some(1) && output.stdout.is_empty() && cli_absent(&stderr, &self.socket) {
-                return Ok(Vec::new());
+                return Ok(if stderr == "no sessions\n" {
+                    SessionInventory::Present(Vec::new())
+                } else {
+                    SessionInventory::Absent
+                });
             }
             return Err(LookupError::Command { status: output.status, stderr });
         }
@@ -95,7 +121,9 @@ impl SessionLookup for Cli {
             }
         }
         decoder.finish()?;
-        Ok(tmax::query::Sessions::collect(rows)?.into_iter().map(Session::from).collect())
+        Ok(SessionInventory::Present(
+            tmax::query::Sessions::collect(rows)?.into_iter().map(Session::from).collect(),
+        ))
     }
 }
 
@@ -114,6 +142,7 @@ fn cli_absent(stderr: &str, socket: &std::path::Path) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "native")]
     #[test]
     fn only_missing_or_refused_socket_connections_are_empty() {
         for kind in [

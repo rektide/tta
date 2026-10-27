@@ -1,4 +1,4 @@
-//! Binary fixture: record exact process cwd, argv and a selected environment
+//! Runner's binary fixture: record exact process cwd, argv and a selected environment
 //! value with length framing, so comparisons need no scripting language.
 #![forbid(unsafe_code)]
 

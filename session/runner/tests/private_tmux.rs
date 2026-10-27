@@ -8,11 +8,9 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use tta_command::{Expression, Handoff, Word};
-use tta_launcher::{
-    ClientMode, Selection, Session,
-    backend::{self, SessionLookup},
-    launch,
-};
+use tta_launcher::{ClientMode, Selection, Session, launch};
+use tta_runner::backend::{self, SessionLookup};
+use tta_runner::command::{Execute, ProcessCommand};
 
 struct Server {
     directory: tempfile::TempDir,
@@ -22,7 +20,7 @@ struct Server {
 
 impl Server {
     fn cold() -> Self {
-        let directory = tempfile::Builder::new().prefix("tta-server-").tempdir().unwrap();
+        let directory = tempfile::Builder::new().prefix("tta-server-").tempdir_in("/tmp/opencode").unwrap();
         let socket = directory.path().join("s");
         Self {
             directory,
@@ -50,6 +48,11 @@ impl Server {
     }
 
     fn start(&mut self) {
+        let missing = self.command().arg("ls").output().unwrap();
+        assert!(!missing.status.success());
+        let stderr = String::from_utf8(missing.stderr).unwrap();
+        assert!(stderr.contains(self.socket.to_str().unwrap()), "{stderr}");
+        assert!(stderr.contains("no server running") || stderr.contains("No such file or directory"), "{stderr}");
         self.run(&["new-session", "-d", "-s", "seed", "sleep", "120"]);
         self.started = true;
         self.run(&["set-option", "-g", "default-shell", "/bin/sh"]);
@@ -78,7 +81,11 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         if self.started {
-            let _ = self.command().arg("kill-server").stdout(Stdio::null()).stderr(Stdio::null()).status();
+            match self.command().arg("kill-server").stdout(Stdio::null()).status() {
+                Ok(status) if !status.success() => eprintln!("owned tmux cleanup {}: {status}", self.socket.display()),
+                Err(error) => eprintln!("owned tmux cleanup {}: {error}", self.socket.display()),
+                _ => {}
+            }
         }
     }
 }
@@ -232,7 +239,7 @@ fn cli_missing_executable_and_malformed_reply_are_errors() {
 }
 
 #[test]
-fn label_bootstrap_creates_its_private_socket_directory_in_direct_and_shell_modes() {
+fn label_policy_is_frozen_in_direct_and_shell_modes_with_an_explicit_socket_carrier() {
     for shell in [false, true] {
         let mut server = Server::cold();
         let context = tta_launcher::socket::Context::builder()
@@ -245,6 +252,15 @@ fn label_bootstrap_creates_its_private_socket_directory_in_direct_and_shell_mode
         let endpoint = context.resolve(&tta_launcher::socket::Selection::Name("owned".into())).unwrap();
         server.socket = endpoint.path.clone();
         assert!(!server.socket.parent().unwrap().exists());
+        // A label-policy carrier, not evidence for this tmux build's -L rules.
+        // The real server ALWAYS receives -S; this cannot reach a default server
+        // even on builds which ignore TMUX_TMPDIR.
+        use std::os::unix::fs::PermissionsExt;
+        let carrier = server.directory.path().join("label-carrier");
+        let quote = |path: &std::path::Path| Word::new(path.as_os_str()).unwrap().shell().unwrap();
+        fs::write(&carrier, format!("#!/bin/sh\n[ \"$1\" = -L ] && [ \"$2\" = owned ] || exit 94\n[ \"$TMUX_TMPDIR\" = {} ] || exit 95\nshift 2\nmkdir -m 700 {} || exit\nexec tmux -S {} \"$@\"\n",
+            quote(&endpoint.label.as_ref().unwrap().directory), quote(server.socket.parent().unwrap()), quote(&server.socket))).unwrap();
+        fs::set_permissions(&carrier, fs::Permissions::from_mode(0o700)).unwrap();
         for inventory in server.inventories() {
             assert!(inventory.is_empty());
         }
@@ -259,7 +275,8 @@ fn label_bootstrap_creates_its_private_socket_directory_in_direct_and_shell_mode
             .selection(&selection)
             .socket(&endpoint)
             .client_mode(ClientMode::Switch)
-            .program(OsStr::new("tmux"))
+            .program(carrier.as_os_str())
+            .config(std::path::Path::new("/dev/null"))
             .call()
             .unwrap();
         let Expression::And(and) = &mut plan else { panic!("expected sequence") };
@@ -267,7 +284,6 @@ fn label_bootstrap_creates_its_private_socket_directory_in_direct_and_shell_mode
             panic!("expected create")
         };
         // Test-only isolation of tmux configuration and initial pane command.
-        create.args.splice(0..0, [Word::new("-f").unwrap(), Word::new("/dev/null").unwrap()]);
         create.args.extend([Word::new("sleep").unwrap(), Word::new("120").unwrap()]);
         let create = &and.steps[1];
         let success = if shell {

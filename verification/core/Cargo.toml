@@ -1,0 +1,15 @@
+[package]
+name = "tta-core-witness"
+description = "Runner-free supplied-facts launch replay and semantic verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tta-command.workspace = true
+tta-launcher = { workspace = true, features = ["scaffold-rekon", "scaffold-rekon-native"] }

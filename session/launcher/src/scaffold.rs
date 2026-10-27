@@ -8,8 +8,6 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
-use std::env;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -18,7 +16,21 @@ use serde::Deserialize;
 use toml::Table;
 use tta_command::Expression;
 
-use crate::{Selection, backend::SessionLookup};
+use crate::{DestinationState, ProjectInventory, Resolution, Selection, Session};
+
+/// Observed target defaults, already layered AUTHOR > Git identity and LICENSE.
+/// Absent values are explicit; the generator never reads the local host.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Defaults {
+    pub author: Option<String>,
+    pub license: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum Progress {
+    Observe(Resolution),
+    Resolved(Resolved),
+}
 
 /// Standard-error-compatible boundary for embedded callers (including eyre).
 /// The source retains the configuration or resolution error and its context.
@@ -59,38 +71,35 @@ pub struct Resolved {
     pub generator: Option<Entry>,
 }
 
-/// Load the registry, apply the explicit scaffold choice, and resolve a session
-/// or project. This only observes state and builds a prefix; it never executes
-/// the generator. Omit `config` to load TTA_CONFIG/XDG/HOME exactly as the CLI
-/// does; supply an already loaded Config when sharing one inventory snapshot.
+/// Apply a validated registry and choice to supplied facts. Missing facts yield
+/// observation requests; no environment, filesystem or process is consulted.
 #[builder]
 pub fn resolve(
-    lookup: &dyn SessionLookup,
+    sessions: &[Session],
     argument: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     choice: &str,
-    config: Option<&Config>,
-) -> std::result::Result<Resolved, Error> {
-    let loaded;
-    let config = match config {
-        Some(config) => config,
-        None => {
-            loaded = Config::load()?;
-            &loaded
-        }
-    };
-    resolve_with_config(config, lookup, argument, root, session_name, choice).map_err(Error::from)
+    config: &Config,
+    projects: Option<&ProjectInventory>,
+    destination: Option<DestinationState>,
+    defaults: &Defaults,
+) -> std::result::Result<Progress, Error> {
+    resolve_with_config(config, sessions, argument, root, session_name, choice, projects, destination, defaults).map_err(Error::from)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_with_config(
     config: &Config,
-    lookup: &dyn SessionLookup,
+    sessions: &[Session],
     argument: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     choice: &str,
-) -> Result<Resolved> {
+    projects: Option<&ProjectInventory>,
+    destination: Option<DestinationState>,
+    defaults: &Defaults,
+) -> Result<Progress> {
     let choice = Choice::parse(choice)?;
     let generator = match &choice {
         Choice::Off => None,
@@ -98,14 +107,17 @@ fn resolve_with_config(
         Choice::Default => config.default_entry()?,
     };
     let selection = match crate::resolve()
-        .lookup(lookup)
+        .sessions(sessions)
         .argument(argument)
         .maybe_root(root)
         .maybe_session_name(session_name)
         .create(generator.is_some())
+        .maybe_projects(projects)
+        .maybe_destination(destination)
         .call()
     {
-        Ok(selection) => selection,
+        Ok(Resolution::Selected(selection)) => selection,
+        Ok(request) => return Ok(Progress::Observe(request)),
         Err(error @ crate::ResolveError::Missing { .. }) if matches!(choice, Choice::Default) && config.is_empty() => {
             return Err(anyhow::Error::new(error).context(format!(
                 "scaffold mode is on but no generators are configured; add [scaffold.generators] to {} or disable with --scaffold=false",
@@ -121,14 +133,14 @@ fn resolve_with_config(
             .and_then(std::ffi::OsStr::to_str)
             .with_context(|| format!("created project directory {directory:?} must have a UTF-8 name"))?;
         let root = directory.parent().context("created project directory has no parent")?;
-        (Some(entry.scaffold(project, root)?), Some(entry))
+        (Some(entry.scaffold(project, root, defaults)?), Some(entry))
     } else {
         (None, None)
     };
-    Ok(Resolved { selection, prefix, generator })
+    Ok(Progress::Resolved(Resolved { selection, prefix, generator }))
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Config {
     path: Option<PathBuf>,
     default: Option<String>,
@@ -141,7 +153,7 @@ pub struct Entry {
     pub adapter: String,
     /// Per-entry adapter options, validated by the adapter itself.
     pub options: Table,
-    scaffold: fn(&str, &Path, &Table) -> Result<Expression>,
+    scaffold: Adapter,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -178,66 +190,76 @@ fn compiled_adapters() -> &'static [&'static str] {
     ]
 }
 
-type Adapter = fn(&str, &Path, &Table) -> Result<Expression>;
+type Adapter = fn(&str, &Path, &Table, &Defaults) -> Result<Expression>;
 
 // Keep feature-dependent dispatch out of the insertion loop so a build with no
 // adapters still typechecks without unreachable-code/unused-mut warnings.
 fn adapter(name: &str) -> Option<Adapter> {
     match name {
         #[cfg(feature = "scaffold-rekon")]
-        "rekon" => Some(|project, root, options| {
+        "rekon" => Some(|project, root, options, _defaults| {
             if !options.is_empty() {
                 bail!("generator uses adapter \"rekon\", which takes no options; found {options:?}");
             }
             tta_scaffold_rekon::scaffold(project, root).map_err(anyhow::Error::from)
         }),
         #[cfg(feature = "scaffold-rekon-native")]
-        "rekon-native" => Some(|project, root, options| tta_scaffold_rekon_native::scaffold(project, root, options).map_err(anyhow::Error::from)),
+        "rekon-native" => Some(|project, root, options, defaults| {
+            tta_scaffold_rekon_native::scaffold(
+                project,
+                root,
+                options,
+                &tta_scaffold_rekon_native::Defaults {
+                    author: defaults.author.clone(),
+                    license: defaults.license.clone(),
+                },
+            )
+            .map_err(anyhow::Error::from)
+        }),
         _ => None,
     }
 }
 
 impl Entry {
-    pub fn scaffold(&self, project: &str, root: &Path) -> Result<Expression> {
-        (self.scaffold)(project, root, &self.options)
+    /// Which target defaults are still needed after validating adapter options.
+    /// External rekon owns its defaults; it needs no launcher observation.
+    pub fn defaults_required(&self) -> (bool, bool) {
+        if self.adapter != "rekon-native" || self.options.get("package-json").and_then(toml::Value::as_bool) == Some(false) {
+            return (false, false);
+        }
+        let author = !self.options.get("author").and_then(toml::Value::as_str).is_some_and(|value| !value.is_empty());
+        let license = !self.options.contains_key("license");
+        (author, license)
+    }
+
+    pub fn scaffold(&self, project: &str, root: &Path, defaults: &Defaults) -> Result<Expression> {
+        (self.scaffold)(project, root, &self.options, defaults)
     }
 }
 
 impl Config {
-    /// Load from TTA_CONFIG, or the XDG/HOME default location. A missing file
-    /// is an empty registry; anything else that fails is an error.
-    pub fn load() -> Result<Self> {
-        Self::load_from(path_from_environment().as_deref())
-    }
-
-    /// Load an explicit registry path; None constructs an empty registry.
-    pub fn load_from(path: Option<&Path>) -> Result<Self> {
+    /// Parse supplied target text. `None` means an observed missing file or no
+    /// registry location, not a suppressed read error. `path` is provenance only.
+    pub fn parse(path: Option<&Path>, text: Option<&str>) -> Result<Self> {
         let empty = |path: Option<PathBuf>| Self {
             path,
             default: None,
             entries: BTreeMap::new(),
         };
-        let Some(path) = path else {
-            return Ok(empty(None));
+        let Some(text) = text else {
+            return Ok(empty(path.map(Path::to_owned)));
         };
-        let file: File = match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|error| anyhow!("invalid scaffold configuration in {}: {error}", path.display()))?,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(empty(Some(path.to_owned())));
-            }
-            Err(source) => {
-                return Err(anyhow!(source)).context(format!("cannot read scaffold configuration {}", path.display()));
-            }
-        };
+        let description = path.map(|path| path.display().to_string()).unwrap_or_else(|| "supplied registry".into());
+        let file: File = toml::from_str(text).map_err(|error| anyhow!("invalid scaffold configuration in {description}: {error}"))?;
         let mut entries = BTreeMap::new();
         for (name, generator) in file.scaffold.generators {
             if name.is_empty() || generator.adapter.is_empty() {
-                bail!("scaffold configuration {}: generator names and adapters cannot be empty", path.display());
+                bail!("scaffold configuration {description}: generator names and adapters cannot be empty");
             }
             let adapter_name = generator.adapter;
             let scaffold = adapter(&adapter_name).ok_or_else(|| anyhow!(
                     "scaffold configuration {}: generator {name:?} uses adapter {other:?}, which this tta build does not include; compiled adapters: {compiled:?}",
-                    path.display(),
+                    description,
                     other = adapter_name,
                     compiled = compiled_adapters()
                 ))?;
@@ -256,12 +278,12 @@ impl Config {
         {
             bail!(
                 "scaffold configuration {}: default generator {default:?} is not configured; known generators: {:?}",
-                path.display(),
+                description,
                 entries.keys().collect::<Vec<_>>()
             );
         }
         Ok(Self {
-            path: Some(path.to_owned()),
+            path: path.map(Path::to_owned),
             default: file.scaffold.default,
             entries,
         })
@@ -308,36 +330,17 @@ impl Config {
     }
 }
 
-fn path_from_environment() -> Option<PathBuf> {
-    fn nonempty(name: &str) -> Option<OsString> {
-        env::var_os(name).filter(|value| !value.is_empty())
-    }
-    if let Some(explicit) = nonempty("TTA_CONFIG") {
-        return Some(PathBuf::from(explicit));
-    }
-    // A relative XDG_CONFIG_HOME is invalid per the spec; use the HOME default.
-    let config_home = nonempty("XDG_CONFIG_HOME")
-        .filter(|value| Path::new(value).is_absolute())
-        .map(PathBuf::from)
-        .or_else(|| nonempty("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config_home.join("tta").join("config.toml"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[cfg(any(feature = "scaffold-rekon", feature = "scaffold-rekon-native"))]
     fn load(text: &str) -> Config {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config.toml");
-        std::fs::write(&path, text).unwrap();
-        Config::load_from(Some(&path)).unwrap()
+        Config::parse(Some(Path::new("/target/config.toml")), Some(text)).unwrap()
     }
 
     fn missing() -> Config {
-        let temp = tempfile::tempdir().unwrap();
-        Config::load_from(Some(&temp.path().join("absent.toml"))).unwrap()
+        Config::parse(Some(Path::new("/target/absent.toml")), None).unwrap()
     }
 
     #[cfg(feature = "scaffold-rekon")]
@@ -367,7 +370,7 @@ adapter = \"rekon\"
         assert_eq!(entry.adapter, "rekon");
         let default = config.default_entry().unwrap().unwrap();
         assert_eq!(default.name, "rk");
-        let expression = default.scaffold("fresh", Path::new("/root")).unwrap();
+        let expression = default.scaffold("fresh", Path::new("/root"), &Defaults::default()).unwrap();
         assert!(expression.shell(tta_command::Handoff::Run).unwrap().starts_with("'rekon' 'fresh'"));
         assert!(config.entry("other").is_err());
     }
@@ -390,15 +393,12 @@ adapter = \"rekon\"
 
     #[test]
     fn unknown_adapters_and_structural_mistakes_are_rejected() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config.toml");
         for (text, expected) in [
             ("[scaffold.generators.x]\nadapter = \"cargo\"\n", "which this tta build does not include"),
             ("[scaffold]\nunknown = true\n", "unknown field"),
             ("[scaffold.generators.x]\nadapter = \"whatever\"\nextra = 1\n", "unknown field"),
         ] {
-            std::fs::write(&path, text).unwrap();
-            let error = Config::load_from(Some(&path)).unwrap_err().to_string();
+            let error = Config::parse(None, Some(text)).unwrap_err().to_string();
             assert!(error.contains(expected), "{error}");
         }
     }
@@ -406,10 +406,9 @@ adapter = \"rekon\"
     #[cfg(feature = "scaffold-rekon")]
     #[test]
     fn a_default_must_name_a_configured_generator() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config.toml");
-        std::fs::write(&path, "[scaffold]\ndefault = \"absent\"\n[scaffold.generators.x]\nadapter = \"rekon\"\n").unwrap();
-        let error = Config::load_from(Some(&path)).unwrap_err().to_string();
+        let error = Config::parse(None, Some("[scaffold]\ndefault = \"absent\"\n[scaffold.generators.x]\nadapter = \"rekon\"\n"))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("is not configured"), "{error}");
     }
 
@@ -418,7 +417,12 @@ adapter = \"rekon\"
     fn adapters_reject_options_they_do_not_take() {
         // Structure parses at load; the adapter refuses when it is selected.
         let config = load("[scaffold.generators.rk]\nadapter = \"rekon\"\n\n[scaffold.generators.rk.options]\nanything = 1\n");
-        let error = config.entry("rk").unwrap().scaffold("fresh", Path::new("/root")).unwrap_err().to_string();
+        let error = config
+            .entry("rk")
+            .unwrap()
+            .scaffold("fresh", Path::new("/root"), &Defaults::default())
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("takes no options"), "{error}");
     }
 
@@ -428,7 +432,7 @@ adapter = \"rekon\"
         let config = load(
             "[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbranch = \"trunk\"\npackage-json = false\n\n[scaffold.generators.rn.options.remotes]\norigin = \"\"\n",
         );
-        let expression = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root")).unwrap();
+        let expression = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root"), &Defaults::default()).unwrap();
         let script = expression.shell(tta_command::Handoff::Run).unwrap();
         assert!(script.contains("'git' 'init' '-b' 'trunk'"), "{script}");
         assert!(!script.contains("'remote' 'add' 'origin'"), "{script}");
@@ -441,7 +445,12 @@ adapter = \"rekon\"
     #[test]
     fn native_option_mistakes_are_reported_when_the_generator_runs() {
         let config = load("[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbrunch = \"main\"\n");
-        let error = config.entry("rn").unwrap().scaffold("fresh", Path::new("/root")).unwrap_err().to_string();
+        let error = config
+            .entry("rn")
+            .unwrap()
+            .scaffold("fresh", Path::new("/root"), &Defaults::default())
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unknown field"), "{error}");
     }
 }

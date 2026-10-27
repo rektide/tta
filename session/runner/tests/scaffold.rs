@@ -4,8 +4,9 @@ use std::{fs, path::Path};
 
 #[cfg(feature = "scaffold-rekon")]
 use tta_launcher::Selection;
-use tta_launcher::{
-    ResolveError, Session,
+use tta_launcher::{ResolveError, Session};
+use tta_runner::command::Execute;
+use tta_runner::{
     backend::{LookupError, SessionLookup},
     scaffold,
 };
@@ -31,7 +32,7 @@ fn cause(error: &scaffold::Error) -> &ResolveError {
 #[test]
 fn empty_registry_and_disabled_policy_preserve_resolution_causes() {
     let root = tempfile::tempdir().unwrap();
-    let config = scaffold::Config::load_from(None).unwrap();
+    let config = scaffold::load_config_from(None).unwrap();
     for choice in ["default", "false"] {
         let error = scaffold::resolve()
             .lookup(&Inventory(vec![]))
@@ -73,7 +74,7 @@ fn choice_aliases_keep_the_existing_cli_meanings() {
 fn registry(directory: &Path, text: &str) -> scaffold::Config {
     let path = directory.join("config.toml");
     fs::write(&path, text).unwrap();
-    scaffold::Config::load_from(Some(&path)).unwrap()
+    scaffold::load_config_from(Some(&path)).unwrap()
 }
 
 #[cfg(feature = "scaffold-rekon")]

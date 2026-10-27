@@ -1,9 +1,9 @@
 //! Isolated global text-diagnostic test; never install this subscriber in the
 //! scoped-mock binary. Producers have returned before taking the log-buffer lock.
-use tta_launcher::{
-    ResolveError, Session,
+use tta_launcher::{ResolveError, Session};
+use tta_runner::{
     backend::{LookupError, SessionLookup},
-    resolve,
+    resolve::resolve,
 };
 
 struct Ambiguous;

@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "tmax"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "nix 0.31.3",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "tta"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -837,25 +837,36 @@ dependencies = [
  "tracing-subscriber",
  "tta-command",
  "tta-launcher",
+ "tta-runner",
  "tta-verify",
 ]
 
 [[package]]
 name = "tta-command"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bon",
- "tempfile",
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "tta-core-witness"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tta-command",
+ "tta-launcher",
+]
+
+[[package]]
 name = "tta-launcher"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bon",
- "rustix",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -870,8 +881,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tta-runner"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "bon",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tmax",
+ "toml",
+ "tracing",
+ "tracing-mock",
+ "tracing-test",
+ "tta-command",
+ "tta-launcher",
+ "tta-scaffold-rekon-native",
+]
+
+[[package]]
 name = "tta-scaffold-rekon"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.21",
  "tta-command",
@@ -879,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "tta-scaffold-rekon-native"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -891,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "tta-verify"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bon",

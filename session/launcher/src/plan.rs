@@ -7,9 +7,7 @@ use bon::builder;
 use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
-use crate::execution::LaunchPlan;
-#[cfg(feature = "native")]
-use crate::execution::NativeCreation;
+use crate::{LaunchPlan, NativeCreation};
 use crate::{Selection, Session};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +158,6 @@ pub fn prepare_launch(
         ClientMode::Attach => "attach-session",
         ClientMode::Switch => "switch-client",
     };
-    #[cfg(feature = "native")]
     let mut native_creation = None;
     let new_project_steps =
         &mut |directory: Option<&Path>, project_directory: &Path, session_name: &str, startup: &[OsString]| -> Result<Vec<Expression>, PlanError> {
@@ -176,7 +173,6 @@ pub fn prepare_launch(
                 create = create.args(["-n", &window]);
             }
             create = create.args(["-c", &path]);
-            #[cfg(feature = "native")]
             if client_mode == ClientMode::Switch
                 && let Some(startup) = startup.iter().map(|word| word.to_str()).collect::<Option<Vec<_>>>()
             {
@@ -251,9 +247,7 @@ pub fn prepare_launch(
     }?;
     Ok(LaunchPlan {
         expression,
-        #[cfg(feature = "native")]
         socket: socket.path.clone(),
-        #[cfg(feature = "native")]
         native_creation,
     })
 }
@@ -518,10 +512,7 @@ mod tests {
         assert_eq!(WindowName::parse("none").unwrap(), WindowName::Off);
         assert_eq!(WindowName::parse("editor").unwrap(), WindowName::Custom("editor".into()));
         assert!(matches!(WindowName::parse(""), Err(PlanError::InvalidWindowName(_))));
-        assert!(matches!(
-            plan(WindowName::Custom("\u{7}".into())),
-            Err(PlanError::InvalidWindowName(_))
-        ));
+        assert!(matches!(plan(WindowName::Custom("\u{7}".into())), Err(PlanError::InvalidWindowName(_))));
     }
 
     #[test]

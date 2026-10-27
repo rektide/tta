@@ -9,8 +9,8 @@ readme = "../../README.md"
 
 [features]
 default = ["native", "scaffold-rekon", "scaffold-rekon-native", "scaffold-by-default"]
-native = ["tta-launcher/native"]
-cli = ["tta-launcher/cli"]
+native = ["tta-runner/native"]
+cli = ["tta-runner/cli"]
 scaffold-rekon = ["tta-launcher/scaffold-rekon"]
 scaffold-rekon-native = ["tta-launcher/scaffold-rekon-native"]
 scaffold-by-default = []
@@ -23,6 +23,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tta-command.workspace = true
 tta-launcher.workspace = true
+tta-runner.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
