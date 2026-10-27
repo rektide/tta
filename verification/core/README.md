@@ -41,6 +41,8 @@ roots, clean creation with explicit target author/license defaults, and fresh
 satellite inventory. Checks inspect semantic command data, literal package JSON,
 and the single grouped create → attach → `keep-last` queue. Truncated, extra and
 mismatched replies fail; string snapshots alone are not the oracle.
+Reports also construct each required versioned probe through an explicit target
+shell/cwd setup without a runner. These scripts are emitted, **not executed**.
 Project and Create explicitly check both selection and `ChangeDir` against the
 supplied physical root. Adversarial tests cover every pending wrong reply kind,
 every truncated prefix, wrong endpoint identity, fresh grouped suffixes, rootless
@@ -70,16 +72,17 @@ reply type. Errors from an observer stop at the observer boundary. There is no
 
 ## Scope and independent runtime evidence
 
-This establishes supplied-facts planning and replay, not live discovery, an SSH
-protocol, or a complete deferred shell workflow. Invocation context and registry
-text are still caller-supplied inputs to this pure interface. Probe emission and
-decoding are the next transport checkpoint; branches/captures for a deferred
-whole-workflow shell compiler are later work.
+This establishes supplied-facts planning, replay and pure probe construction, not
+live discovery or a complete deferred shell workflow. The core's separately
+driveable `target::Bootstrap` now describes context/registry requests and replies;
+`probe::Probe` emits and decodes the framed protocol. Actual transport evidence
+lives in the [SSH toolkit](../ssh/README.md). Branches/captures for a deferred
+whole-workflow shell compiler remain later work.
 
 Real process/shell parity lives in
 [`runner/tests/expressions.rs`](../../session/runner/tests/expressions.rs), and real
 tmux grouped/argv/cwd behavior in
 [`runner/tests/satellites.rs`](../../session/runner/tests/satellites.rs).
 [`cargo verify`](../driver/src/main.rs) retains the existing real-PTY outcome
-toolkit. Its older capture helper has not been promoted into the new runner;
-bounded complete-EOF capture remains a prerequisite for SSH observation.
+toolkit. Its non-PTY capture now uses the runner's shared bounded complete-EOF
+implementation, and reports exact read-only owned-endpoint preflight evidence.

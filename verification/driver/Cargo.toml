@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+default-run = "tta-verify"
 
 [dependencies]
 anyhow.workspace = true
@@ -16,3 +17,4 @@ serde_json = "1"
 tempfile.workspace = true
 tta-command.workspace = true
 tta-runner.workspace = true
+tta-launcher = { workspace = true, features = ["scaffold-rekon-native", "scaffold-rekon"] }
