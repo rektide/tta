@@ -47,6 +47,44 @@ pub struct Record {
     pub decoded: std::result::Result<probe::Decoded, String>,
 }
 
+/// Write retained probe evidence to a caller-owned diagnostic stream, never to
+/// protocol/plan stdout. Failed records include raw bounded bytes because a
+/// rejected frame cannot safely be treated as decoded diagnostics.
+pub fn write_diagnostics(mut writer: impl std::io::Write, records: &[Record]) -> std::io::Result<()> {
+    for record in records {
+        match &record.decoded {
+            Ok(decoded) => {
+                for bytes in [
+                    &decoded.diagnostics.startup_stdout,
+                    &decoded.diagnostics.trailing_stdout,
+                    &decoded.diagnostics.transport_stderr,
+                    &decoded.diagnostics.command_stderr,
+                ] {
+                    writer.write_all(bytes)?;
+                }
+            }
+            Err(error) => {
+                writer.write_all(&record.output.stderr)?;
+                writeln!(
+                    writer,
+                    "SSH probe failed: {:?}; decode={error}; capture={:?}; status={:?}; complete={}; stdout_eof={}; stderr_eof={}; omitted_stdout={}; omitted_stderr={}; cleanup={:?}; stdout={:?}",
+                    record.request,
+                    record.output.stop,
+                    record.output.status,
+                    record.output.complete(),
+                    record.output.stdout_eof,
+                    record.output.stderr_eof,
+                    record.output.omitted_stdout,
+                    record.output.omitted_stderr,
+                    record.output.cleanup,
+                    String::from_utf8_lossy(&record.output.stdout),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// On *every* observation failure retain both streams, process status,
 /// completeness/cleanup and any successful earlier facts. No mutation occurred.
 #[derive(Debug, thiserror::Error)]

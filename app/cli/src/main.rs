@@ -296,34 +296,6 @@ fn run(mut args: Args) -> Result<ExitCode> {
     })
 }
 
-fn remote_diagnostics(records: &[tta_runner::ssh::Record]) -> Result<()> {
-    use std::io::Write;
-    let mut stderr = std::io::stderr().lock();
-    for record in records {
-        if let Ok(decoded) = &record.decoded {
-            for bytes in [
-                &decoded.diagnostics.startup_stdout,
-                &decoded.diagnostics.trailing_stdout,
-                &decoded.diagnostics.transport_stderr,
-                &decoded.diagnostics.command_stderr,
-            ] {
-                stderr.write_all(bytes)?;
-            }
-        } else {
-            stderr.write_all(&record.output.stderr)?;
-            writeln!(
-                stderr,
-                "SSH probe failed: {:?}; capture={:?}; status={:?}; stdout={:?}",
-                record.request,
-                record.output.stop,
-                record.output.status,
-                String::from_utf8_lossy(&record.output.stdout)
-            )?;
-        }
-    }
-    Ok(())
-}
-
 fn run_ssh(args: Args) -> Result<ExitCode> {
     use tta_launcher::target;
     use tta_runner::command::Execute;
@@ -383,11 +355,14 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
     let prepared = match tta_runner::ssh::prepare(ssh, setup, options, tta_runner::capture::Limits::default()) {
         Ok(prepared) => prepared,
         Err(error) => {
-            remote_diagnostics(&error.observations)?;
+            if let Err(write_error) = tta_runner::ssh::write_diagnostics(std::io::stderr().lock(), &error.observations) {
+                // Reporting failure must not replace the original planning cause.
+                eprintln!("cannot write SSH probe diagnostics: {write_error}");
+            }
             return Err(error.into());
         }
     };
-    remote_diagnostics(&prepared.observations)?;
+    tta_runner::ssh::write_diagnostics(std::io::stderr().lock(), &prepared.observations)?;
     if args.print_shell {
         println!("{}", prepared.shell(if args.exec_shell { Handoff::Exec } else { Handoff::Run })?);
         return Ok(ExitCode::SUCCESS);
