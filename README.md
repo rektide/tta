@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-23, by: "model:openai/gpt-6.1-sol#xhigh" }
+updated: { at: 2026-10-27, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e8112b4b3ffexPxCA32QZKg13t
+    title: Add created-session initial-window naming (default session name, --window-name override/disable) with launcher, CLI, tests and end-to-end tmux verification
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
     title: Implement native detached creation and verify its boundaries; then reproduce independent grouped views and an existing wrong-client inside switch with two real terminals
   - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
@@ -130,6 +132,7 @@ needs its first session, `--group` creates that ordinary session directly.
 | `--dir PATH` | Initial pane directory, overriding the project directory | No effect | Session starting directory; existing shared panes keep their cwd |
 | `-- ARGV...` | Startup executable and literal arguments | No effect | No effect; existing processes are shared |
 | `--session-name NAME` | Override the new session's name | No effect | Satellite name is derived from the matched session |
+| `--window-name NAME` | Name the initial window (default: the session name) | No effect | No effect; tmux rejects `-n` with `-t`, and satellites share the group's windows |
 
 ```sh
 tta --dir "$PWD" myproject -- nvim 'file with spaces'
@@ -143,6 +146,14 @@ literally: tta does no shell splitting or interpolation. A lone executable is
 wrapped with `/bin/sh -c 'exec "$0"' EXECUTABLE` to avoid tmux interpreting a
 single operand as shell source. Direct execution accepts non-UTF-8 argument
 bytes; shell rendering requires UTF-8. Initial-directory paths require UTF-8.
+
+A created session names its initial window after itself, so the status line
+leads with the project you entered. Naming a window makes tmux disable
+`automatic-rename` for it: the name sticks instead of following the running
+command. `--window-name=NAME` renames the initial window (spaces, `.`, `:`,
+and `#` allowed), and `--window-name=false` skips naming entirely to keep
+tmux's automatic renaming. The window name is a tmux format-escaped literal
+like the session name.
 
 ### Action matrix
 
@@ -392,6 +403,9 @@ use `--` before a leading-`-` fragment: names are neither globs nor regexes.
 New sessions use the project basename unless `--session-name` overrides it.
 Empty names and names containing `.`, `:`, or control characters are rejected,
 as are collisions with existing sessions. Names are never silently normalized.
+Window names are freer (`.` and `:` allowed) but must be nonempty and
+printable; empty or control-character values are rejected, not silently
+coerced to the session name.
 A scaffold name must additionally be one path component, not `.` or `..`, and
 its target must not already exist, including as a file or dangling symlink.
 

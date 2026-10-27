@@ -38,6 +38,31 @@ fn explicit_dir_is_frozen_and_startup_flags_are_not_launcher_flags() {
 }
 
 #[test]
+fn window_name_defaults_to_the_session_and_overrides_or_disables() {
+    let temp = tempfile::Builder::new().prefix("tta-cli-window-").tempdir_in("/tmp/opencode").unwrap();
+    fs::create_dir(temp.path().join("project")).unwrap();
+    let plan = |extra: &[&str]| {
+        let mut command = tta(&temp);
+        command.args(extra).arg("project");
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // Absent and bare flag both name the initial window after the session.
+    for extra in [&[][..], &["--window-name"][..]] {
+        let source = plan(extra);
+        assert!(source.contains(&format!("'new-session' '-s' 'project' '-n' 'project' '-c' '{}'", temp.path().join("project").display())), "{source}");
+    }
+    // A custom name wins and stays one argv word.
+    let source = plan(&["--window-name=main editor"]);
+    assert!(source.contains("'new-session' '-s' 'project' '-n' 'main editor' '-c'"), "{source}");
+    // false leaves the window to tmux automatic-rename: no -n at all.
+    let source = plan(&["--window-name=false"]);
+    assert!(!source.contains("'-n'"), "{source}");
+    assert!(source.contains("'new-session' '-s' 'project'"), "{source}");
+}
+
+#[test]
 fn double_dash_still_allows_a_fragment_starting_with_hyphen() {
     let temp = tempfile::Builder::new().prefix("tta-cli-entry-").tempdir_in("/tmp/opencode").unwrap();
     fs::create_dir(temp.path().join("-project")).unwrap();

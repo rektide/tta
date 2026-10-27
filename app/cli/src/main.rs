@@ -39,7 +39,7 @@ struct Args {
     #[arg(required_unless_present = "completion_candidates")]
     argument: Option<String>,
     /// Read-only shell completion inventory (one name per line)
-    #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name", "scaffold"])]
+    #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name", "window_name", "scaffold"])]
     completion_candidates: Option<CompletionCandidates>,
     /// Project root [env: TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
     #[arg(long)]
@@ -47,6 +47,10 @@ struct Args {
     /// Override the name of a new session (does not change session matching)
     #[arg(long)]
     session_name: Option<String>,
+    /// Name a new session's initial window (naming disables automatic-rename for it)
+    /// [default: the session name; --window-name=NAME renames it, --window-name=false leaves it unnamed]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "default")]
+    window_name: Option<String>,
     /// Scaffold a missing project before creating its session
     /// [env: TTA_SCAFFOLD; --scaffold=NAME picks a configured generator, a bare --scaffold uses the configured default, --scaffold=false disables]
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "default")]
@@ -234,6 +238,10 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .maybe_satellite_name(satellite.as_deref())
         .startup(&args.command)
         .maybe_directory(args.dir.as_deref())
+        .window_name(match args.window_name.as_deref() {
+            Some(value) => tta_launcher::WindowName::parse(value)?,
+            None => tta_launcher::WindowName::Session,
+        })
         .call()?;
     let operation = match (&resolved, mode) {
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session-detached+attach",

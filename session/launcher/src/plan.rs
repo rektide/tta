@@ -18,6 +18,35 @@ pub enum ClientMode {
     Switch,
 }
 
+/// The initial window name for a session this plan creates. Naming a window
+/// makes tmux disable `automatic-rename` for it. Grouped satellites cannot
+/// take one at all: their creation targets the group (`-t`) and tmux rejects
+/// `-n` combined with `-t`, so the choice only reaches plain `new-session`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum WindowName {
+    /// Name the initial window after the new session (the default).
+    #[default]
+    Session,
+    /// Name the initial window exactly this.
+    Custom(String),
+    /// Leave the window unnamed so `automatic-rename` keeps applying.
+    Off,
+}
+
+impl WindowName {
+    /// Parse the shared flag vocabulary: bare/`default`/`true`/`1` keep the
+    /// session name, `false`/`off`/`none`/`0` disable, anything else names
+    /// the window. Mirrors [`crate::scaffold::Choice::parse`].
+    pub fn parse(value: &str) -> Result<Self, PlanError> {
+        Ok(match value {
+            "" => return Err(PlanError::InvalidWindowName(value.to_owned())),
+            "default" | "true" | "1" => Self::Session,
+            "false" | "0" | "off" | "none" => Self::Off,
+            name => Self::Custom(name.to_owned()),
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
     #[error(transparent)]
@@ -32,6 +61,8 @@ pub enum PlanError {
     Directory(std::path::PathBuf),
     #[error("a create selection needs its generator command as the plan prefix")]
     MissingPrefix,
+    #[error("window name {0:?} is empty or contains control characters; pass a printable --window-name or --window-name=false")]
+    InvalidWindowName(String),
 }
 
 /// Assemble commands only; this performs no I/O. New outside sessions are
@@ -43,6 +74,8 @@ pub enum PlanError {
 /// project's initial directory and supplies `-c` for satellites. Library
 /// callers must supply an absolute path. Create selections run their generator
 /// command as the first step, before entering the directory it must produce.
+/// Created sessions name their initial window per `window_name` (default:
+/// after the session); grouped satellites cannot take a window name.
 #[builder]
 pub fn launch(
     selection: &Selection,
@@ -55,6 +88,7 @@ pub fn launch(
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
+    #[builder(default)] window_name: WindowName,
 ) -> Result<Expression, PlanError> {
     Ok(prepare_launch()
         .selection(selection)
@@ -67,6 +101,7 @@ pub fn launch(
         .maybe_satellite_name(satellite_name)
         .startup(startup)
         .maybe_directory(directory)
+        .window_name(window_name)
         .call()?
         .into_expression())
 }
@@ -86,6 +121,7 @@ pub fn prepare_launch(
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
+    #[builder(default)] window_name: WindowName,
 ) -> Result<LaunchPlan, PlanError> {
     let command = |invocations: Vec<Invocation>, startup: &[OsString]| -> Result<Expression, PlanError> {
         let (mut args, environment) = match &socket.label {
@@ -135,7 +171,11 @@ pub fn prepare_launch(
             if client_mode == ClientMode::Switch {
                 create = create.arg("-d");
             }
-            create = create.args(["-s", &literal_format(session_name), "-c", &path]);
+            create = create.args(["-s", &literal_format(session_name)]);
+            if let Some(window) = window_title(&window_name, session_name)? {
+                create = create.args(["-n", &window]);
+            }
+            create = create.args(["-c", &path]);
             #[cfg(feature = "native")]
             if client_mode == ClientMode::Switch
                 && let Some(startup) = startup.iter().map(|word| word.to_str()).collect::<Option<Vec<_>>>()
@@ -255,11 +295,28 @@ fn startup_word(value: &OsString) -> Result<Word, tta_command::Error> {
     Word::new(OsString::from_vec(bytes))
 }
 
-/// `-s` and `-c` are tmux formats, a separate language from shell/argv quoting.
+/// `-s`, `-n` and `-c` are tmux formats, a separate language from shell/argv quoting.
 /// Emit hashes through the character modifier so neither formats nor #() jobs
 /// nor the special ##[ style rule can interpret a literal name/path.
 fn literal_format(value: &str) -> String {
     value.replace('#', "#{a:35}")
+}
+
+/// The `-n` value for a created session's initial window, format-escaped.
+/// Custom names may contain `.`/`:`/spaces (tmux window names are freer than
+/// session names) but must be printable: the value crosses a line-oriented
+/// CLI and lands in the status line.
+fn window_title(window_name: &WindowName, session_name: &str) -> Result<Option<String>, PlanError> {
+    Ok(match window_name {
+        WindowName::Off => None,
+        WindowName::Session => Some(literal_format(session_name)),
+        WindowName::Custom(name) => {
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err(PlanError::InvalidWindowName(name.to_owned()));
+            }
+            Some(literal_format(name))
+        }
+    })
 }
 
 #[cfg(test)]
@@ -308,7 +365,19 @@ mod tests {
         let args: Vec<_> = create.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect();
         assert_eq!(
             args,
-            ["-S", "/tmp/sock", "new-session", "-d", "-s", "#{a:35}[a]\\;", "-c", "/src/#{a:35}[a]' \\;"]
+            [
+                "-S",
+                "/tmp/sock",
+                "new-session",
+                "-d",
+                "-s",
+                "#{a:35}[a]\\;",
+                // The default window name is the session name, equally escaped.
+                "-n",
+                "#{a:35}[a]\\;",
+                "-c",
+                "/src/#{a:35}[a]' \\;"
+            ]
         );
         let Expression::Command(switch) = &and.steps[2] else {
             panic!("expected switch")
@@ -403,7 +472,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             expression.shell(Handoff::Run).unwrap(),
-            "'rekon' 'fresh' && cd -P '/src/fresh' && 'tmux' '-S' '/tmp/sock' 'new-session' '-s' 'fresh' '-c' '/src/fresh'"
+            "'rekon' 'fresh' && cd -P '/src/fresh' && 'tmux' '-S' '/tmp/sock' 'new-session' '-s' 'fresh' '-n' 'fresh' '-c' '/src/fresh'"
         );
         // A create selection without its generator command is refused.
         assert!(matches!(
@@ -415,5 +484,69 @@ mod tests {
                 .call(),
             Err(PlanError::MissingPrefix)
         ));
+    }
+
+    #[test]
+    fn window_names_customize_disable_and_survive_format_characters() {
+        let selection = Selection::Project {
+            directory: "/src/project".into(),
+            session_name: "project".into(),
+        };
+        let plan = |window_name: WindowName| {
+            launch()
+                .selection(&selection)
+                .socket(&crate::socket::Resolved::path("/tmp/sock"))
+                .client_mode(ClientMode::Attach)
+                .program(OsStr::new("tmux"))
+                .window_name(window_name)
+                .call()
+        };
+        // A custom name may carry the characters session names reject and is
+        // format-escaped like -s/-c values.
+        assert_eq!(
+            plan(WindowName::Custom("#[a] edit: main".into())).unwrap().shell(Handoff::Run).unwrap(),
+            "cd -P '/src/project' && 'tmux' '-S' '/tmp/sock' 'new-session' '-s' 'project' '-n' '#{a:35}[a] edit: main' '-c' '/src/project'"
+        );
+        // Off restores today's unnamed window: no -n at all.
+        assert_eq!(
+            plan(WindowName::Off).unwrap().shell(Handoff::Run).unwrap(),
+            "cd -P '/src/project' && 'tmux' '-S' '/tmp/sock' 'new-session' '-s' 'project' '-c' '/src/project'"
+        );
+        // Parse maps the flag vocabulary; unprintable customs are refused.
+        assert_eq!(WindowName::parse("default").unwrap(), WindowName::Session);
+        assert_eq!(WindowName::parse("false").unwrap(), WindowName::Off);
+        assert_eq!(WindowName::parse("none").unwrap(), WindowName::Off);
+        assert_eq!(WindowName::parse("editor").unwrap(), WindowName::Custom("editor".into()));
+        assert!(matches!(WindowName::parse(""), Err(PlanError::InvalidWindowName(_))));
+        assert!(matches!(
+            plan(WindowName::Custom("\u{7}".into())),
+            Err(PlanError::InvalidWindowName(_))
+        ));
+    }
+
+    #[test]
+    fn grouped_satellites_never_take_a_window_name() {
+        let session = Selection::Existing(crate::Session {
+            id: "$7".parse().unwrap(),
+            name: "seed".into(),
+        });
+        let expression = launch()
+            .selection(&session)
+            .socket(&crate::socket::Resolved::path("/tmp/sock"))
+            .client_mode(ClientMode::Attach)
+            .program(OsStr::new("tmux"))
+            .grouped(true)
+            .satellite_name("_seed-1")
+            // Even a custom name stays out: tmux rejects -n with -t and the
+            // satellite shares the group's existing windows.
+            .window_name(WindowName::Custom("editor".into()))
+            .call()
+            .unwrap();
+        assert_eq!(
+            expression.shell(Handoff::Run).unwrap(),
+            "'tmux' '-S' '/tmp/sock' 'new-session' '-d' '-s' '_seed-1' '-t' '$7' ';' \
+             'attach-session' '-t' '=_seed-1' ';' 'set-option' '-t' '=_seed-1:' \
+             'destroy-unattached' 'keep-last'"
+        );
     }
 }

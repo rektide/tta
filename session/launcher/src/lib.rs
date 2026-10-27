@@ -9,7 +9,7 @@ mod resolve;
 pub mod scaffold;
 pub mod socket;
 
-pub use plan::{ClientMode, PlanError, launch, prepare_launch, satellite_name};
+pub use plan::{ClientMode, PlanError, WindowName, launch, prepare_launch, satellite_name};
 pub use resolve::{ResolveError, Selection, project_names, resolve};
 pub use tmax::operation::SessionId;
 
