@@ -171,8 +171,9 @@ impl Fixture {
         executable(
             &self.bin.join("tmux"),
             &format!(
-            "#!/bin/sh\ntta_seen=no; tta_next=no\nfor tta_arg do\n if [ \"$tta_next\" = yes ]; then\n  [ \"$tta_arg\" = {socket} ] || {{ printf 'fixture refused another endpoint\\n' >&2; exit 92; }}\n  tta_seen=yes; tta_next=no\n else\n  case \"$tta_arg\" in -S) tta_next=yes ;; -L) printf 'fixture refused label endpoint\\n' >&2; exit 93 ;; esac\n fi\ndone\n[ \"$tta_seen\" = yes ] && [ \"$tta_next\" = no ] || {{ printf 'fixture requires its exact -S endpoint\\n' >&2; exit 94; }}\nprintf '%s\\000' TTA-CALL-v1 \"$@\" TTA-END-v1 >> {log}\nexec /usr/bin/tmux \"$@\"\n",
-            socket = quote(self.socket.clone().into_os_string())?, log = quote(base.join("tmux-argv").into_os_string())?
+                "#!/bin/sh\ntta_seen=no; tta_next=no\nfor tta_arg do\n if [ \"$tta_next\" = yes ]; then\n  [ \"$tta_arg\" = {socket} ] || {{ printf 'fixture refused another endpoint\\n' >&2; exit 92; }}\n  tta_seen=yes; tta_next=no\n else\n  case \"$tta_arg\" in -S) tta_next=yes ;; -L) printf 'fixture refused label endpoint\\n' >&2; exit 93 ;; esac\n fi\ndone\n[ \"$tta_seen\" = yes ] && [ \"$tta_next\" = no ] || {{ printf 'fixture requires its exact -S endpoint\\n' >&2; exit 94; }}\nprintf '%s\\000' TTA-CALL-v1 \"$@\" TTA-END-v1 >> {log}\nexec /usr/bin/tmux \"$@\"\n",
+                socket = quote(self.socket.clone().into_os_string())?,
+                log = quote(base.join("tmux-argv").into_os_string())?
             ),
         )?;
         executable(
