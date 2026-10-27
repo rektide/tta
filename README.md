@@ -685,6 +685,11 @@ the versioned script or setup-wrapped shell command; `decode()` takes captured
 bytes, actual carrier status and explicit EOF completeness. None of these core
 APIs performs I/O or needs `tta-runner`.
 
+The [runner-free round-trip toolkit](verification/probes/README.md) proves this
+public emit/execute/decode/resume loop through controlled stdlib processes with
+no runner dependency. It complements, rather than weakens, the no-I/O
+[supplied-facts/poison witness](verification/core/README.md).
+
 The optional runner composes that prelude and the ordinary workflow:
 
 ```rust,ignore

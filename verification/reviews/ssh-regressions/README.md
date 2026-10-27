@@ -1,12 +1,14 @@
 ---
 type: VerificationToolkit
 title: SSH review regression witnesses
-description: Unpromoted review-owned witnesses from independent SSH milestone verification, runnable separately from the shipped verification packages
+description: Historical reviewer-owned runner-free witness and its deliberate promotion into the maintained probes toolkit
 resource: /verification/reviews/ssh-regressions/README.md
-status: review-witness-unpromoted
+status: review-witness-promoted
 author: model:zai-coding-plan/glm-5.3#max
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Deliberately move the single round-trip implementation to verification/probes and preserve this reviewer-owned historical account
   - resource: opencode://ses_e8088432bffeXANRjlyh66v273
     title: Independent SSH milestone review adds a runner-free probe round-trip witness and records it for deliberate promotion
   - resource: /verification/reviews/ssh0.glm53m.md
@@ -14,6 +16,19 @@ sources:
 ---
 
 # SSH review regression witnesses
+
+## Promotion — 2026-10-27
+
+The original `runner-free/` source is now the maintained
+[`verification/probes` library/CLI](../../probes/README.md), with one implementation,
+retained reviewer attribution, package-only dependency isolation and richer
+observation reports. Its standalone manifest/lock were deliberately retired.
+Use `./verification/probes/check.sh --report /tmp/opencode/tta-probe-report.json`
+from the repository root. The original package and result are preserved at
+**`a65eac3a`**; the recipes below describe that revision, not today's paths.
+The no-I/O supplied-facts witness remains separate and unchanged.
+
+## Original review-owned account (at `a65eac3a`)
 
 Witnesses added by [independent review](../ssh0.glm53m.md), kept deliberately
 separate from the shipped `verification/core` and `verification/driver`
@@ -55,4 +70,5 @@ It is process-carrier evidence (real `/bin/sh`, GNU find/stat, Git), **not**
 SSH evidence; the [actual SSH toolkit](../../ssh/README.md) owns that. The
 happy-path run performs no tmux mutation (the fake tmux classifies the owned
 socket as absent). Promotion proposal and correction recommendations live in
-the [review report](../ssh0.glm53m.md).
+the [review report](../ssh0.glm53m.md). Current reruns use the
+[promoted toolkit](../../probes/README.md), which links back here.

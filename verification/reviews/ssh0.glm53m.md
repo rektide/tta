@@ -7,6 +7,8 @@ status: reviewed-with-followups
 author: model:zai-coding-plan/glm-5.3#max
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Add a correction and promotion record without changing the independent review findings or original evidence
   - resource: opencode://ses_e8088432bffeXANRjlyh66v273
     title: Fresh independent reviewer verifies the committed SSH milestone and adds a runner-free probe round-trip witness
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
@@ -31,8 +33,8 @@ sources:
     title: Reviewed CLI SSH policy, environment precedence and diagnostics
   - resource: /verification/driver/src/ssh.rs
     title: Reviewed the actual-loopback fixture, assertions and cleanup evidence
-  - resource: /verification/reviews/ssh-regressions/runner-free/src/main.rs
-    title: New runner-free probe round-trip witness added by this review
+  - resource: /verification/probes/src/lib.rs
+    title: Runner-free probe round-trip witness originally added by this review at a65eac3a and subsequently promoted by a deliberate source move
   - resource: file:///home/rektide/src/term-preserver/src/launcher.rs
     title: Reviewed embedded consumer worker, one option set, handoff and retry ownership
 ---
@@ -200,7 +202,8 @@ execution is uncertified for those families.
 
 ## Independent evidence: runner-free round-trip witness
 
-New package [`verification/reviews/ssh-regressions/runner-free/`](ssh-regressions/runner-free/src/main.rs)
+New package `verification/reviews/ssh-regressions/runner-free/` (at `a65eac3a`;
+[current maintained source](../probes/src/lib.rs))
 (see its [README](ssh-regressions/README.md)): depends only on
 `tta-launcher` + `tta-command` + anyhow/serde_json/tempfile — `cargo tree -e
 normal | grep -c tta-runner` prints **0** — and drives the complete public
@@ -267,6 +270,10 @@ the owned socket absent, exercising exact-endpoint classification).
 
 ## Reproduction
 
+These are the **original revision's** recipes. The current maintained rerun is
+`./verification/probes/check.sh --report /tmp/opencode/tta-probe-report.json`;
+see [promotion and isolation](../probes/README.md).
+
 ```sh
 # Runner-free witness (isolated target; never touches shared executables):
 CARGO_TARGET_DIR=/tmp/opencode/ssh-review-target cargo run --offline --quiet \
@@ -284,3 +291,37 @@ LC_ALL=C stat -L --printf='%f' -- /nonexistent                      # cannot sta
 
 Reported checks trusted per commission; nothing in this review re-ran the
 broad suites. Parent acceptance remains the parent's decision.
+
+## Finishing-pass addendum — 2026-10-27 (Sol)
+
+The independent findings and original results above are preserved, not rewritten
+as a review of the corrections. S1 now uses a shared runner diagnostics writer in
+CLI and consumer, retaining failure evidence before propagation; a worker/process
+regression proves earlier diagnostics, failed status/EOF/omissions/cleanup,
+clean stdout and no handoff. S2 exposes positive integer local capture deadlines
+(milliseconds) and per-stream retention (bytes) in both front ends, with actual
+capture and precedence tests. tta's coordinated interface marker is 0.5.0;
+term-preserver's new launch fields mark 0.2.0, with receiving locks refreshed.
+S3/S5 are explicit in the maintained SSH guides. S4 accepts status 1 or 127 only
+with empty command output after recorded fixture startup; focused actual sh/bash
+checks pass. No new actual SSH run is claimed by those process checks.
+
+The single review-owned round-trip implementation was deliberately moved to
+[`verification/probes`](../probes/README.md), separate from the pure supplied-facts
+toolkit to preserve its no-I/O dependency/poison contract. The source keeps GLM's
+attribution; this historical report and [former home](ssh-regressions/README.md)
+remain navigable. The obsolete standalone manifest/lock are recoverable at
+`a65eac3a`. This promotion adds a reusable library/CLI and reports, not a new
+workflow framework or acceptance of deferred/mosh work.
+
+Finishing verification: 2 new CLI-policy tests, 3 consumer policy/worker tests,
+1 sh/bash absence regression, and the promoted 1-test/7-check round-trip passed.
+The round-trip report retains 22 observations; the separately rebuilt pure
+poison/syscall witness passed 4 scenarios in 2 environments. See the
+[maintained report account](../probes/README.md#promotion-run) for paths/recipes.
+Targeted all-feature/all-target clippy passed (`-D warnings` for tta-owned
+packages; `-D clippy::all` for the consumer), as did formatting, CLI-only and
+embedded-only checks, runner/probe doctest commands and explicit Rekon document
+checks. Existing sibling tmax compiler warnings and the consumer's signals macro
+warning were retained; no sibling code was changed. Broad previously successful
+suites and the actual loopback SSH lifecycle were not rerun merely to reconfirm.

@@ -881,6 +881,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tta-probe-witness"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tta-command",
+ "tta-launcher",
+]
+
+[[package]]
 name = "tta-runner"
 version = "0.5.0"
 dependencies = [

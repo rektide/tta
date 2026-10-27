@@ -122,8 +122,10 @@ symlink tests distinguish missing targets from non-directory ancestors, loops an
 permission-denied parents, including quoted/newline names and registry traversal.
 The GNU-stat classifier requires its single-operand C-locale diagnostic, status 1
 and empty mode output; unknown errors fail closed rather than becoming absence.
-The
-[runner-free toolkit](../core/README.md) constructs probes without executing them.
+The [supplied-facts toolkit](../core/README.md) constructs probes without executing
+them. ⇄ The [runner-free process toolkit](../probes/README.md) executes the full
+public emit/decode/resume loop without a runner, including registry and Git
+defaults, while remaining distinct from this actual SSH evidence.
 Neither resolved-plan emission nor this harness implements a complete deferred
 shell workflow. Mosh still needs a separately selected SSH observation channel;
 the existing mosh `tta-cli` path still requires target tta, while its classic

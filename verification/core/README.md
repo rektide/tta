@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Link the promoted process-carrier round-trip sibling while preserving this toolkit's no-I/O supplied-facts and poison contract
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
     title: Promote canonical-root and adversarial replay assertions plus a reusable poisoned-environment and optional syscall witness after independent LC2 review
   - resource: /verification/reviews/local-core0.gpt6a.md
@@ -76,7 +78,12 @@ This establishes supplied-facts planning, replay and pure probe construction, no
 live discovery or a complete deferred shell workflow. The core's separately
 driveable `target::Bootstrap` now describes context/registry requests and replies;
 `probe::Probe` emits and decodes the framed protocol. Actual transport evidence
-lives in the [SSH toolkit](../ssh/README.md). Branches/captures for a deferred
+lives in the [SSH toolkit](../ssh/README.md). ⇄ The separately maintained
+[emitted-probe round-trip](../probes/README.md) executes the public emit/decode/
+resume loop through stdlib processes without a runner, including registry and
+generator-default acquisition. Its intentional filesystem/process I/O is kept
+out of this supplied-facts package; this package's poison and dependency witness
+are unchanged. Branches/captures for a deferred
 whole-workflow shell compiler remain later work.
 
 Real process/shell parity lives in

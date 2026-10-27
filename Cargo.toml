@@ -1,5 +1,5 @@
 [workspace]
-members = ["shell/command", "scaffold/rekon", "scaffold/rekon-native", "session/launcher", "session/runner", "app/cli", "verification/driver", "verification/core"]
+members = ["shell/command", "scaffold/rekon", "scaffold/rekon-native", "session/launcher", "session/runner", "app/cli", "verification/driver", "verification/core", "verification/probes"]
 resolver = "3"
 
 [workspace.package]
