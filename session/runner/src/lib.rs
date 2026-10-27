@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod capture;
 pub mod command;
 pub mod driver;
 pub mod execution;

@@ -52,22 +52,17 @@ pub fn observe_defaults(directory: &Path, author: bool, license: bool) -> Result
         match value("AUTHOR")? {
             Some(author) => Some(author),
             None => {
-                let output = std::process::Command::new("git")
-                    .current_dir(directory)
-                    .args(["config", "--get", "user.name"])
-                    .stdin(std::process::Stdio::null())
-                    .output()
-                    .context("cannot observe Git author default")?;
-                if output.status.success() {
+                let mut command = std::process::Command::new("git");
+                command.current_dir(directory).args(["config", "--get", "user.name"]);
+                let output = crate::capture::run(&mut command, crate::capture::Limits::default()).context("cannot observe Git author default")?;
+                output.require_complete()?;
+                let status = output.status.expect("complete capture has status");
+                if status.success() {
                     Some(String::from_utf8(output.stdout)?.trim().to_owned()).filter(|name| !name.is_empty())
-                } else if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+                } else if status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
                     None
                 } else {
-                    anyhow::bail!(
-                        "cannot observe Git author default ({}): {}",
-                        output.status,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+                    anyhow::bail!("cannot observe Git author default ({}): {}", status, String::from_utf8_lossy(&output.stderr));
                 }
             }
         }

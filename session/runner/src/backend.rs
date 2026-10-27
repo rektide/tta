@@ -29,6 +29,8 @@ pub enum LookupError {
     Build(#[from] tmax::operation::BuildError),
     #[error(transparent)]
     Decode(#[from] tmax::operation::DecodeError),
+    #[error("tmux session capture was incomplete: {0:?}")]
+    Incomplete(Box<crate::capture::Output>),
 }
 
 #[cfg(feature = "native")]
@@ -89,26 +91,30 @@ impl SessionLookup for Cli {
         use tmax::operation::{ReplyDecoder, TypedOperation};
         use tta_launcher::workflow::SessionInventory;
         let query = tmax::query::Sessions::new();
-        let output = std::process::Command::new(&self.program)
+        let mut command = std::process::Command::new(&self.program);
+        command
             // Match native's explicit CLIENT_UTF8 even with C-locale errors.
             // Without -u, tmux sanitizes the typed schema's tab delimiters.
             .arg("-u")
             .arg("-S")
             .arg(&self.socket)
             .args(query.invocation()?.argv()?)
-            .env("LC_ALL", "C")
-            .stdin(std::process::Stdio::null())
-            .output()?;
-        if !output.status.success() {
+            .env("LC_ALL", "C");
+        let output = crate::capture::run(&mut command, crate::capture::Limits::default())?;
+        if !output.complete() {
+            return Err(LookupError::Incomplete(Box::new(output)));
+        }
+        let status = output.status.expect("complete capture has status");
+        if !status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            if output.status.code() == Some(1) && output.stdout.is_empty() && cli_absent(&stderr, &self.socket) {
+            if status.code() == Some(1) && output.stdout.is_empty() && cli_absent(&stderr, &self.socket) {
                 return Ok(if stderr == "no sessions\n" {
                     SessionInventory::Present(Vec::new())
                 } else {
                     SessionInventory::Absent
                 });
             }
-            return Err(LookupError::Command { status: output.status, stderr });
+            return Err(LookupError::Command { status, stderr });
         }
         let text = std::str::from_utf8(&output.stdout)?;
         let mut decoder = query.decoder();
