@@ -7,6 +7,10 @@ status: implemented-checkpoint
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
+    title: Correct shared-driver isolation coverage after independent review; add exact endpoint preflight and retained fallback-cleanup diagnostics
+  - resource: /verification/reviews/local-core0.gpt6a.md
+    title: Independent local-core review and LC1 isolation coverage finding
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
     title: Implement the first commissioned milestone, extract optional runtime adapters, migrate the local embedded consumer and add runner-free replay verification; return for rotation after crossing 200k context
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
@@ -127,8 +131,13 @@ Results in this session:
   **4 scaffold cases** after rebuilding the sibling CLI with adapters. The first
   scaffold run hit a deliberately slim CLI binary left by the parallel CLI-only
   build, not an embedded failure. The all-feature CLI was restored afterward.
-- Rekon checks passed on maintained tta/toolkit/consumer Markdown. Real fixture
-  operations use explicit owned sockets and read-only absence proof. The label
+- Rekon checks passed on maintained tta/toolkit/consumer Markdown. The updated
+  CLI launch and runner private-server fixtures used explicit owned sockets and
+  read-only absence proof; the shared PTY driver was missed in this checkpoint
+  ([LC1](../../verification/reviews/local-core0.gpt6a.md#lc1--p2-the-reusable-pty-driver-still-lacks-its-required-isolation-proof)).
+  The next milestone corrects that driver before another live run: approved
+  scratch root, recorded exact-endpoint absence, and visible fallback cleanup.
+  The label
   policy test now uses an explicitly labelled carrier simulation which always
   gives the real tmux `-S`; it does **not** claim to verify native `-L` bootstrap.
 

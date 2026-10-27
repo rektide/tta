@@ -12,10 +12,12 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub mod isolation;
+
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -89,6 +91,25 @@ pub struct ProcessOutput {
     pub stdout: String,
     pub stderr: String,
     pub omitted_bytes: usize,
+    pub complete: bool,
+    pub capture_stop: String,
+    pub cleanup: Vec<String>,
+}
+
+impl From<tta_runner::capture::Output> for ProcessOutput {
+    fn from(output: tta_runner::capture::Output) -> Self {
+        Self {
+            status: output.status.and_then(|s| s.code()),
+            success: output.success(),
+            timed_out: output.stop == tta_runner::capture::Stop::Deadline,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            omitted_bytes: output.omitted_stdout + output.omitted_stderr,
+            complete: output.complete(),
+            capture_stop: format!("{:?}", output.stop),
+            cleanup: output.cleanup,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -121,6 +142,7 @@ pub struct Report {
     pub trace_events: Vec<serde_json::Value>,
     pub inside_trace: Option<String>,
     pub cleanup: Option<ProcessOutput>,
+    pub endpoint_preflight: Option<ProcessOutput>,
 }
 
 /// Exercise the real executable, observe its server independently, detach via
@@ -150,6 +172,7 @@ pub fn exercise(config: &Config, mode: Mode, scenario: Scenario) -> Report {
         trace_events: Vec::new(),
         inside_trace: None,
         cleanup: None,
+        endpoint_preflight: None,
     };
     let mut terminal = None;
     let fixture = Fixture::new(config.timeout);
@@ -204,8 +227,10 @@ pub fn exercise(config: &Config, mode: Mode, scenario: Scenario) -> Report {
         report.failure = Some(format!("{error:#}"));
     }
     if let Ok(fixture) = &fixture
+        && fixture.proved.get()
         && fixture.socket.exists()
     {
+        fixture.cleanup_attempted.set(true);
         match fixture.tmux(&["kill-server"]) {
             Ok(cleanup) => {
                 if !cleanup.success && report.failure.is_none() {
@@ -237,6 +262,11 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
         })
     };
     ensure!(!fixture.socket.exists(), "fixture socket already existed");
+    let preflight = fixture.tmux(&["list-sessions"])?;
+    let proof = isolation::verify_absence(&fixture.socket, &preflight);
+    report.endpoint_preflight = Some(preflight);
+    proof?;
+    fixture.proved.set(true);
     if report.scenario == Scenario::Existing {
         let output = fixture.tmux(&[
             "new-session",
@@ -485,17 +515,14 @@ struct Fixture {
     root: PathBuf,
     project: PathBuf,
     timeout: Duration,
+    proved: std::cell::Cell<bool>,
+    cleanup_attempted: std::cell::Cell<bool>,
 }
 
 impl Fixture {
     fn new(timeout: Duration) -> Result<Self> {
         ensure!(!timeout.is_zero(), "timeout must be positive");
-        let parent = if Path::new("/tmp/opencode").is_dir() {
-            PathBuf::from("/tmp/opencode")
-        } else {
-            std::env::temp_dir()
-        };
-        let directory = tempfile::Builder::new().prefix("tta-accept-").tempdir_in(parent)?;
+        let directory = tempfile::Builder::new().prefix("tta-accept-").tempdir_in("/tmp/opencode")?;
         let socket = directory.path().join("socket");
         let root = directory.path().join("projects ' #[literal];");
         let project = root.join("verify-project");
@@ -508,6 +535,8 @@ impl Fixture {
             root,
             project,
             timeout,
+            proved: std::cell::Cell::new(false),
+            cleanup_attempted: std::cell::Cell::new(false),
         })
     }
 
@@ -545,6 +574,7 @@ impl Fixture {
     fn tmux(&self, args: &[&str]) -> Result<ProcessOutput> {
         let mut command = Command::new("tmux");
         command.args(["-u", "-f", "/dev/null", "-S"]).arg(&self.socket).args(args);
+        command.env("LC_ALL", "C");
         self.environment(&mut command);
         capture(command, self.timeout)
     }
@@ -591,8 +621,11 @@ impl Fixture {
 // inside this owned TempDir; no default endpoint or broad process kill is used.
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if self.socket.exists() {
-            let _ = self.tmux(&["kill-server"]);
+        if self.proved.get() && !self.cleanup_attempted.get() && self.socket.exists() {
+            match self.tmux(&["kill-server"]) {
+                Ok(output) => eprintln!("tta verification fallback cleanup for {:?}: {output:?}", self.socket),
+                Err(error) => eprintln!("tta verification fallback cleanup for {:?}: {error:#}", self.socket),
+            }
         }
     }
 }
@@ -651,39 +684,14 @@ fn reader(mut input: Box<dyn Read + Send>) -> Arc<Mutex<Buffer>> {
 
 fn capture(mut command: Command, timeout: Duration) -> Result<ProcessOutput> {
     let description = format!("{command:?}");
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawn {description}"))?;
-    let stdout = reader(Box::new(child.stdout.take().unwrap()));
-    let stderr = reader(Box::new(child.stderr.take().unwrap()));
-    let deadline = Instant::now() + timeout;
-    let (status, timed_out) = loop {
-        if let Some(status) = child.try_wait()? {
-            break (status, false);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            break (child.wait()?, true);
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    let limits = tta_runner::capture::Limits {
+        timeout,
+        per_stream: OUTPUT_LIMIT,
+        ..Default::default()
     };
-    settle(&stdout, Duration::from_millis(100));
-    settle(&stderr, Duration::from_millis(100));
-    let stdout = stdout.lock().unwrap();
-    let stderr = stderr.lock().unwrap();
-    let output = ProcessOutput {
-        status: status.code(),
-        success: status.success() && !timed_out,
-        timed_out,
-        stdout: stdout.text(),
-        stderr: stderr.text(),
-        omitted_bytes: stdout.omitted + stderr.omitted,
-    };
-    ensure!(output.omitted_bytes == 0, "process output exceeded its bound ({description}): {output:?}");
-    Ok(output)
+    Ok(tta_runner::capture::run(&mut command, limits)
+        .with_context(|| format!("capture {description}"))?
+        .into())
 }
 
 fn settle(capture: &Arc<Mutex<Buffer>>, timeout: Duration) {
