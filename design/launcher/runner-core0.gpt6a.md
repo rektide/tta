@@ -3,12 +3,16 @@ type: ImplementationBrief
 title: Runner-free planning and remote execution
 description: Commissioned crate boundaries, implementation sequence, and reusable verification outcomes for observation-driven tta and its term-preserver consumer
 resource: /design/launcher/runner-core0.gpt6a.md
-status: commissioned
+status: implementation-in-progress
 author: model:openai/gpt-6-astra#xhigh
 date: 2026-10-27
 sources:
   - resource: opencode://ses_e80f5d05bffe77stycHGRJOH29
-    title: Source inspection including the former launcher execution.rs; human accepts and commissions the architecture; parent directs Sol xhigh, integrates G scout findings and defines toolkit outcomes
+    title: Source inspection and accepted commission; parent integrates G findings, reviews the local checkpoint, rotates Sol and directs SSH implementation with reusable toolkit outcomes
+  - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
+    title: Sol xhigh implements the pure core and optional local runner, migrates the consumer and returns for rotation above 200k context
+  - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
+    title: Fresh Sol xhigh commissioned for target setup, framed probes, bounded capture, SSH and embedded remote handoff
   - resource: opencode://ses_e80e6a338ffeMZsVeoLYisi7h8
     title: Independent read-only verification scout identifies input-error and capture gaps, reusable fixtures, and installed prerequisites for owned loopback SSH
   - resource: /design/launcher/remote0.glm53max.md
@@ -236,6 +240,35 @@ The human requests Sol xhigh, rotated after a returned context above 200k tokens
 unless only a constrained follow-up remains, ideally kept below 350k. Return at
 coherent checkpoints with committed work and a durable handoff; check context
 before a long continuation rather than stretching one session indefinitely.
+
+## Local checkpoint review and next commission
+
+The [first implementation checkpoint](runner-core1.gpt61sol.md) records the
+committed pure core, optional local runner, tmax `operations` feature, CLI and
+embedded local migration, and runner-free replay toolkit. The parent read the
+actual workflow, runner driver, semantic plan, target/socket and consumer
+interfaces and accepts that structure for the next slice. G independently
+reviews the committed local milestone; its findings may require focused corrections.
+
+Context/config acquisition still precedes `Workflow` as caller/runner setup;
+probe emission, SSH and complete-EOF bounded capture are not delivered by that
+checkpoint. These are explicit next work, not capabilities inferred from the
+presence of an observation enum. A fresh Sol xhigh was commissioned after the
+first returned at roughly 222k context tokens. Prior checks are reported evidence
+to build on, not a reason to repeat unchanged suites.
+
+The next commission includes an immediately usable SSH CLI/embedding path,
+inspectable target setup, framed observation emission/decoding, shared bounded
+capture, a prepared remote terminal handoff, and real owned loopback SSH toolkit
+evidence with no target tta. Consumer ControlMaster changes made concurrently
+must be respected; probes and handoff share the configured SSH options.
+
+For this SSH milestone, retain the current mosh carrier if its distinct SSH
+observation channel cannot be integrated coherently. Document that limitation
+and return the remaining choice; do not degrade current mosh or present it as an
+exec transport. Complete deferred shell-workflow compilation remains the later
+compiler checkpoint. A new remote interpreter/worker requirement must be raised
+explicitly rather than silently added to the accepted target tool profile.
 
 ## Connections
 
