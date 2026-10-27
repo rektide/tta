@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "tmax"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytes",
  "nix 0.31.3",

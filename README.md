@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-10-27, by: "model:openai/gpt-6.1-sol#xhigh" }
+updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-terra#high" }
 sources:
+  - resource: opencode://ses_e5127716effeh5HRrE4o5Cw1r2
+    title: Refresh the tmax dependency and install the current launcher ahead of the older system binary
   - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
     title: Finish independent SSH review corrections with shared failure diagnostics, configurable local capture policy and maintained runner-free round-trip verification
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
@@ -200,21 +202,20 @@ This launch-backend slice was verified with a pinned tmux **3.7c** fixture and
 also exercised against the current system tmux **3.8**.
 
 This development workspace has a path dependency on `../tmux-interface-control`
-(package `tmax` 0.6.0). The pure launcher uses `operations`; only the optional
+(package `tmax` 0.7.0). The pure launcher uses `operations`; only the optional
 runner's `native` feature enables `client`. Keep that sibling checkout available.
 
 ```sh
-cargo install --path app/cli --locked
-# Or the local alias (also forces replacement of an installed binary):
-cargo install-tta
-
+cargo install --path app/cli --locked --root ~/.local --force
 # Add the optional CLI backend:
-cargo install --path app/cli --locked --features cli
+cargo install --path app/cli --locked --root ~/.local --force --features cli
 # CLI-only runtime execution, e.g. for other Unix platforms:
-cargo install --path app/cli --locked --no-default-features --features cli
+cargo install --path app/cli --locked --root ~/.local --force --no-default-features --features cli
 ```
 
-The root is a virtual Cargo workspace; install from `app/cli`, not `.`.
+The root is a virtual Cargo workspace; install from `app/cli`, not `.`. The
+explicit root installs to `~/.local/bin`; ensure that directory precedes any
+older system `tta` on your PATH, and run `rehash` in zsh if needed.
 Default features are `native`, `scaffold-rekon`, `scaffold-rekon-native`, and
 `scaffold-by-default`. A CLI-only build above omits the scaffold adapters;
 add their features explicitly if wanted. With both backends built, choose
