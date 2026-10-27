@@ -167,3 +167,70 @@ fn command_diagnostics_are_distinct_from_startup_and_exact_absence_is_required()
     let decoded = decode(&probe, &out).unwrap();
     assert_eq!(decoded.diagnostics.command_stderr, b"successful diagnostic\n");
 }
+
+#[test]
+fn symlink_missing_non_directory_and_loop_are_distinct_for_projects_and_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("file"), "x").unwrap();
+    std::fs::create_dir(dir.path().join("ordinary")).unwrap();
+    std::os::unix::fs::symlink("file/child", dir.path().join("not-directory")).unwrap();
+    std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
+    let dangling = "dangling quote'\n";
+    std::os::unix::fs::symlink("missing", dir.path().join(dangling)).unwrap();
+    // Errors on irrelevant names do not poison a local-policy-equivalent scan.
+    for (argument, success) in [("ordinary", true), (dangling, true), ("not-directory", false), ("loop", false)] {
+        let (probe, out) = execute(
+            probe::Request::Workflow(workflow::ObservationRequest::Projects {
+                root: dir.path().into(),
+                argument: argument.into(),
+            }),
+            target::TargetSetup::default(),
+        );
+        assert_eq!(decode(&probe, &out).is_ok(), success, "{argument:?}: {out:?}");
+    }
+    for name in ["not-directory", "loop", dangling] {
+        let (probe, out) = execute(
+            probe::Request::Setup(target::Request::Entry {
+                parent: dir.path().into(),
+                name: name.into(),
+            }),
+            target::TargetSetup::default(),
+        );
+        assert_eq!(decode(&probe, &out).is_ok(), name == dangling, "registry component {name:?}: {out:?}");
+        // Exact scaffold destination uses lstat presence, not the referent.
+        let (probe, out) = execute(
+            probe::Request::Workflow(workflow::ObservationRequest::Destination { path: dir.path().join(name) }),
+            target::TargetSetup::default(),
+        );
+        assert!(matches!(
+            decode(&probe, &out).unwrap().reply,
+            probe::Reply::Workflow(workflow::ObservationReply::Destination(tta_launcher::DestinationState::Present))
+        ));
+    }
+}
+
+#[test]
+fn denied_parent_is_never_an_absent_destination_or_empty_inventory() {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (project_probe, project) = execute(
+        probe::Request::Workflow(workflow::ObservationRequest::Projects {
+            root: blocked.clone(),
+            argument: "work".into(),
+        }),
+        target::TargetSetup::default(),
+    );
+    let (destination_probe, destination) = execute(
+        probe::Request::Workflow(workflow::ObservationRequest::Destination { path: blocked.join("work") }),
+        target::TargetSetup::default(),
+    );
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(decode(&project_probe, &project).is_err());
+    assert!(decode(&destination_probe, &destination).is_err());
+}

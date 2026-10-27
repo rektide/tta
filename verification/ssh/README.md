@@ -42,10 +42,13 @@ cargo run -p tta-verify --bin tta-verify-ssh -- \
 Library hook: [`tta_verify::ssh::exercise`](../driver/src/ssh.rs) takes executable
 paths and a per-phase timeout and returns a structured `Report`, including on
 failure. The command exits nonzero for failed assertions or cleanup. Prerequisites
-are OpenSSH client/server/key tools, GNU find, tmux 3.4+, Git, and
+are OpenSSH client/server/key tools, GNU find/stat, tmux 3.4+, Git, and
 `/usr/local/bin/jj` for the real native scaffold. Missing prerequisites fail; they
 are not successful skips. This fixture currently targets a non-root Unix account
-and the installed Linux tool locations. No Python/Perl/tta worker is required on
+with noninteractive private-key authentication; it does not test an interactive
+password/passphrase bootstrap. Probe capture has closed stdin and an owned process
+group, so use keys/agent or an authenticated master for this acquisition path.
+It uses the installed Linux tool locations. No Python/Perl/tta worker is required on
 the target. The target remains the same machine/filesystem/UID behind genuine
 SSH; this is not evidence for a different operating system or network topology.
 
@@ -69,6 +72,8 @@ SSH; this is not evidence for a different operating system or network topology.
   defaults; injected generator failure stops before tmux/handoff and runs once.
 - **Read failures:** malformed typed session output and nonzero command diagnostics
   over real SSH stop planning without mutation or backend fallback.
+  A symlink whose referent has a non-directory ancestor is also rejected before
+  scaffolding: GNU find's ambiguous `%Y=N` cannot manufacture a clean miss.
 - **CLI:** read-only `--ssh --print-shell` emits an evaluable **local SSH invocation**
   with no stdout startup chatter; direct CLI cold creation uses target defaults.
 - **Transport loss:** stop an owned SSH carrier after independently observing its
@@ -99,6 +104,11 @@ The first command is **process-carrier**, not SSH evidence: complete EOF,
 pipe-holding descendants, output caps, retained nonzero status, unrelated-process
 survival, startup chatter, malformed/truncated/wrong-token envelopes, hostile
 filenames, dangling-link collisions and exact endpoint classification. The
+symlink tests distinguish missing targets from non-directory ancestors, loops and
+permission-denied parents, including quoted/newline names and registry traversal.
+The GNU-stat classifier requires its single-operand C-locale diagnostic, status 1
+and empty mode output; unknown errors fail closed rather than becoming absence.
+The
 [runner-free toolkit](../core/README.md) constructs probes without executing them.
 Neither resolved-plan emission nor this harness implements a complete deferred
 shell workflow. Mosh still needs a separately selected SSH observation channel;

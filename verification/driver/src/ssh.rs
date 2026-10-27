@@ -487,6 +487,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         ("/usr/sbin/sshd", vec!["-V"]),
         ("/usr/bin/tmux", vec!["-V"]),
         ("/usr/bin/find", vec!["--version"]),
+        ("/usr/bin/stat", vec!["--version"]),
     ] {
         let output = checked(Command::new(program).args(args), fixture.timeout)?;
         report.tools.push(json!({"program": program, "output": output}));
@@ -630,6 +631,20 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     report
         .checks
         .push(json!({"check": "failed scaffold prevents tmux/handoff; no replay", "output": output}));
+
+    std::fs::write(fixture.root.join("file-blocker"), "x")?;
+    symlink("file-blocker/child", fixture.root.join("blocked-link"))?;
+    let before = fixture.inventory()?;
+    let blocked = fixture.prepare(
+        target::Options::builder()
+            .argument("blocked-link".into())
+            .default_scaffold("default".into())
+            .build(),
+        report,
+    );
+    ensure!(blocked.is_err(), "a symlink target's ENOTDIR was treated as a missing project");
+    ensure!(fixture.inventory()? == before, "symlink inspection error authorized mutation");
+    report.checks.push(json!({"check": "real SSH GNU-stat distinction: symlink ENOTDIR stops before scaffold, not find-%Y-N absence", "error": format!("{:#}", blocked.unwrap_err())}));
 
     for (label, source) in [
         ("malformed", "printf 'not a tmax reply\\n'\n"),
