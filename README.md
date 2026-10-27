@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-10-27, by: "model:openai/gpt-6.1-sol#xhigh" }
 sources:
+  - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
+    title: Finish independent SSH review corrections with shared failure diagnostics, configurable local capture policy and maintained runner-free round-trip verification
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
     title: Implement target-local setup and framed probes, bounded capture, SSH CLI and embedded consumer handoff; verify actual owned loopback SSH without target tta
   - resource: opencode://ses_e80e6e9a9ffe2N24sOOfQnrL3D
@@ -509,14 +511,22 @@ never canonicalized locally, and embedded `~` is not expanded.
 
 Target HOME, UID, root, socket policy, config/registry, author/license and Git
 identity supply defaults; explicit caller options override them. Local `TTA_*`,
-HOME, PATH and TMUX do not supply remote launch defaults (local `TTA_TRACE` still
-controls diagnostics). A fresh SSH terminal **attaches**, never switches a local
+HOME, PATH and TMUX do not supply remote launch defaults (local `TTA_TRACE` and
+`TTA_SSH_PROBE_*` still control diagnostics/acquisition). A fresh SSH terminal **attaches**, never switches a local
 tmux client; TMUX and TMUX_PANE are cleared after setup. `--backend native` is not
 an SSH backend. Connection options, including the caller's SSH config and
 ControlMaster settings, are shared by observation and handoff.
 Probe acquisition has closed stdin and its own process group. Authentication must
 be available through keys/agent or an already authenticated ControlMaster; a
 separate interactive password/passphrase bootstrap is not implemented or tested.
+
+Local probe policy is configurable with `--ssh-probe-timeout MS` (positive integer
+milliseconds, default **10000**) and `--ssh-probe-retention BYTES` (positive integer
+bytes per channel stream, default **262144**). CLI values override the local
+`TTA_SSH_PROBE_TIMEOUT` / `TTA_SSH_PROBE_RETENTION` environment, then defaults;
+empty environment values are ignored. These settings bound **each** read-only
+acquisition, including SSH connection and target startup, not the terminal action
+or the whole launch. They are not target-side matching/default inputs.
 
 The declared worker-free probe profile is POSIX `/bin/sh`, `pwd`, `id`, `cat`,
 `od`, `head`, **GNU find**, and **GNU stat** for symlink referents, plus tmux and
@@ -536,7 +546,9 @@ relevant observation. Exact destination presence still uses lstat semantics.
 Versioned, nonce-bound frames separate startup chatter, command stdout/stderr and
 command status. Complete EOF, carrier failure, malformed/truncated frames, failed
 commands and exact endpoint absence are distinct. Diagnostics go to stderr, not
-shell-output stdout. The runner retains every captured observation on failure.
+shell-output stdout. The runner retains every captured observation on failure;
+both CLI and embedded consumer report earlier diagnostics and failed capture
+status, completeness, omissions and cleanup evidence before propagating its cause.
 Each probe uses bounded capture; no observation failure authorizes mutation.
 
 `--ssh --print-shell` performs read-only observations and prints a **resolved local
@@ -679,10 +691,13 @@ let terminal_command = prepared.command()?;
 let local_shell = prepared.shell(tta_command::Handoff::Run)?;
 ```
 
-`ssh::Error::observations` retains the failed acquisition and prior evidence.
+`ssh::Error::observations` retains the failed acquisition and prior evidence;
+`ssh::write_diagnostics(writer, records)` shares stderr reporting without doing
+I/O in the core. A reporting failure must not replace the original prepare error.
 `PreparedRemote::command()` is the mutation/terminal boundary; after it starts,
-the caller owns uncertainty and must not blindly replay it. Version 0.4.0 marks
-these public interfaces; coordinated workspace dependencies are exact-pinned.
+the caller owns uncertainty and must not blindly replay it. Version 0.4.0 introduced
+these interfaces; **0.5.0** adds shared diagnostic reporting and configurable CLI
+probe policy. Coordinated workspace dependencies remain exact-pinned.
 The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
 [launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
 implemented adoption and the separate mosh observation-channel choice.

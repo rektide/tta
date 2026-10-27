@@ -7,6 +7,7 @@ compile_error!("tta requires a Unix terminal and tmux");
 compile_error!("enable at least one backend: native or cli");
 
 use std::ffi::OsString;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -45,6 +46,12 @@ struct Args {
     /// Local SSH executable [default: ssh]
     #[arg(long, requires = "ssh")]
     ssh_program: Option<OsString>,
+    /// Per-probe local capture deadline in milliseconds [env: TTA_SSH_PROBE_TIMEOUT; default: 10000]
+    #[arg(long, requires = "ssh", value_name = "MS")]
+    ssh_probe_timeout: Option<NonZeroU64>,
+    /// Retained bytes per channel stream [env: TTA_SSH_PROBE_RETENTION; default: 262144]
+    #[arg(long, requires = "ssh", value_name = "BYTES")]
+    ssh_probe_retention: Option<NonZeroUsize>,
     /// Selected target shell (default: target SHELL, then /bin/sh)
     #[arg(long, requires = "ssh")]
     target_shell: Option<String>,
@@ -303,6 +310,15 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
     if matches!(args.backend, Some(Backend::Native)) {
         anyhow::bail!("--ssh uses target tmux CLI probes and handoff, not the local native backend");
     }
+    let defaults = tta_runner::capture::Limits::default();
+    let limits = tta_runner::capture::Limits {
+        timeout: args
+            .ssh_probe_timeout
+            .map(|ms| std::time::Duration::from_millis(ms.get()))
+            .unwrap_or(defaults.timeout),
+        per_stream: args.ssh_probe_retention.map(NonZeroUsize::get).unwrap_or(defaults.per_stream),
+        ..defaults
+    };
     let mut environment = Vec::new();
     for value in &args.target_env {
         let (name, value) = value.split_once('=').context("--target-env requires NAME=VALUE")?;
@@ -352,7 +368,7 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
             None => tta_launcher::WindowName::Session,
         })
         .build();
-    let prepared = match tta_runner::ssh::prepare(ssh, setup, options, tta_runner::capture::Limits::default()) {
+    let prepared = match tta_runner::ssh::prepare(ssh, setup, options, limits) {
         Ok(prepared) => prepared,
         Err(error) => {
             if let Err(write_error) = tta_runner::ssh::write_diagnostics(std::io::stderr().lock(), &error.observations) {

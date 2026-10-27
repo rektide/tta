@@ -13,9 +13,31 @@ fn value(name: &str) -> Option<OsString> {
 }
 
 pub(crate) fn configure(mut args: Args) -> Result<Args> {
-    // A transport target is a distinct environment. Only local tracing policy
-    // belongs here; all launch defaults are observed after target shell setup.
+    // A transport target is a distinct environment. Tracing and acquisition
+    // limits are local policy; launch defaults follow target shell setup.
     if args.ssh.is_some() {
+        if args.ssh_probe_timeout.is_none()
+            && let Some(value) = value("TTA_SSH_PROBE_TIMEOUT")
+        {
+            args.ssh_probe_timeout = Some(
+                value
+                    .to_str()
+                    .ok_or_else(|| anyhow!("TTA_SSH_PROBE_TIMEOUT must be UTF-8"))?
+                    .parse()
+                    .map_err(|error| anyhow!("TTA_SSH_PROBE_TIMEOUT must be positive integer milliseconds: {error}"))?,
+            );
+        }
+        if args.ssh_probe_retention.is_none()
+            && let Some(value) = value("TTA_SSH_PROBE_RETENTION")
+        {
+            args.ssh_probe_retention = Some(
+                value
+                    .to_str()
+                    .ok_or_else(|| anyhow!("TTA_SSH_PROBE_RETENTION must be UTF-8"))?
+                    .parse()
+                    .map_err(|error| anyhow!("TTA_SSH_PROBE_RETENTION must be positive integer bytes: {error}"))?,
+            );
+        }
         configure_trace(&mut args)?;
         return Ok(args);
     }
