@@ -209,7 +209,7 @@ impl Fixture {
         let start = Instant::now();
         loop {
             if let Some(status) = self.daemon.as_mut().unwrap().try_wait()? {
-                bail!("owned sshd exited {status}: {}", std::fs::read_to_string(&self.log)?);
+                bail!("owned sshd exited {status}: {}", super::read_text(&self.log)?);
             }
             if TcpStream::connect_timeout(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(), Duration::from_millis(50)).is_ok() {
                 break;
@@ -403,7 +403,13 @@ impl Fixture {
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
-        report.sshd_log = std::fs::read_to_string(&self.log).unwrap_or_default();
+        match super::read_text(&self.log) {
+            Ok(log) => report.sshd_log = log,
+            Err(error) => {
+                report.cleanup.push(json!({"operation": "read bounded sshd log", "failure": error.to_string()}));
+                result = Err(error.into());
+            }
+        }
         result
     }
 }
