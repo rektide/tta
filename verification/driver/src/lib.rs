@@ -377,11 +377,8 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     }
     let deadline = Instant::now() + config.timeout;
     let mut last_observation = String::new();
-    let expected_name = if report.scenario == Scenario::Existing {
-        "_verify-project-1"
-    } else {
-        "verify-project"
-    };
+    let independent = report.scenario == Scenario::Existing && !config.inside;
+    let expected_name = if independent { "_verify-project-1" } else { "verify-project" };
     loop {
         if let Some(exit) = terminal.child.try_wait()? {
             terminal.exit = Some(exit.exit_code());
@@ -402,7 +399,7 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
                     );
                 }
                 if let Some(initial) = &report.initial {
-                    ensure!(state.session_id != initial.session_id, "existing entry did not create an independent view");
+                    ensure!((state.session_id != initial.session_id) == independent, "wrong entry independence policy");
                     ensure!(
                         state.pane_id == initial.pane_id && state.pane_pid == initial.pane_pid,
                         "satellite replaced the seeded work"
@@ -473,7 +470,7 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     );
     ensure!(detached.cwd == fixture.project, "detach changed cwd");
     report.detached = Some(detached);
-    if report.scenario == Scenario::Existing {
+    if independent {
         ensure!(
             fixture.state_for("_verify-project-1").is_err(),
             "disposable view survived detach alongside base"

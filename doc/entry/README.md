@@ -17,6 +17,8 @@ sources:
     title: Existing grouped create, client handoff and keep-last queue
   - resource: /design/launcher/launch-backends1.gpt61sol.md
     title: Independent-window outcome, orphan identity and shared-pane origin limitations
+  - resource: /design/launcher/launch-backends2.gpt6a.md
+    title: Accepted outside-default policy and separate inside-switching commission
   - resource: /verification/trials/independent-views/README.md
     title: Preserved real-terminal evidence and historical wrong-client reproduction
 ---
@@ -39,20 +41,18 @@ flowchart TD
     completionFacts --> completion["Expose all literal names + satellite aliases<br/>No winner selection; never create or attach"]
     mode -->|No| sessions["Observe session inventory<br/>Keep canonical IDs and actual group facts"]
     sessions --> aliases["Derive searchable literal names + logical aliases"]
-    aliases --> rank["Rank: exact raw name → exact alias<br/>→ shortest matching raw/alias name"]
-    rank --> outcome{"Distinct workspace winners?"}
-    outcome -->|Tied groups/sessions| ambiguous["Report ambiguity with literal selectors; stop"]
-    outcome -->|One| entryMode{"Independent view?<br/>Default true; --group=false opts out"}
+    aliases --> rank["resolve_unique(sessions, fragment, prefix)?<br/>Exact raw → exact alias → shortest substring<br/>Ambiguity/error exits here before continuation"]
+    rank --> outcome{"Selection returned?"}
+    outcome -->|Some existing| entryMode{"Independent view?<br/>Default outside; explicit --group inside"}
     entryMode -->|No| shared["Prepare direct attach/switch<br/>to selected canonical session ID"]
     entryMode -->|Yes| refresh["Observe fresh inventory<br/>Revalidate selected ID, name and group"]
     refresh --> allocate["Choose group logical base<br/>Allocate prefix + base + smallest free numeric suffix"]
     allocate --> grouped["Prepare ONE tmux queue:<br/>detached grouped create → handoff → keep-last"]
     outcome -->|None| projects["Observe immediate project directories"]
-    projects --> projectRank["Exact name, otherwise shortest substring<br/>Tied shortest names remain ambiguous"]
-    projectRank --> projectOutcome{"Project result?"}
-    projectOutcome -->|Ambiguous| ambiguous
-    projectOutcome -->|Existing directory| base["Prepare ordinary unprefixed base session<br/>Startup argv and initial window apply only here"]
-    projectOutcome -->|Clean miss| scaffold{"Configured scaffold enabled?"}
+    projects --> projectRank["matching::select(projects, fragment)?<br/>Exact/shortest; ambiguity/error exits before continuation"]
+    projectRank --> projectOutcome{"Project returned?"}
+    projectOutcome -->|Some directory| base["Prepare ordinary unprefixed base session<br/>Startup argv and initial window apply only here"]
+    projectOutcome -->|None| scaffold{"Configured scaffold enabled?"}
     scaffold -->|No| missing["Report missing project; stop"]
     scaffold -->|Yes| destination["Validate safe name, session collision,<br/>absent destination and generator defaults"]
     destination --> generate["Prepare generator → enter directory → base creation<br/>Short-circuit on failure"]
@@ -68,12 +68,32 @@ flowchart TD
     projects -.->|Observation error| error
     refresh -.->|Error or selected facts changed| error
     destination -.->|Error/present destination| error
+    rank -.->|Ambiguous/error| error
+    projectRank -.->|Ambiguous/error| error
 ```
 
 Classified absent servers and successful empty inventories are empty session
 facts. Permission, protocol, decoding, incomplete capture and other acquisition
 failures are errors. Completion may suppress diagnostics for Tab, but may not
 interpret a failed lookup as permission to mutate.
+
+### Code and chart are the same progression
+
+`resolve_unique(sessions, fragment, prefix) -> Result<Option<Selection>, ResolveError>`
+is the session-resolution stage in `resolve.rs`. It derives/ranks workspace
+candidates and maps ambiguity to an error before returning. `resolve()` uses
+`if let Some(selection) = resolve_unique(...)? { return Selected(selection); }`;
+only `None` continues to `NeedProjects`. Project matching similarly applies its
+error guard before the `Some`/`None` continuation. These errors are not main-flow
+states, selections or opportunities to create a project.
+
+`Workflow::next()` asks for missing observations, calls the resolver through
+`scaffold::resolve`, requests fresh sessions for grouped allocation, and lowers
+the ready selection with `prepare_launch`. `Workflow::supply()` answers only the
+pending request. The chart's boxes name those real stages; it does not introduce
+a second scheduler or an unimplemented parallel state machine. Completion takes
+`session_names()` and uses its shared `satellite_alias()` derivation without
+calling the winner-selection stage.
 
 ## Names, aliases and workspace winners
 
@@ -108,7 +128,7 @@ interpret a failed lookup as permission to mutate.
 
 ## Independent view allocation and lifecycle
 
-The first project entry creates an ordinary session named after the project
+The first outside project entry creates an ordinary session named after the project
 (or explicit new-session override). Every subsequent independent entry creates
 a distinct session sharing the selected session's actual group windows/panes.
 Changing one session's current window does not change another's. Shared panes
@@ -135,9 +155,12 @@ when another group session remains; the final session preserves the work.
 Failures after creation can leave residue; no automatic cleanup is introduced.
 
 `--group=false` and `.grouped(false)` deliberately join the selected session's
-window selection instead. Low-level lowering APIs also default to grouped entry
-and require a supplied satellite name for existing selections; the higher-level
-workflow performs allocation. No startup command runs merely for joining a group.
+window selection instead. Omitted grouping resolves to true for outside attach
+and false for inside switch, consistently across CLI, workflow, runner and
+low-level lowering APIs. Explicit caller policy is never replaced. Grouped
+low-level lowering requires a supplied satellite name for existing selections;
+the higher-level workflow performs allocation. No startup command runs merely
+for joining a group.
 
 ## Explicit boundary: inside-client origin
 

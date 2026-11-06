@@ -93,9 +93,9 @@ struct Args {
     /// Explicit scaffold registry path (on the target for --ssh)
     #[arg(long)]
     scaffold_config: Option<PathBuf>,
-    /// Independent view of existing work (default); --group=false shares window selection
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "true", action = clap::ArgAction::Set)]
-    group: bool,
+    /// Independent view (default outside tmux); --group=false shares window selection
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    group: Option<bool>,
     /// Satellite name prefix [env: TTA_SATELLITE_PREFIX; default: _]
     #[arg(long)]
     satellite_prefix: Option<String>,
@@ -256,7 +256,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .choice(choice)
         .config(&config)
         .maybe_tmux_config(args.tmux_config.as_deref())
-        .grouped(args.group)
+        .maybe_grouped(args.group)
         .satellite_prefix(args.satellite_prefix.as_deref().unwrap_or("_"))
         .startup(&args.command)
         .maybe_directory(args.dir.as_deref())
@@ -278,8 +278,8 @@ fn run(mut args: Args) -> Result<ExitCode> {
         }
     }
     let operation = match (&resolved, mode) {
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group => "new-grouped-session-detached+attach",
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group => "new-grouped-session-detached+switch-client",
+        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group.unwrap_or(true) => "new-grouped-session-detached+attach",
+        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group.unwrap_or(false) => "new-grouped-session-detached+switch-client",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) => "attach-session",
         (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) => "switch-client",
         (tta_launcher::Selection::Project { .. }, tta_launcher::ClientMode::Attach) => "new-session+attach",
@@ -366,7 +366,7 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
         .default_scaffold(if cfg!(feature = "scaffold-by-default") { "default" } else { "false" }.into())
         .maybe_config(args.tmux_config)
         .maybe_session_name(args.session_name)
-        .grouped(args.group)
+        .maybe_grouped(args.group)
         .maybe_satellite_prefix(args.satellite_prefix)
         .startup(args.command)
         .maybe_directory(args.dir)

@@ -62,7 +62,7 @@ pub fn prepare(
     choice: &str,
     config: Option<&scaffold::Config>,
     tmux_config: Option<&Path>,
-    #[builder(default = true)] grouped: bool,
+    grouped: Option<bool>,
     #[builder(default = "_")] satellite_prefix: &str,
     #[builder(default = &[])] startup: &[std::ffi::OsString],
     directory: Option<&Path>,
@@ -88,7 +88,7 @@ pub fn prepare(
             .maybe_root(root.map(Path::to_owned))
             .maybe_session_name(session_name.map(str::to_owned))
             .maybe_config(tmux_config.map(Path::to_owned))
-            .grouped(grouped)
+            .maybe_grouped(grouped)
             .satellite_prefix(satellite_prefix.to_owned())
             .startup(startup.to_vec())
             .maybe_directory(directory.map(Path::to_owned))

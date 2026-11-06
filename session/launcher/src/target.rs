@@ -149,8 +149,7 @@ pub struct Options {
     pub default_scaffold: String,
     pub config: Option<PathBuf>,
     pub session_name: Option<String>,
-    #[builder(default = true)]
-    pub grouped: bool,
+    pub grouped: Option<bool>,
     pub satellite_prefix: Option<String>,
     #[builder(default)]
     pub startup: Vec<OsString>,
@@ -236,7 +235,7 @@ impl Facts {
                     .or_else(|| self.value("TTA_TMUX_CONFIG").map(PathBuf::from))
                     .map(|p| self.cwd.join(p)),
             )
-            .grouped(options.grouped)
+            .maybe_grouped(options.grouped)
             .satellite_prefix(
                 options
                     .satellite_prefix

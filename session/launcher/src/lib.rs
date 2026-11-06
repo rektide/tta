@@ -14,7 +14,7 @@ mod workspace;
 
 pub use plan::{ClientMode, PlanError, WindowName, launch, prepare_launch};
 pub use prepared::{LaunchPlan, NativeCreation};
-pub use resolve::{DestinationState, ProjectInventory, Resolution, ResolveError, Selection, resolve};
+pub use resolve::{DestinationState, ProjectInventory, Resolution, ResolveError, Selection, resolve, resolve_unique};
 pub use tmax::operation::SessionId;
 pub use workspace::{satellite_alias, satellite_name, session_names, validate_satellite_prefix};
 

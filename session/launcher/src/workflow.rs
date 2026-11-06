@@ -19,8 +19,8 @@ pub struct Input {
     pub root: Option<PathBuf>,
     pub session_name: Option<String>,
     pub config: Option<PathBuf>,
-    #[builder(default = true)]
-    pub grouped: bool,
+    /// Omitted: independent outside entry; retain ordinary inside switching.
+    pub grouped: Option<bool>,
     #[builder(default = "_".into())]
     pub satellite_prefix: String,
     #[builder(default)]
@@ -179,7 +179,8 @@ impl Workflow {
                 }));
             }
         }
-        let satellite = match (&resolved.selection, input.grouped) {
+        let grouped = input.grouped.unwrap_or(input.client_mode == ClientMode::Attach);
+        let satellite = match (&resolved.selection, grouped) {
             (Selection::Existing(session), true) => {
                 let Some(sessions) = &self.satellite_sessions else {
                     return Ok(Progress::Observe(sessions_request()));
@@ -200,7 +201,7 @@ impl Workflow {
             .program(&input.program)
             .maybe_config(input.config.as_deref())
             .maybe_prefix(resolved.prefix.as_ref())
-            .grouped(input.grouped)
+            .grouped(grouped)
             .maybe_satellite_name(satellite.as_deref())
             .startup(&input.startup)
             .maybe_directory(input.directory.as_deref())

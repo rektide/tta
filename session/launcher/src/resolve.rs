@@ -84,19 +84,8 @@ pub fn resolve(
     }
     crate::validate_satellite_prefix(satellite_prefix)?;
     tracing::info!(event = "lookup.complete", count = sessions.len());
-    match crate::workspace::select(sessions, argument, satellite_prefix) {
-        Ok(Some(session)) => {
-            tracing::info!(event = "match.existing", session_id = %session.id, session_name = %session.name);
-            return Ok(Resolution::Selected(Selection::Existing(session)));
-        }
-        Err(candidates) => {
-            tracing::warn!(event = "match.ambiguous", domain = "session", count = candidates.len());
-            return Err(ResolveError::Sessions {
-                argument: argument.to_owned(),
-                candidates: candidates.into_iter().map(|session| format!("{} ({})", session.name, session.id)).collect(),
-            });
-        }
-        Ok(None) => {}
+    if let Some(selection) = resolve_unique(sessions, argument, satellite_prefix)? {
+        return Ok(Resolution::Selected(selection));
     }
     let Some(projects) = projects else {
         return Ok(Resolution::NeedProjects(root.ok_or(ResolveError::MissingRoot)?.to_owned()));
@@ -155,6 +144,26 @@ pub fn resolve(
         }
     };
     Ok(Resolution::Selected(selection))
+}
+
+/// Resolve only the existing-work branch. Ambiguity is an error guard, never a
+/// selected/missing state and never permission to consult projects or scaffold.
+pub fn resolve_unique(sessions: &[Session], argument: &str, satellite_prefix: &str) -> Result<Option<Selection>, ResolveError> {
+    if argument.is_empty() {
+        return Err(ResolveError::Empty);
+    }
+    crate::validate_satellite_prefix(satellite_prefix)?;
+    let selected = crate::workspace::select(sessions, argument, satellite_prefix).map_err(|candidates| {
+        tracing::warn!(event = "match.ambiguous", domain = "session", count = candidates.len());
+        ResolveError::Sessions {
+            argument: argument.to_owned(),
+            candidates: candidates.into_iter().map(|session| format!("{} ({})", session.name, session.id)).collect(),
+        }
+    })?;
+    Ok(selected.map(|session| {
+        tracing::info!(event = "match.existing", session_id = %session.id, session_name = %session.name);
+        Selection::Existing(session)
+    }))
 }
 
 fn component(name: &str) -> bool {

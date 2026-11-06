@@ -81,7 +81,7 @@ pub fn launch(
     program: &OsStr,
     config: Option<&Path>,
     prefix: Option<&Expression>,
-    #[builder(default = true)] grouped: bool,
+    grouped: Option<bool>,
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
@@ -94,7 +94,7 @@ pub fn launch(
         .program(program)
         .maybe_config(config)
         .maybe_prefix(prefix)
-        .grouped(grouped)
+        .maybe_grouped(grouped)
         .maybe_satellite_name(satellite_name)
         .startup(startup)
         .maybe_directory(directory)
@@ -114,12 +114,13 @@ pub fn prepare_launch(
     program: &OsStr,
     config: Option<&Path>,
     prefix: Option<&Expression>,
-    #[builder(default = true)] grouped: bool,
+    grouped: Option<bool>,
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
     #[builder(default)] window_name: WindowName,
 ) -> Result<LaunchPlan, PlanError> {
+    let grouped = grouped.unwrap_or(client_mode == ClientMode::Attach);
     let command = |invocations: Vec<Invocation>, startup: &[OsString]| -> Result<Expression, PlanError> {
         let (mut args, environment) = match &socket.label {
             Some(label) => (
