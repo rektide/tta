@@ -5,6 +5,7 @@ use std::{fs, path::Path};
 #[cfg(feature = "scaffold-rekon")]
 use tta_launcher::Selection;
 use tta_launcher::{ResolveError, Session};
+#[cfg(feature = "scaffold-rekon")]
 use tta_runner::command::Execute;
 use tta_runner::{
     backend::{LookupError, SessionLookup},
