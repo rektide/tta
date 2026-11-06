@@ -6,6 +6,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod machine;
+#[cfg(test)]
+mod tests;
 
 /// Target-local invocation inputs. Relative paths must be frozen by the caller
 /// against the target cwd, never canonicalized on an unrelated local host.
