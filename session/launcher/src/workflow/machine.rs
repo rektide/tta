@@ -130,4 +130,36 @@ mod tests {
             assert!(fields.keys().all(|key| matches!(key.as_str(), "id" | "on" | "type")));
         }
     }
+
+    #[test]
+    fn maintained_overall_diagram_contains_every_executable_state_transition_and_guard() {
+        let document = include_str!("../../../../doc/entry/README.md");
+        let diagram = document.split("```mermaid\nflowchart TD\n").nth(1).unwrap().split("```").next().unwrap();
+        let definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
+        for (source, state) in definition["states"].as_object().unwrap() {
+            assert!(
+                diagram.lines().any(|line| line.trim_start().starts_with(&format!("{source}["))),
+                "missing state {source}"
+            );
+            let Some(events) = state.get("on").and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            for (event, transitions) in events {
+                let transitions = transitions.as_array().cloned().unwrap_or_else(|| vec![transitions.clone()]);
+                for transition in transitions {
+                    let target = transition["target"].as_str().unwrap();
+                    let guard = transition["guard"]["type"].as_str();
+                    assert!(
+                        diagram.lines().any(|line| {
+                            let line = line.trim();
+                            line.starts_with(&format!("{source} -->|{event}"))
+                                && line.ends_with(&format!("| {target}"))
+                                && guard.is_none_or(|guard| line.contains(guard))
+                        }),
+                        "diagram missing {source} / {event} / {guard:?} -> {target}"
+                    );
+                }
+            }
+        }
+    }
 }

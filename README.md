@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
+    title: Port supplied-facts progression faithfully to the selected XState 6 Rust runtime, preserve native API and emission, and document the control boundary
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
     title: Declare the input state machine, implement independent outside defaults and configurable satellite aliases, and verify real-terminal and transport boundaries
   - resource: opencode://ses_e4e3219d0ffejILMxLRXqN5tWs
@@ -214,7 +216,8 @@ does not claim to fix it or establish which terminal supplied shared-pane input.
 
 ## Build and install
 
-Requires Rust, a Unix terminal, and **tmux 3.4+** for default independent views
+Requires Rust **1.99+** (the pinned statechart runtime's minimum), a Unix terminal,
+and **tmux 3.4+** for default independent views
 (**3.2+** for explicit shared-only entry).
 The default native backend requires **little-endian Linux** and a
 tmux protocol supported by the [tmax checkout](file:///home/rektide/src/tmux-interface-control/README.md).
@@ -694,6 +697,14 @@ prepared.plan.execute(tta_runner::execution::LaunchBackend::default(),
 already selected workspace. `workflow::Input` and `Workflow` add pure progression:
 the caller supplies target context and a parsed registry, then answers session,
 project, destination and generator-default observations until a plan is ready.
+The [executable entry graph](session/launcher/src/workflow/entry.machine.json)
+runs on **`xmachines-runtime =1.1.0`** (independent Rust XState
+`6.0.0-alpha.71` semantics), not a JavaScript process. Immutable `next(&self)`
+replays supplied facts through that graph; `Clone + Send + Sync`, native paths,
+argv and typed domain errors remain intact. No machine action performs I/O.
+The [overall input and session-resolution diagrams](doc/entry/README.md#input-state-machine)
+mirror the code; the [port report](design/entry/xmachines-port0.gpt61sol.md)
+records verification and architectural tradeoffs.
 See the [runner-free toolkit](verification/core/README.md) for runnable examples.
 The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records the
 first milestone; the [SSH checkpoint](design/launcher/runner-core2.gpt61sol.md)

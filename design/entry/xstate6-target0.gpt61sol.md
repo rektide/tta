@@ -3,12 +3,12 @@ type: InvestigationReport
 title: XState 6 faithful port — target and runtime decision gate
 description: Verified JavaScript and Rust XState 6 candidates, current native boundaries and the explicit choice needed before implementing the faithful port
 resource: /design/entry/xstate6-target0.gpt61sol.md
-status: blocked
+status: resolved
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
-    title: Fresh first-stage commission, registry and local-source investigation, Rust boundary review and code-aligned session-resolution diagram
+    title: Investigate the target boundary, receive the human's Rust-runtime selection, implement the faithful port and preserve the original decision-gate evidence
   - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
     title: Parent commission to verify the exact XState 6 technology before a faithful port and leave redesign for a different fresh Sol
   - resource: https://registry.npmjs.org/xstate
@@ -42,6 +42,12 @@ sources:
 ---
 
 # Outcome: target choice required, not an unavailable-version claim
+
+**Update, 2026-11-06:** the human selected **`xmachines-runtime =1.1.0`**
+(option 1 below), naming Statig only as a possible fallback. The faithful port
+and its evidence are recorded in the [implementation report](/design/entry/xmachines-port0.gpt61sol.md).
+The original prerequisite findings and blocked-stage account follow unchanged;
+they describe the earlier checkpoint, not the current implementation standing.
 
 **XState 6 exists, but “xstate6” does not uniquely identify a native dependency.**
 The official package is JavaScript/TypeScript; an independent Rust runtime also

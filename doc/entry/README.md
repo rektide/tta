@@ -8,11 +8,15 @@ author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
-    title: Inspect the XState 6 target boundary and document existing session resolution as a separate code-aligned diagram without changing runtime behavior
+    title: Verify the XState 6 target, port pure progression to xmachines-runtime 1.1.0, preserve native data and errors, and align both diagrams with verified code
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
     title: Declare and align the input state machine before implementation, then implement and verify independent outside views, prefix-aware aliases and actual-group matching
   - resource: /session/launcher/src/workflow.rs
-    title: Existing pure observation-driven launch progression
+    title: Pure supplied-facts handlers dispatched by the executable control graph
+  - resource: /session/launcher/src/workflow/entry.machine.json
+    title: Executable entry stages and ordered policy transitions
+  - resource: /session/launcher/src/workflow/machine.rs
+    title: Pinned XState 6 Rust runtime adapter, native guards and thin control events
   - resource: /session/launcher/src/resolve.rs
     title: Session-first resolution and project/scaffold fallback
   - resource: /session/launcher/src/workspace.rs
@@ -31,10 +35,13 @@ sources:
 
 Declared before implementation in commit `285e3113`, then aligned with the
 human's guard-before-continuation correction in `2cb8dc6f`, this is the implemented
-contract. The existing pure `Workflow` remains
-the backbone: observers provide facts; resolution and planning perform no I/O;
-execution alone crosses the mutation boundary. The literal input fragment is
-never rewritten into a guessed project name.
+contract. `Workflow` now drives the executable entry graph through
+**`xmachines-runtime =1.1.0`**, the independent Rust implementation targeting
+XState **`6.0.0-alpha.71`** semantics, selected by the human after the
+[target investigation](/design/entry/xstate6-target0.gpt61sol.md).
+Observers provide facts; resolution and planning perform no I/O; execution alone
+crosses the mutation boundary. The literal input fragment is never rewritten
+into a guessed project name.
 
 ## Input state machine
 
@@ -43,39 +50,42 @@ flowchart TD
     input["Parse target-local input<br/>CLI overrides environment, then defaults"] --> common["Validate active option/environment values<br/>and satellite prefix"]
     common --> mode{"Read-only completion?"}
     mode -->|Yes| completionFacts["Observe sessions and projects independently"]
-    completionFacts --> completion["Expose all literal names + satellite aliases<br/>No winner selection; never create or attach"]
-    mode -->|No| validate["Validate fragment, registry/choice,<br/>endpoint and same-server client policy"]
-    validate --> sessions["Observe session inventory<br/>Keep canonical IDs and actual group facts"]
-    sessions --> aliases["Derive searchable literal names + logical aliases"]
-    aliases --> rank["resolve_unique(sessions, fragment, prefix)?<br/>Exact raw → exact alias → shortest substring<br/>Ambiguity/error exits here before continuation"]
-    rank --> outcome{"Selection returned?"}
-    outcome -->|Some existing| entryMode{"Independent view?<br/>Default outside; explicit --group inside"}
-    entryMode -->|No| shared["Prepare direct attach/switch<br/>to selected canonical session ID"]
-    entryMode -->|Yes| refresh["Observe fresh inventory<br/>Revalidate selected ID, name and group"]
-    refresh --> allocate["Choose group logical base<br/>Allocate prefix + base + smallest free numeric suffix"]
-    allocate --> grouped["Prepare ONE tmux queue:<br/>detached grouped create → handoff → keep-last"]
-    outcome -->|None| projects["Observe immediate project directories"]
-    projects --> projectRank["matching::select(projects, fragment)?<br/>Exact/shortest; ambiguity/error exits before continuation"]
-    projectRank --> projectOutcome{"Project returned?"}
-    projectOutcome -->|Some directory| base["Prepare ordinary unprefixed base session<br/>Startup argv and initial window apply only here"]
-    projectOutcome -->|None| scaffold{"Configured scaffold enabled?"}
-    scaffold -->|No| missing["Report missing project; stop"]
-    scaffold -->|Yes| destination["Validate safe name, session collision,<br/>absent destination and generator defaults"]
-    destination --> generate["Prepare generator → enter directory → base creation<br/>Short-circuit on failure"]
-    shared --> prepared["Prepared pure plan"]
-    grouped --> prepared
-    base --> prepared
-    generate --> prepared
-    prepared --> emission{"Output mode?"}
+    completionFacts --> completion["Expose literal names + satellite aliases<br/>No winner selection, machine, creation or attach"]
+    mode -->|No| validate["Validate endpoint/client policy<br/>Workflow::new: registry/choice, fragment, prefix, absolute cwd"]
+    validate --> sessions
+
+    sessions["sessions: initial inventory<br/>Wait if missing; retain canonical IDs and actual groups"]
+    resolve["resolve: scaffold::resolve(...) ?<br/>Session guard before Some/None; only None tries projects<br/>Project guard before Some/None; only missing may scaffold"]
+    projects["projects: immediate directory facts<br/>Wait if missing; use observed physical root"]
+    destination["destination: requested safe creation path<br/>Wait if missing; present/error fails in resolver"]
+    defaults["defaults: requested generator author/license facts<br/>Wait if missing; native values only"]
+    fresh_sessions["fresh_sessions: second inventory for independent existing entry<br/>Wait if missing; guard unchanged ID/name/group<br/>Allocate prefix + logical base + smallest free suffix"]
+    prepare["prepare: prepare_launch(...) ?<br/>Existing direct, ONE grouped queue, project base,<br/>or generator → enter directory → base creation"]
+    ready["ready: return PreparedLaunch<br/>No target mutation"]
+
+    sessions -->|observed| resolve
+    resolve -->|projects_needed| projects
+    projects -->|observed| resolve
+    resolve -->|destination_needed| destination
+    destination -->|observed| resolve
+    resolve -->|resolved, needs_defaults first| defaults
+    defaults -->|observed| resolve
+    resolve -->|resolved, needs_satellite second| fresh_sessions
+    fresh_sessions -->|observed| prepare
+    resolve -->|resolved, neither guard| prepare
+    prepare -->|prepared| ready
+
+    ready --> emission{"Output mode?"}
     emission -->|print-shell| printed["Render complete CLI expression only<br/>No mutation"]
     emission -->|execute / later evaluate| mutation["MUTATION BOUNDARY<br/>Run prepared action once; no automatic retry/prune"]
     mutation --> handoff["Outside: real terminal attach<br/>Inside same server: client switch"]
-    sessions -.->|Observation error| error["Fail closed; unknown is never absence"]
-    projects -.->|Observation error| error
-    refresh -.->|Error or selected facts changed| error
-    destination -.->|Error/present destination| error
-    rank -.->|Ambiguous/error| error
-    projectRank -.->|Ambiguous/error| error
+    sessions -.->|Observer error| error["Return error; stop before selected/missing continuation<br/>Unknown is never absence"]
+    projects -.->|Observer error| error
+    destination -.->|Observer error| error
+    defaults -.->|Observer error| error
+    fresh_sessions -.->|Observer error or selected facts changed| error
+    resolve -.->|Ambiguous, invalid, present destination or missing| error
+    prepare -.->|Plan error| error
 ```
 
 Classified absent servers and successful empty inventories are empty session
@@ -93,11 +103,30 @@ only `None` continues to `NeedProjects`. Project matching similarly applies its
 error guard before the `Some`/`None` continuation. These errors are not main-flow
 states, selections or opportunities to create a project.
 
-`Workflow::next()` asks for missing observations, calls the resolver through
-`scaffold::resolve`, requests fresh sessions for grouped allocation, and lowers
-the ready selection with `prepare_launch`. `Workflow::supply()` answers only the
-pending request. The chart's boxes name those real stages; it does not introduce
-a second scheduler or an unimplemented parallel state machine. Completion takes
+The eight lower-case nodes are exactly the states in
+[`entry.machine.json`](/session/launcher/src/workflow/entry.machine.json); their
+labeled arrows are its transitions. A regression test checks these diagram
+edges against the parsed executable graph. Preprocessing/completion and
+emission/execution stay outside the graph. The `resolved` transition tests
+`needs_defaults`, then `needs_satellite`, then the unguarded preparation path.
+Domain errors leave through native `?` **before** a successful control event;
+they are not ambiguous/failed main-flow machine states.
+
+`Workflow::next(&self)` starts a local actor over the shared compiled definition
+and replays already supplied observations along those arrows. At the first
+missing fact it returns `Observe`; it performs no observation itself.
+`Workflow::supply()` answers only that pending request, storing the native fact;
+the next pull replays again. This preserves immutable pulls, independent clones
+and `Send + Sync` without retaining or locking a mutable actor. Rust handlers
+dispatch on the actor's active state and send outcome events; they do **not**
+choose a second independent next state. Only event kinds and two policy booleans
+are serialized; paths, argv, config, generator functions, plans and typed errors
+remain native. The graph has no actions, timers, invocations or I/O.
+
+This is deliberately a faithful progression port, not a redesign of the target
+bootstrap, resolver, matching or execution. The
+[implementation report](/design/entry/xmachines-port0.gpt61sol.md) records evidence
+and friction for the next fresh architecture session. Completion takes
 `session_names()` and uses its shared `satellite_alias()` derivation without
 calling the winner-selection stage.
 
@@ -134,9 +163,9 @@ Actual-group collapse happens **after** shortest ranking; group membership does
 not admit longer candidates. Ambiguity leaves through `?` before the final
 `Some`/`None` decision. Completion does not execute this selection procedure.
 
-The [XState 6 target investigation](/design/entry/xstate6-target0.gpt61sol.md)
-records the unresolved package/runtime choice for a future faithful port. These
-charts describe the current Rust implementation, not a completed XState port.
+This remains the native resolver's algorithm inside the machine's `resolve`
+stage. Porting progression does not turn each candidate-loop operation into an
+actor or replace actual group facts with alias-based identity.
 
 ## Names, aliases and workspace winners
 
