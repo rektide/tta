@@ -14,6 +14,7 @@
 
 pub mod isolation;
 pub mod ssh;
+pub mod views;
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};

@@ -124,7 +124,11 @@ calling the winner-selection stage.
   remains the creation target; no new processes are started for existing work.
 - Completion offers raw names **and** aliases without shortest-winner filtering.
   An ambiguous alias is still a valid navigation term, not proof of uniqueness;
-  raw names remain available. Completion and launch use one alias function.
+  raw names remain available. Zsh first offers all logical workspace aliases,
+  falling back to raw selectors when the typed fragment does not match an alias
+  (for example `_proj`). This keeps generated names from hiding `project` on Tab.
+  The full read-only inventory retains both; neither inventory selects a winner.
+  Completion and launch use one alias function.
 
 ## Independent view allocation and lifecycle
 

@@ -41,7 +41,7 @@ elif [[ $state == target ]]; then
       query+=( "$option" "${(Q)opt_args[$option]}" )
     fi
   done
-  sessions=( "${(@f)$(command tta "${query[@]}" --completion-candidates sessions 2>/dev/null)}" )
+  sessions=( "${(@f)$(command tta "${query[@]}" --completion-candidates session-aliases 2>/dev/null)}" )
   projects=( "${(@f)$(command tta "${query[@]}" --completion-candidates projects 2>/dev/null)}" )
   sessions=( "${(@)sessions:#}" )
   projects=( "${(@)projects:#}" )
@@ -50,7 +50,15 @@ elif [[ $state == target ]]; then
   # name; the matcher also permits fragments anywhere within a name.
   compstate[pattern_match]='*'
   compstate[pattern_insert]=menu
-  _wanted sessions expl 'tmux session' compadd -M 'l:|=* r:|=*' -a sessions && ret=0
+  if _wanted sessions expl 'tmux workspace' compadd -M 'l:|=* r:|=*' -a sessions; then
+    ret=0
+  else
+    # Keep raw selectors reachable when the fragment targets the decoration,
+    # without letting generated satellite names hide the project alias on Tab.
+    sessions=( "${(@f)$(command tta "${query[@]}" --completion-candidates sessions 2>/dev/null)}" )
+    sessions=( "${(@)sessions:#}" )
+    _wanted sessions expl 'tmux session selector' compadd -M 'l:|=* r:|=*' -a sessions && ret=0
+  fi
   _wanted projects expl 'project directory' compadd -M 'l:|=* r:|=*' -a projects && ret=0
 fi
 

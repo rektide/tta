@@ -471,6 +471,37 @@ mod tests {
     }
 
     #[test]
+    fn target_prefix_precedence_and_explicit_shared_policy_survive_input_lowering() {
+        let mut facts = facts();
+        facts.environment.insert("TTA_SATELLITE_PREFIX".into(), "remote-".into());
+        let registry = scaffold::Config::parse(None, None).unwrap();
+        let input = facts.input(&Options::builder().argument("work".into()).build(), registry.clone()).unwrap();
+        assert_eq!(input.satellite_prefix, "remote-");
+        assert_eq!(input.grouped, None);
+        assert_eq!(input.client_mode, ClientMode::Attach);
+        let input = facts
+            .input(
+                &Options::builder()
+                    .argument("work".into())
+                    .satellite_prefix("chosen-".into())
+                    .grouped(false)
+                    .build(),
+                registry.clone(),
+            )
+            .unwrap();
+        assert_eq!(input.satellite_prefix, "chosen-");
+        assert_eq!(input.grouped, Some(false));
+        facts.environment.insert("TTA_SATELLITE_PREFIX".into(), String::new());
+        assert_eq!(
+            facts
+                .input(&Options::builder().argument("work".into()).build(), registry)
+                .unwrap()
+                .satellite_prefix,
+            "_"
+        );
+    }
+
+    #[test]
     fn setup_preserves_literal_values_and_rejects_executable_environment_names() {
         let setup = TargetSetup::builder()
             .shell("/target/shell".into())

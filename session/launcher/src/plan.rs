@@ -411,6 +411,29 @@ mod tests {
     }
 
     #[test]
+    fn omitted_grouping_is_independent_outside_and_ordinary_switching_inside() {
+        let selection = Selection::Existing(crate::Session {
+            id: "$7".parse().unwrap(),
+            name: "seed".into(),
+            group: None,
+        });
+        for mode in [ClientMode::Attach, ClientMode::Switch] {
+            let shell = launch()
+                .selection(&selection)
+                .socket(&crate::socket::Resolved::path("/tmp/sock"))
+                .client_mode(mode)
+                .program(OsStr::new("tmux"))
+                .satellite_name("_seed-1")
+                .call()
+                .unwrap()
+                .shell(Handoff::Run)
+                .unwrap();
+            assert_eq!(shell.contains("new-session"), mode == ClientMode::Attach);
+            assert_eq!(shell.contains("keep-last"), mode == ClientMode::Attach);
+        }
+    }
+
+    #[test]
     fn create_plans_run_the_generator_before_entering_its_directory() {
         let selection = Selection::Create {
             directory: "/src/fresh".into(),

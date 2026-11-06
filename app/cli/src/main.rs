@@ -136,6 +136,7 @@ enum CompletionCandidates {
     Backends,
     Projects,
     Sessions,
+    SessionAliases,
     Scaffolds,
 }
 
@@ -227,9 +228,20 @@ fn run(mut args: Args) -> Result<ExitCode> {
             socket: socket.path.clone(),
         }),
     };
-    if matches!(args.completion_candidates, Some(CompletionCandidates::Sessions)) {
+    if matches!(
+        args.completion_candidates,
+        Some(CompletionCandidates::Sessions | CompletionCandidates::SessionAliases)
+    ) {
         let prefix = args.satellite_prefix.as_deref().unwrap_or("_");
-        print_candidates(tta_launcher::session_names(&lookup.sessions()?, prefix));
+        let sessions = lookup.sessions()?;
+        print_candidates(if matches!(args.completion_candidates, Some(CompletionCandidates::SessionAliases)) {
+            sessions
+                .iter()
+                .map(|session| tta_launcher::satellite_alias(&session.name, prefix).to_owned())
+                .collect()
+        } else {
+            tta_launcher::session_names(&sessions, prefix)
+        });
         return Ok(ExitCode::SUCCESS);
     }
     let argument = args.argument.as_deref().expect("clap requires a fragment outside completion mode");

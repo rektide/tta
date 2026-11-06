@@ -151,6 +151,93 @@ fn candidate_errors_leave_stdout_empty_and_backends_match_build_features() {
     assert_eq!(backends.contains("cli"), cfg!(feature = "cli"));
 }
 
+#[test]
+fn orphan_alias_inventory_honors_prefix_environment_and_cli_override_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let server = Server::start(temp.path().join("live-socket"));
+    let rename = Command::new("tmux")
+        .arg("-S")
+        .arg(&server.0)
+        .args(["rename-session", "-t", "=live-work", "view-project-42"])
+        .output()
+        .unwrap();
+    assert!(rename.status.success());
+    for backend in ["native", "cli"] {
+        if (backend == "native" && !cfg!(feature = "native")) || (backend == "cli" && !cfg!(feature = "cli")) {
+            continue;
+        }
+        let inventory = || {
+            let mut command = tta();
+            command
+                .env("TTA_CONFIG", temp.path().join("absent"))
+                .env("TTA_SATELLITE_PREFIX", "view-")
+                .arg("--socket-path")
+                .arg(&server.0)
+                .args(["--backend", backend, "--completion-candidates", "sessions"]);
+            command
+        };
+        assert_eq!(names(&mut inventory()), "project\nview-project-42\n");
+        assert_eq!(names(inventory().args(["--satellite-prefix", "_"])), "view-project-42\n");
+        for prefix in ["", ".", ":", "bad\n"] {
+            let result = inventory().arg(format!("--satellite-prefix={prefix}")).output().unwrap();
+            assert!(!result.status.success());
+            assert!(result.stdout.is_empty());
+        }
+        let plan = names(
+            tta()
+                .env("TTA_CONFIG", temp.path().join("absent"))
+                .env("TTA_SATELLITE_PREFIX", "wrong-")
+                .arg("--socket-path")
+                .arg(&server.0)
+                .args(["--backend", backend, "--satellite-prefix", "view-", "--print-shell", "project"]),
+        );
+        assert!(plan.contains("'view-project-1'") && plan.contains("'-t' '$0'"), "{plan}");
+        assert!(!plan.contains("view-view-project-42-"));
+    }
+}
+
+#[test]
+fn same_group_aliases_are_one_workspace_but_unrelated_aliases_remain_ambiguous() {
+    let temp = tempfile::tempdir().unwrap();
+    let server = Server::start(temp.path().join("live-socket"));
+    let tmux = |args: &[&str]| {
+        let result = Command::new("tmux").arg("-S").arg(&server.0).args(args).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    };
+    tmux(&["rename-session", "-t", "=live-work", "_project-42"]);
+    tmux(&["new-session", "-d", "-s", "_project-43", "-t", "=_project-42"]);
+    let plan = |backend: &str, argument: &str| {
+        let mut command = tta();
+        command
+            .env("TTA_CONFIG", temp.path().join("absent"))
+            .arg("--socket-path")
+            .arg(&server.0)
+            .args(["--backend", backend, "--print-shell", argument]);
+        command
+    };
+    for backend in ["native", "cli"] {
+        if (backend == "native" && !cfg!(feature = "native")) || (backend == "cli" && !cfg!(feature = "cli")) {
+            continue;
+        }
+        let source = names(&mut plan(backend, "project"));
+        assert!(source.contains("'_project-1'") && source.contains("'-t' '$0'"), "{source}");
+    }
+    tmux(&["new-session", "-d", "-s", "_project-44", "sleep", "60"]);
+    for backend in ["native", "cli"] {
+        if (backend == "native" && !cfg!(feature = "native")) || (backend == "cli" && !cfg!(feature = "cli")) {
+            continue;
+        }
+        let result = plan(backend, "project").output().unwrap();
+        assert!(!result.status.success() && result.stdout.is_empty());
+        let diagnostic = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            diagnostic.contains("ambiguous session") && diagnostic.contains("_project-42") && diagnostic.contains("_project-44"),
+            "{diagnostic}"
+        );
+        assert!(names(&mut plan(backend, "_project-44")).contains("'-t' '$2'"));
+    }
+}
+
 #[cfg(feature = "scaffold-rekon")]
 #[test]
 fn scaffold_inventory_lists_configured_generators_and_fails_loudly() {

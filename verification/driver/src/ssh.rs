@@ -565,11 +565,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     report.checks.push(json!({"check": "cold/project; target defaults; literal startup argv and relative target cwd", "selection": format!("{:?}", prepared.launch.selection), "argv": argv}));
 
     let grouped = fixture.prepare(
-        target::Options::builder()
-            .argument(name.into())
-            .root("/unusable/project/root".into())
-            .grouped(true)
-            .build(),
+        target::Options::builder().argument(name.into()).root("/unusable/project/root".into()).build(),
         report,
     )?;
     let leaves = grouped.launch.plan.expression().steps();
@@ -589,6 +585,26 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         "detached satellite was not removed"
     );
     report.checks.push(json!({"check": "existing/group; one create-attach-keep-last queue; detach lifecycle", "shell": grouped.launch.plan.expression().shell(Handoff::Run)?, "inventory_after_detach": inventory}));
+
+    fixture.setup.environment.push(target::Environment {
+        name: "TTA_SATELLITE_PREFIX".into(),
+        value: Some("remote-".into()),
+    });
+    for (explicit, prefix) in [(None, "remote-"), (Some("chosen-"), "chosen-")] {
+        let prepared = fixture.prepare(
+            target::Options::builder()
+                .argument(name.into())
+                .maybe_satellite_prefix(explicit.map(str::to_owned))
+                .build(),
+            report,
+        )?;
+        let satellite = format!("{prefix}{name}-1");
+        fixture.terminal(fixture.command_builder(&prepared.command()?), &satellite, report, false, false)?;
+        report
+            .checks
+            .push(json!({"check": "SSH default independent entry honors target prefix and explicit override", "prefix": prefix, "explicit": explicit}));
+    }
+    fixture.setup.environment.pop();
 
     let generated = fixture.prepare(
         target::Options::builder()

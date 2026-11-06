@@ -21,6 +21,8 @@ done
 unset PROJECTS_DIR TMUX TMUX_PANE
 export TTA_ROOT="$fixture/root" TTA_SOCKET_PATH="$fixture/socket"
 export TTA_CAPTURE="$fixture/capture"
+tmux -S "$TTA_LIVE_SOCKET" new-session -d -s _orphan-42 sleep 60
+tmux -S "$TTA_LIVE_SOCKET" new-session -d -s view-custom-42 sleep 60
 
 zpty -b completion env TERM=xterm zsh -f
 trap 'zpty -d completion' EXIT
@@ -76,6 +78,9 @@ check "tta --socket-path '$TTA_LIVE_SOCKET' *work" "tta --socket-path '$TTA_LIVE
 check "tta --socket-path='$TTA_LIVE_SOCKET' live" "tta --socket-path='$TTA_LIVE_SOCKET' live-work "
 check "tta --root /no-such-root --socket-path '$TTA_LIVE_SOCKET' work" "tta --root /no-such-root --socket-path '$TTA_LIVE_SOCKET' live-work "
 check "tta --socket-path '$fixture/bad-socket' wire" "tta --socket-path '$fixture/bad-socket' pipewire-native "
+check "tta --socket-path '$TTA_LIVE_SOCKET' orph" "tta --socket-path '$TTA_LIVE_SOCKET' orphan "
+check "tta --socket-path '$TTA_LIVE_SOCKET' _orph" "tta --socket-path '$TTA_LIVE_SOCKET' _orphan-42 "
+check "tta --satellite-prefix view- --socket-path '$TTA_LIVE_SOCKET' cust" "tta --satellite-prefix view- --socket-path '$TTA_LIVE_SOCKET' custom "
 check 'tta --session-name renamed wire' 'tta --session-name renamed pipewire-native '
 check 'tta -- --da' 'tta -- --dash '
 check 'tta -- --not-a-project' 'tta -- --not-a-project'
