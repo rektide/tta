@@ -44,6 +44,35 @@ fn sessions_win_without_reading_a_root_or_requiring_home() {
 }
 
 #[test]
+fn shortest_session_wins_before_project_search() {
+    let selected = resolve()
+        .lookup(&inventory(&["long-project", "project-two"]))
+        .argument("project")
+        .root(Path::new("/nonexistent-tta-test-root"))
+        .call()
+        .unwrap();
+    assert!(matches!(selected, Selection::Existing(Session { name, .. }) if name == "project-two"));
+}
+
+#[test]
+fn shortest_project_wins_including_create_mode() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["long-project", "project-two"] {
+        fs::create_dir(root.path().join(name)).unwrap();
+    }
+    for create in [false, true] {
+        let selected = resolve()
+            .lookup(&inventory(&[]))
+            .argument("project")
+            .root(root.path())
+            .create(create)
+            .call()
+            .unwrap();
+        assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "project-two"));
+    }
+}
+
+#[test]
 fn session_ambiguity_is_sorted_and_does_not_fall_back_to_projects() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("project")).unwrap();

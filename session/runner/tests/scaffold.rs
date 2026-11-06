@@ -134,7 +134,7 @@ fn ambiguous_matches_and_generator_choices_stop_without_creation() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("projects");
     fs::create_dir_all(root.join("alpha")).unwrap();
-    fs::create_dir(root.join("alpine")).unwrap();
+    fs::create_dir(root.join("aloft")).unwrap();
     let config = registry(temp.path(), REKON);
     let sessions = Inventory(vec![
         Session {
@@ -143,7 +143,7 @@ fn ambiguous_matches_and_generator_choices_stop_without_creation() {
         },
         Session {
             id: "$2".parse().unwrap(),
-            name: "alpine".into(),
+            name: "aloft".into(),
         },
     ]);
     for inventory in [Inventory(vec![]), sessions] {

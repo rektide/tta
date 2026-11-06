@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-terra#high" }
+updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#medium" }
 sources:
+  - resource: opencode://ses_e4e3219d0ffejILMxLRXqN5tWs
+    title: Prefer the shortest matching session or project name, retaining ambiguity for shortest-name ties
   - resource: opencode://ses_e5127716effeh5HRrE4o5Cw1r2
     title: Refresh the tmax dependency and install the current launcher ahead of the older system binary
   - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
@@ -373,7 +375,7 @@ Work anchor: `tta-zsh-completion`.
 
 ## How a fragment becomes an action
 
-**Sessions first. Exact names first. Otherwise, a unique literal substring.**
+**Sessions first. Exact names first. Otherwise, the shortest literal substring match.**
 
 ```mermaid
 flowchart TD
@@ -389,8 +391,10 @@ flowchart TD
 ```
 
 For example, `tta foo` selects session `foo` ahead of `foobar`. With no exact
-match, `foobar` alone works; `foobar` and `myfoo` are ambiguous. A directory
-named `foo` does not override either session result.
+match, `myfoo` wins over `foobar` because its name is shorter. Length is measured
+in Unicode characters; ties between shortest names (such as `afoo` and `zfoo`)
+remain ambiguous and report only those tied candidates. A directory named `foo`
+does not override either session result.
 
 ### Matching and failure behavior
 
