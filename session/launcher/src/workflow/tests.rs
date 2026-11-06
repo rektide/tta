@@ -210,3 +210,69 @@ fn native_non_utf8_domain_data_never_crosses_the_control_json_boundary() {
     assert_eq!(command.program.as_os_str(), expected_program);
     assert!(prepared.plan.expression().shell(tta_command::Handoff::Run).is_err());
 }
+
+#[cfg(feature = "scaffold-rekon-native")]
+fn creation_input(options: &str) -> Input {
+    let mut invocation = input();
+    invocation.scaffold = "default".into();
+    invocation.registry = scaffold::Config::parse(
+        None,
+        Some(&format!(
+            "[scaffold.generators.native]\nadapter = 'rekon-native'\n[scaffold.generators.native.options]\n{options}"
+        )),
+    )
+    .unwrap();
+    invocation
+}
+
+#[cfg(feature = "scaffold-rekon-native")]
+fn supply_creation_destination(workflow: &mut Workflow) {
+    workflow.supply(ObservationReply::Sessions(SessionInventory::Absent)).unwrap();
+    workflow
+        .supply(ObservationReply::Projects(ProjectInventory {
+            root: "/physical".into(),
+            names: vec![],
+        }))
+        .unwrap();
+    workflow.supply(ObservationReply::Destination(DestinationState::Absent)).unwrap();
+}
+
+#[cfg(feature = "scaffold-rekon-native")]
+#[test]
+fn generator_validation_guards_before_defaults_but_not_existing_selection() {
+    let invocation = creation_input("brunch = 'main'\n");
+    let mut existing = Workflow::new(invocation.clone()).unwrap();
+    existing
+        .supply(ObservationReply::Sessions(SessionInventory::Present(vec![session(1, "work", None)])))
+        .unwrap();
+    let Progress::Ready(prepared) = existing.next().unwrap() else {
+        panic!("unused generator options blocked existing work")
+    };
+    assert!(prepared.generator.is_none());
+
+    let mut creation = Workflow::new(invocation).unwrap();
+    supply_creation_destination(&mut creation);
+    // Moving all generator planning after defaults would incorrectly request
+    // target Git/environment facts before rejecting these invalid options.
+    let error = creation.next().unwrap_err();
+    assert!(matches!(error, Error::Scaffold(_)));
+    assert!(error.to_string().contains("unknown field"), "{error:?}");
+}
+
+#[cfg(feature = "scaffold-rekon-native")]
+#[test]
+fn absent_generator_defaults_are_supplied_facts_not_a_repeated_request() {
+    let mut workflow = Workflow::new(creation_input("install = false\n")).unwrap();
+    supply_creation_destination(&mut workflow);
+    assert_eq!(
+        observe(&workflow),
+        ObservationRequest::GeneratorDefaults {
+            directory: "/target/cwd".into(),
+            author: true,
+            license: true,
+        }
+    );
+    workflow.supply(ObservationReply::GeneratorDefaults(scaffold::Defaults::default())).unwrap();
+    assert!(shell(&workflow).contains("MIT"));
+    assert_eq!(shell(&workflow), shell(&workflow.clone()));
+}
