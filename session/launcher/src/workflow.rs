@@ -5,6 +5,8 @@ use bon::Builder;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+mod machine;
+
 /// Target-local invocation inputs. Relative paths must be frozen by the caller
 /// against the target cwd, never canonicalized on an unrelated local host.
 #[derive(Clone, Debug, Builder)]
@@ -137,81 +139,146 @@ impl Workflow {
     }
 
     pub fn next(&self) -> Result<Progress, Error> {
+        use machine::{Control, Event};
+
         let input = &self.input;
         let sessions_request = || ObservationRequest::Sessions {
             socket: input.socket.path.clone(),
             program: input.program.clone(),
         };
-        let Some(sessions) = &self.sessions else {
-            return Ok(Progress::Observe(sessions_request()));
-        };
-        let defaults = self.defaults.clone().unwrap_or_default();
-        let resolved = match scaffold::resolve()
-            .sessions(sessions.sessions())
-            .argument(&input.argument)
-            .satellite_prefix(&input.satellite_prefix)
-            .maybe_root(input.root.as_deref())
-            .maybe_session_name(input.session_name.as_deref())
-            .choice(&input.scaffold)
-            .config(&input.registry)
-            .maybe_projects(self.projects.as_ref())
-            .maybe_destination(self.destination)
-            .defaults(&defaults)
-            .call()?
-        {
-            scaffold::Progress::Observe(crate::Resolution::NeedProjects(root)) => {
-                return Ok(Progress::Observe(ObservationRequest::Projects {
-                    root,
-                    argument: input.argument.clone(),
-                }));
-            }
-            scaffold::Progress::Observe(crate::Resolution::NeedDestination(path)) => return Ok(Progress::Observe(ObservationRequest::Destination { path })),
-            scaffold::Progress::Resolved(resolved) => resolved,
-            scaffold::Progress::Observe(crate::Resolution::Selected(_)) => unreachable!("scaffold handles selections"),
-        };
-        if let Some(generator) = &resolved.generator {
-            let (author, license) = generator.defaults_required();
-            if self.defaults.is_none() && (author || license) {
-                return Ok(Progress::Observe(ObservationRequest::GeneratorDefaults {
-                    directory: input.cwd.clone(),
-                    author,
-                    license,
-                }));
+        let grouped = input.grouped.unwrap_or(input.client_mode == ClientMode::Attach);
+        let mut control = Control::new();
+        // Replay observations only when the graph asks for them, keeping native
+        // data out of the actor. Nothing is observed or executed in this loop.
+        let mut projects = None;
+        let mut destination = None;
+        let mut defaults = scaffold::Defaults::default();
+        let mut defaults_supplied = false;
+        let mut resolved = None;
+        let mut pending = None;
+        let mut satellite = None;
+        let mut prepared = None;
+        loop {
+            match control.state() {
+                "sessions" => {
+                    if self.sessions.is_none() {
+                        return Ok(Progress::Observe(sessions_request()));
+                    }
+                    control.send(Event::Observed);
+                }
+                "resolve" => {
+                    let sessions = self.sessions.as_ref().expect("sessions stage supplied inventory");
+                    let progress = scaffold::resolve()
+                        .sessions(sessions.sessions())
+                        .argument(&input.argument)
+                        .satellite_prefix(&input.satellite_prefix)
+                        .maybe_root(input.root.as_deref())
+                        .maybe_session_name(input.session_name.as_deref())
+                        .choice(&input.scaffold)
+                        .config(&input.registry)
+                        .maybe_projects(projects)
+                        .maybe_destination(destination)
+                        .defaults(&defaults)
+                        .call()?;
+                    match progress {
+                        scaffold::Progress::Observe(crate::Resolution::NeedProjects(root)) => {
+                            pending = Some(ObservationRequest::Projects {
+                                root,
+                                argument: input.argument.clone(),
+                            });
+                            control.send(Event::ProjectsNeeded);
+                        }
+                        scaffold::Progress::Observe(crate::Resolution::NeedDestination(path)) => {
+                            pending = Some(ObservationRequest::Destination { path });
+                            control.send(Event::DestinationNeeded);
+                        }
+                        scaffold::Progress::Resolved(selection) => {
+                            let needs_defaults = selection.generator.as_ref().is_some_and(|generator| {
+                                let (author, license) = generator.defaults_required();
+                                !defaults_supplied && (author || license)
+                            });
+                            let needs_satellite = grouped && matches!(selection.selection, Selection::Existing(_));
+                            resolved = Some(selection);
+                            control.send(Event::Resolved {
+                                needs_defaults,
+                                needs_satellite,
+                            });
+                        }
+                        scaffold::Progress::Observe(crate::Resolution::Selected(_)) => unreachable!("scaffold handles selections"),
+                    }
+                }
+                "projects" => {
+                    let Some(facts) = &self.projects else {
+                        return Ok(Progress::Observe(pending.expect("resolver requested projects")));
+                    };
+                    projects = Some(facts);
+                    control.send(Event::Observed);
+                }
+                "destination" => {
+                    let Some(facts) = self.destination else {
+                        return Ok(Progress::Observe(pending.expect("resolver requested destination")));
+                    };
+                    destination = Some(facts);
+                    control.send(Event::Observed);
+                }
+                "defaults" => {
+                    let Some(facts) = &self.defaults else {
+                        let generator = resolved
+                            .as_ref()
+                            .and_then(|selection| selection.generator.as_ref())
+                            .expect("defaults guard requires generator");
+                        let (author, license) = generator.defaults_required();
+                        return Ok(Progress::Observe(ObservationRequest::GeneratorDefaults {
+                            directory: input.cwd.clone(),
+                            author,
+                            license,
+                        }));
+                    };
+                    defaults = facts.clone();
+                    defaults_supplied = true;
+                    control.send(Event::Observed);
+                }
+                "fresh_sessions" => {
+                    let Selection::Existing(session) = &resolved.as_ref().expect("resolved before satellite guard").selection else {
+                        unreachable!("satellite guard requires existing selection")
+                    };
+                    let Some(sessions) = &self.satellite_sessions else {
+                        return Ok(Progress::Observe(sessions_request()));
+                    };
+                    if !sessions.sessions().iter().any(|fresh| fresh == session) {
+                        return Err(Error::SessionChanged(session.id));
+                    }
+                    let name = crate::satellite_name(session, sessions.sessions(), &input.satellite_prefix);
+                    tracing::info!(event = "satellite.named", base = %session.name, name = %name);
+                    satellite = Some(name);
+                    control.send(Event::Observed);
+                }
+                "prepare" => {
+                    let resolved = resolved.take().expect("resolved before preparation");
+                    let plan = crate::prepare_launch()
+                        .selection(&resolved.selection)
+                        .socket(&input.socket)
+                        .client_mode(input.client_mode)
+                        .program(&input.program)
+                        .maybe_config(input.config.as_deref())
+                        .maybe_prefix(resolved.prefix.as_ref())
+                        .grouped(grouped)
+                        .maybe_satellite_name(satellite.as_deref())
+                        .startup(&input.startup)
+                        .maybe_directory(input.directory.as_deref())
+                        .window_name(input.window_name.clone())
+                        .call()?;
+                    prepared = Some(Box::new(PreparedLaunch {
+                        selection: resolved.selection,
+                        generator: resolved.generator,
+                        plan,
+                    }));
+                    control.send(Event::Prepared);
+                }
+                "ready" => return Ok(Progress::Ready(prepared.expect("prepared before readiness"))),
+                state => unreachable!("unhandled embedded entry machine state {state}"),
             }
         }
-        let grouped = input.grouped.unwrap_or(input.client_mode == ClientMode::Attach);
-        let satellite = match (&resolved.selection, grouped) {
-            (Selection::Existing(session), true) => {
-                let Some(sessions) = &self.satellite_sessions else {
-                    return Ok(Progress::Observe(sessions_request()));
-                };
-                if !sessions.sessions().iter().any(|fresh| fresh == session) {
-                    return Err(Error::SessionChanged(session.id));
-                }
-                let name = crate::satellite_name(session, sessions.sessions(), &input.satellite_prefix);
-                tracing::info!(event = "satellite.named", base = %session.name, name = %name);
-                Some(name)
-            }
-            _ => None,
-        };
-        let plan = crate::prepare_launch()
-            .selection(&resolved.selection)
-            .socket(&input.socket)
-            .client_mode(input.client_mode)
-            .program(&input.program)
-            .maybe_config(input.config.as_deref())
-            .maybe_prefix(resolved.prefix.as_ref())
-            .grouped(grouped)
-            .maybe_satellite_name(satellite.as_deref())
-            .startup(&input.startup)
-            .maybe_directory(input.directory.as_deref())
-            .window_name(input.window_name.clone())
-            .call()?;
-        Ok(Progress::Ready(Box::new(PreparedLaunch {
-            selection: resolved.selection,
-            generator: resolved.generator,
-            plan,
-        })))
     }
 
     /// Reject mismatched replies without advancing. Errors remain errors at the

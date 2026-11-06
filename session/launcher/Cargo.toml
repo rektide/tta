@@ -15,10 +15,12 @@ scaffold-rekon-native = ["dep:tta-scaffold-rekon-native"]
 anyhow.workspace = true
 bon.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tmax.workspace = true
 toml.workspace = true
 tracing.workspace = true
+xmachines-runtime.workspace = true
 tta-command.workspace = true
 tta-scaffold-rekon = { workspace = true, optional = true }
 tta-scaffold-rekon-native = { workspace = true, optional = true }

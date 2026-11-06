@@ -20,6 +20,7 @@ thiserror = "2"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
+xmachines-runtime = "=1.1.0"
 tmax = { path = "../tmux-interface-control", version = "=0.7.0", default-features = false, features = ["operations"] }
 tta-command = { path = "shell/command", version = "=0.6.0" }
 tta-launcher = { path = "session/launcher", version = "=0.6.0", default-features = false }
