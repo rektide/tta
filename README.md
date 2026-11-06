@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#high" }
+updated: { at: 2026-11-09, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt
+    title: Adopt the accepted ticket-surface pitch — capability work map in the guide, same-ID ticket summaries and lifecycle reconciliation
   - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
     title: Independently review entry architecture, retain the pure graph-driven contract and link typed dispatch, stricter conformance and measured replay costs
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
@@ -102,6 +104,30 @@ directly or render as POSIX shell.
 **Go deeper:** [Configuration](#environment-configuration) · [SSH](#ssh-targets) ·
 [Matching](#matching-and-failure-behavior) · [Shell plans](#shell-output) ·
 [Rust pieces](#reusable-pieces) · [Verification](#runtime-verification)
+
+## What tta can do
+
+A compact map of the capability surfaces, what works today, and where each
+edge is heading. These are navigation headings over the maintained contracts
+below, not separate product promises. Open work lives on the project's Beads
+board; closed tickets remain the delivery history behind each row.
+
+| Surface | Available now | Edge |
+| --- | --- | --- |
+| **Find and return to work** | Session-first [matching](#matching-and-failure-behavior) — literal name, workspace alias, shortest substring; rootless session hits; one project root; read-only [Zsh completion](#zim--zsh-completion) | `tta-project-roots` extends discovery and completion across multiple configured roots |
+| **Open another view; switch work** | Outside entry gives [independent window selection](#how-we-use-tmux) over shared processes; explicit shared selection; orphan aliases, custom prefix and last-view survival | Guarded inside switching (`tta-launch-backends-switching`) and input-origin research (`tta-launch-backends-input-origin`) are separate open work |
+| **Create and start a project** | Configured [scaffold-on-miss](#scaffolding-missing-projects) with named adapters and native generator options; literal startup argv/cwd; [initial window naming](#grouped-satellites-startup-argv-and-initial-directory) | Delivered; a future generator need is a new bounded ticket |
+| **Enter work on another host** | [SSH target-local observation](#ssh-targets) and real terminal handoff — the target needs tmux, not installed tta | Remote-carrier and socket-tunnel siblings are optional directions pending a consumer-grounded relevance decision, not requirements of shipped SSH |
+| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — pure supplied-facts launcher, optional runner, semantic plans; adopted by term-preserver with explicit caller grouping | The engine port and architecture review are complete; no further ticket exists just for visibility |
+| **Inspect and execute a launch plan** | [POSIX shell snapshots](#shell-output); literal command expressions; native/CLI [execution boundaries](#which-operations-use-tmax); [tracing](#endpoint-and-client-options) | Deferred workflow compilation remains a possible later commission, not a promise of `--print-shell` |
+
+Grouping, configuration, naming and matching are features within these
+surfaces rather than separate epics; “native”, “SSH” and “Rust library”
+name execution choices of one entry policy, not mutually exclusive buckets.
+Historical delivery anchors — `tta-zsh-completion`,
+`tta-launch-backends-independent-views`, `tta-scaffold`,
+`tta-launch-backends-remote-target`, `tta-state-machine` and
+`tta-window-name` — are closed on the board with their evidence.
 
 ## How we use tmux
 
