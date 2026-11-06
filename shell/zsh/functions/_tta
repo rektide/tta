@@ -7,7 +7,8 @@ local option
 
 _arguments -s -S -C \
   '--root=[Project root]:project root:_directories' \
-  '--group[Create a grouped satellite for an existing session]' \
+  '--group=-[Independent view (default); false shares selection]:enabled:(true false)' \
+  '--satellite-prefix=[Satellite name prefix]:prefix:' \
   '--dir=[Initial directory for a new session]:initial directory:_directories' \
   '--session-name=[Override new session name]:session name:' \
   '--scaffold=-[Scaffold a missing project before creating its session]:generator:->scaffold' \
@@ -35,7 +36,7 @@ elif [[ $state == scaffold ]]; then
 elif [[ $state == target ]]; then
   # Forward only lookup configuration, never an action or the typed pattern.
   # _arguments accepts both --root VALUE and --root=VALUE, including quoting.
-  for option in --root --backend --socket-name --socket-path --tmux; do
+  for option in --root --backend --socket-name --socket-path --tmux --satellite-prefix; do
     if (( ${+opt_args[$option]} )); then
       query+=( "$option" "${(Q)opt_args[$option]}" )
     fi

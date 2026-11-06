@@ -6,10 +6,11 @@ use tta_command::{Expression, Handoff};
 use tta_launcher::{ClientMode, PlanError, Selection, Session, launch, socket};
 
 #[test]
-fn existing_attach_options_are_opt_in_and_startup_is_ignored() {
+fn existing_attach_options_select_independence_and_startup_is_ignored() {
     let selection = Selection::Existing(Session {
         id: "$7".parse().unwrap(),
         name: "seed".into(),
+        group: None,
     });
     for grouped in [false, true] {
         let expression = launch()

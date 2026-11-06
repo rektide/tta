@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
@@ -7,8 +6,8 @@ use bon::builder;
 use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
+use crate::Selection;
 use crate::{LaunchPlan, NativeCreation};
-use crate::{Selection, Session};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientMode {
@@ -82,7 +81,7 @@ pub fn launch(
     program: &OsStr,
     config: Option<&Path>,
     prefix: Option<&Expression>,
-    #[builder(default)] grouped: bool,
+    #[builder(default = true)] grouped: bool,
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
@@ -115,7 +114,7 @@ pub fn prepare_launch(
     program: &OsStr,
     config: Option<&Path>,
     prefix: Option<&Expression>,
-    #[builder(default)] grouped: bool,
+    #[builder(default = true)] grouped: bool,
     satellite_name: Option<&str>,
     #[builder(default = &[])] startup: &[OsString],
     directory: Option<&Path>,
@@ -252,24 +251,6 @@ pub fn prepare_launch(
     })
 }
 
-/// A grouped satellite's name: `_`, the base session's name, then the smallest
-/// counter no live session already holds (`compfuzor` → `_compfuzor-1`,
-/// `_compfuzor-2`, …). The `_` prefix keeps the base name an unambiguous
-/// completion prefix while satellites are alive, and uniqueness is judged
-/// against every live session name, not only other satellites.
-pub fn satellite_name(base: &str, existing: &[Session]) -> String {
-    let prefix = format!("_{base}-");
-    let used: HashSet<u64> = existing
-        .iter()
-        .filter_map(|session| session.name.strip_prefix(&prefix).and_then(|suffix| suffix.parse().ok()))
-        .collect();
-    let mut counter = 1;
-    while used.contains(&counter) {
-        counter += 1;
-    }
-    format!("{prefix}{counter}")
-}
-
 fn directory_format(directory: &Path) -> Result<String, PlanError> {
     directory
         .to_str()
@@ -323,6 +304,7 @@ mod tests {
         let session = Selection::Existing(crate::Session {
             id: "$7".parse().unwrap(),
             name: "a; #[x]".into(),
+            group: None,
         });
         for (mode, expected) in [(ClientMode::Attach, "attach-session"), (ClientMode::Switch, "switch-client")] {
             let expression = launch()
@@ -330,6 +312,7 @@ mod tests {
                 .socket(&crate::socket::Resolved::path("/tmp/sock"))
                 .client_mode(mode)
                 .program(OsStr::new("tmux"))
+                .grouped(false)
                 .call()
                 .unwrap();
             assert_eq!(
@@ -384,6 +367,7 @@ mod tests {
         let session = Selection::Existing(crate::Session {
             id: "$7".parse().unwrap(),
             name: "seed".into(),
+            group: None,
         });
         for (mode, client) in [(ClientMode::Attach, "attach-session"), (ClientMode::Switch, "switch-client")] {
             let expression = launch()
@@ -411,6 +395,7 @@ mod tests {
         let session = Selection::Existing(crate::Session {
             id: "$7".parse().unwrap(),
             name: "seed".into(),
+            group: None,
         });
         assert!(matches!(
             launch()
@@ -422,26 +407,6 @@ mod tests {
                 .call(),
             Err(PlanError::UnnamedSatellite)
         ));
-    }
-
-    #[test]
-    fn satellite_names_prefix_the_base_and_skip_live_counters() {
-        let sessions = |names: &[&str]| {
-            names
-                .iter()
-                .map(|name| Session {
-                    id: "$1".parse().unwrap(),
-                    name: (*name).to_owned(),
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(satellite_name("compfuzor", &sessions(&["compfuzor"])), "_compfuzor-1");
-        assert_eq!(satellite_name("compfuzor", &sessions(&["compfuzor", "_compfuzor-1"])), "_compfuzor-2");
-        assert_eq!(satellite_name("compfuzor", &sessions(&["_compfuzor-3", "_compfuzor-1"])), "_compfuzor-2");
-        // Non-numeric suffixes, other bases, and unparsable counters never consume a slot.
-        assert_eq!(satellite_name("a", &sessions(&["_a-x", "_b-1", "_a-99999999999999999999999"])), "_a-1");
-        // A satellite of a satellite still derives from its own base name.
-        assert_eq!(satellite_name("_a-1", &sessions(&["__a-1-1"])), "__a-1-2");
     }
 
     #[test]
@@ -520,6 +485,7 @@ mod tests {
         let session = Selection::Existing(crate::Session {
             id: "$7".parse().unwrap(),
             name: "seed".into(),
+            group: None,
         });
         let expression = launch()
             .selection(&session)

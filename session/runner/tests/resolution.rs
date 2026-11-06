@@ -23,6 +23,7 @@ fn inventory(names: &[&str]) -> Inventory {
             .map(|(index, name)| Session {
                 id: format!("${index}").parse().unwrap(),
                 name: (*name).to_owned(),
+                group: None,
             })
             .collect(),
     )

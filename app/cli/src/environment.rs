@@ -70,6 +70,11 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
         args.scaffold = Some(text.to_owned());
     }
     args.tmux = args.tmux.or_else(|| value("TTA_TMUX"));
+    if args.satellite_prefix.is_none()
+        && let Some(value) = value("TTA_SATELLITE_PREFIX")
+    {
+        args.satellite_prefix = Some(value.into_string().map_err(|_| anyhow!("TTA_SATELLITE_PREFIX must be UTF-8"))?);
+    }
     args.tmux_config = args.tmux_config.or_else(|| value("TTA_TMUX_CONFIG").map(PathBuf::from));
     configure_trace(&mut args)?;
     Ok(args)

@@ -14,6 +14,7 @@ impl SessionLookup for Ambiguous {
             .map(|(id, name)| Session {
                 id: id.parse().unwrap(),
                 name: name.to_owned(),
+                group: None,
             })
             .collect())
     }

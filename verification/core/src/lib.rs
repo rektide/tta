@@ -68,6 +68,7 @@ pub fn fixture(scenario: Scenario) -> Result<(Input, Vec<Exchange>)> {
     let session = Session {
         id: "$7".parse()?,
         name: name.into(),
+        group: None,
     };
     let mut exchanges = vec![Exchange {
         request: sessions(),
@@ -314,10 +315,12 @@ mod tests {
             Session {
                 id: "$7".parse().unwrap(),
                 name: base.clone(),
+                group: None,
             },
             Session {
                 id: "$8".parse().unwrap(),
                 name: format!("_{base}-1"),
+                group: Some("unrelated".into()),
             },
         ]));
         let prepared = replay(input, &exchanges).unwrap();
@@ -328,6 +331,26 @@ mod tests {
         assert!(argv.contains(&format!("_{base}-2").as_str()));
         assert!(argv.contains(&"$7"));
         assert_eq!(argv.iter().filter(|arg| **arg == ";").count(), 2);
+    }
+
+    #[test]
+    fn fresh_inventory_must_preserve_selected_id_name_and_group() {
+        let (input, exchanges) = fixture(Scenario::Grouped).unwrap();
+        for change in ["gone", "id", "name", "group"] {
+            let mut exchanges = exchanges.clone();
+            let ObservationReply::Sessions(SessionInventory::Present(sessions)) = &mut exchanges[1].reply else {
+                unreachable!()
+            };
+            match change {
+                "gone" => sessions.clear(),
+                "id" => sessions[0].id = "$99".parse().unwrap(),
+                "name" => sessions[0].name = "renamed".into(),
+                "group" => sessions[0].group = Some("changed".into()),
+                _ => unreachable!(),
+            }
+            let error = replay(input.clone(), &exchanges).unwrap_err();
+            assert!(error.to_string().contains("disappeared or changed"), "{error:#}");
+        }
     }
 
     #[test]

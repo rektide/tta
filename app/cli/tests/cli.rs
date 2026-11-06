@@ -505,6 +505,8 @@ fn existing_sessions_do_not_require_home_or_a_usable_environment_root() {
         }
         let source = assert_plan(&mut command);
         assert!(source.contains("attach-session"), "{source}");
-        assert!(!source.contains("new-session"));
+        assert!(source.contains("new-session") && source.contains("_existing-1"), "{source}");
+        let shared = assert_plan(command.arg("--group=false"));
+        assert!(shared.contains("attach-session") && !shared.contains("new-session"), "{shared}");
     }
 }

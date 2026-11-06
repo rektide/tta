@@ -130,6 +130,7 @@ pub const VARIABLES: &[&str] = &[
     "TTA_TMUX",
     "TTA_TMUX_CONFIG",
     "TTA_SCAFFOLD",
+    "TTA_SATELLITE_PREFIX",
     "PATH",
     "SHELL",
 ];
@@ -148,8 +149,9 @@ pub struct Options {
     pub default_scaffold: String,
     pub config: Option<PathBuf>,
     pub session_name: Option<String>,
-    #[builder(default)]
+    #[builder(default = true)]
     pub grouped: bool,
+    pub satellite_prefix: Option<String>,
     #[builder(default)]
     pub startup: Vec<OsString>,
     pub directory: Option<PathBuf>,
@@ -235,6 +237,13 @@ impl Facts {
                     .map(|p| self.cwd.join(p)),
             )
             .grouped(options.grouped)
+            .satellite_prefix(
+                options
+                    .satellite_prefix
+                    .clone()
+                    .or_else(|| self.value("TTA_SATELLITE_PREFIX").map(str::to_owned))
+                    .unwrap_or_else(|| "_".into()),
+            )
             .startup(options.startup.clone())
             .maybe_directory(options.directory.as_ref().map(|p| self.cwd.join(p)))
             .window_name(options.window_name.clone())

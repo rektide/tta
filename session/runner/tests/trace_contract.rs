@@ -13,6 +13,7 @@ impl SessionLookup for Inventory {
         Ok(vec![Session {
             id: "$2".parse().unwrap(),
             name: "project".into(),
+            group: None,
         }])
     }
 }

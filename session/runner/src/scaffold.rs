@@ -79,6 +79,7 @@ pub fn observe_defaults(directory: &Path, author: bool, license: bool) -> Result
 pub fn resolve(
     lookup: &dyn SessionLookup,
     argument: &str,
+    #[builder(default = "_")] satellite_prefix: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     choice: &str,
@@ -116,6 +117,7 @@ pub fn resolve(
             match tta_launcher::scaffold::resolve()
                 .sessions(&sessions)
                 .argument(argument)
+                .satellite_prefix(satellite_prefix)
                 .maybe_root(root)
                 .maybe_session_name(session_name)
                 .choice(choice)

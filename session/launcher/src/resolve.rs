@@ -59,6 +59,8 @@ pub enum ResolveError {
     InvalidInventory,
     #[error("session name {0:?} is empty or contains '.', ':', or control characters; pass --session-name with a distinct tmux-safe name")]
     InvalidName(String),
+    #[error("satellite prefix {0:?} must be nonempty and contain no '.', ':', or control characters; set --satellite-prefix or TTA_SATELLITE_PREFIX")]
+    InvalidSatellitePrefix(String),
     #[error("session name {name:?} already belongs to session {id}; choose another --session-name")]
     Collision { name: String, id: crate::SessionId },
 }
@@ -69,6 +71,7 @@ pub enum ResolveError {
 pub fn resolve(
     sessions: &[Session],
     argument: &str,
+    #[builder(default = "_")] satellite_prefix: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     #[builder(default)] create: bool,
@@ -79,8 +82,9 @@ pub fn resolve(
     if argument.is_empty() {
         return Err(ResolveError::Empty);
     }
+    crate::validate_satellite_prefix(satellite_prefix)?;
     tracing::info!(event = "lookup.complete", count = sessions.len());
-    match matching::select(sessions.to_vec(), argument, |session| &session.name) {
+    match crate::workspace::select(sessions, argument, satellite_prefix) {
         Ok(Some(session)) => {
             tracing::info!(event = "match.existing", session_id = %session.id, session_name = %session.name);
             return Ok(Resolution::Selected(Selection::Existing(session)));

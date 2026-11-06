@@ -59,6 +59,7 @@ impl Server {
         Selection::Existing(Session {
             id: self.field("=seed", "#{session_id}").parse().unwrap(),
             name: "seed".into(),
+            group: None,
         })
     }
 

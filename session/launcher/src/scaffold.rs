@@ -77,6 +77,7 @@ pub struct Resolved {
 pub fn resolve(
     sessions: &[Session],
     argument: &str,
+    #[builder(default = "_")] satellite_prefix: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     choice: &str,
@@ -85,7 +86,19 @@ pub fn resolve(
     destination: Option<DestinationState>,
     defaults: &Defaults,
 ) -> std::result::Result<Progress, Error> {
-    resolve_with_config(config, sessions, argument, root, session_name, choice, projects, destination, defaults).map_err(Error::from)
+    resolve_with_config(
+        config,
+        sessions,
+        argument,
+        satellite_prefix,
+        root,
+        session_name,
+        choice,
+        projects,
+        destination,
+        defaults,
+    )
+    .map_err(Error::from)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -93,6 +106,7 @@ fn resolve_with_config(
     config: &Config,
     sessions: &[Session],
     argument: &str,
+    satellite_prefix: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     choice: &str,
@@ -109,6 +123,7 @@ fn resolve_with_config(
     let selection = match crate::resolve()
         .sessions(sessions)
         .argument(argument)
+        .satellite_prefix(satellite_prefix)
         .maybe_root(root)
         .maybe_session_name(session_name)
         .create(generator.is_some())

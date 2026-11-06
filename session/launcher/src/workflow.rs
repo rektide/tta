@@ -19,8 +19,10 @@ pub struct Input {
     pub root: Option<PathBuf>,
     pub session_name: Option<String>,
     pub config: Option<PathBuf>,
-    #[builder(default)]
+    #[builder(default = true)]
     pub grouped: bool,
+    #[builder(default = "_".into())]
+    pub satellite_prefix: String,
     #[builder(default)]
     pub startup: Vec<OsString>,
     pub directory: Option<PathBuf>,
@@ -87,6 +89,8 @@ pub enum Error {
     AlreadyReady,
     #[error("target invocation cwd must be absolute: {0:?}")]
     RelativeCwd(PathBuf),
+    #[error("selected session {0} disappeared or changed name/group during preparation; run tta again")]
+    SessionChanged(crate::SessionId),
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +118,7 @@ impl Workflow {
         if input.argument.is_empty() {
             return Err(crate::ResolveError::Empty.into());
         }
+        crate::validate_satellite_prefix(&input.satellite_prefix)?;
         if !input.cwd.is_absolute() {
             return Err(Error::RelativeCwd(input.cwd.clone()));
         }
@@ -144,6 +149,7 @@ impl Workflow {
         let resolved = match scaffold::resolve()
             .sessions(sessions.sessions())
             .argument(&input.argument)
+            .satellite_prefix(&input.satellite_prefix)
             .maybe_root(input.root.as_deref())
             .maybe_session_name(input.session_name.as_deref())
             .choice(&input.scaffold)
@@ -178,7 +184,10 @@ impl Workflow {
                 let Some(sessions) = &self.satellite_sessions else {
                     return Ok(Progress::Observe(sessions_request()));
                 };
-                let name = crate::satellite_name(&session.name, sessions.sessions());
+                if !sessions.sessions().iter().any(|fresh| fresh == session) {
+                    return Err(Error::SessionChanged(session.id));
+                }
+                let name = crate::satellite_name(session, sessions.sessions(), &input.satellite_prefix);
                 tracing::info!(event = "satellite.named", base = %session.name, name = %name);
                 Some(name)
             }

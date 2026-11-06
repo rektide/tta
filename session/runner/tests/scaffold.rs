@@ -90,6 +90,7 @@ fn shared_resolution_only_generates_a_prefix_for_a_clean_miss() {
     let existing = Inventory(vec![Session {
         id: "$1".parse().unwrap(),
         name: "existing".into(),
+        group: None,
     }]);
     let result = scaffold::resolve()
         .lookup(&existing)
@@ -140,10 +141,12 @@ fn ambiguous_matches_and_generator_choices_stop_without_creation() {
         Session {
             id: "$1".parse().unwrap(),
             name: "alpha".into(),
+            group: None,
         },
         Session {
             id: "$2".parse().unwrap(),
             name: "aloft".into(),
+            group: None,
         },
     ]);
     for inventory in [Inventory(vec![]), sessions] {

@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "tta"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "tta-command"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bon",
  "thiserror 2.0.21",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "tta-core-witness"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "tta-launcher"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bon",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "tta-probe-witness"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "tta-runner"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bon",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "tta-scaffold-rekon"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "thiserror 2.0.21",
  "tta-command",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "tta-scaffold-rekon-native"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "tta-verify"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bon",

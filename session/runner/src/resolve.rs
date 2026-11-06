@@ -21,6 +21,7 @@ struct Project {
 pub fn resolve(
     lookup: &dyn SessionLookup,
     argument: &str,
+    #[builder(default = "_")] satellite_prefix: &str,
     root: Option<&Path>,
     session_name: Option<&str>,
     #[builder(default)] create: bool,
@@ -35,6 +36,7 @@ pub fn resolve(
         match tta_launcher::resolve()
             .sessions(&sessions)
             .argument(argument)
+            .satellite_prefix(satellite_prefix)
             .maybe_root(root)
             .maybe_session_name(session_name)
             .create(create)

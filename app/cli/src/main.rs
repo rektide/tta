@@ -93,9 +93,12 @@ struct Args {
     /// Explicit scaffold registry path (on the target for --ssh)
     #[arg(long)]
     scaffold_config: Option<PathBuf>,
-    /// Create a grouped satellite when an existing session matches
-    #[arg(long)]
+    /// Independent view of existing work (default); --group=false shares window selection
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "true", action = clap::ArgAction::Set)]
     group: bool,
+    /// Satellite name prefix [env: TTA_SATELLITE_PREFIX; default: _]
+    #[arg(long)]
+    satellite_prefix: Option<String>,
     /// Initial directory for new projects or grouped satellites
     #[arg(long)]
     dir: Option<PathBuf>,
@@ -168,6 +171,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
     if args.ssh.is_some() {
         return run_ssh(args);
     }
+    tta_launcher::validate_satellite_prefix(args.satellite_prefix.as_deref().unwrap_or("_"))?;
     if matches!(args.completion_candidates, Some(CompletionCandidates::Backends)) {
         print_candidates(
             Backend::value_variants()
@@ -224,7 +228,8 @@ fn run(mut args: Args) -> Result<ExitCode> {
         }),
     };
     if matches!(args.completion_candidates, Some(CompletionCandidates::Sessions)) {
-        print_candidates(lookup.sessions()?.into_iter().map(|session| session.name).collect());
+        let prefix = args.satellite_prefix.as_deref().unwrap_or("_");
+        print_candidates(tta_launcher::session_names(&lookup.sessions()?, prefix));
         return Ok(ExitCode::SUCCESS);
     }
     let argument = args.argument.as_deref().expect("clap requires a fragment outside completion mode");
@@ -252,6 +257,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .config(&config)
         .maybe_tmux_config(args.tmux_config.as_deref())
         .grouped(args.group)
+        .satellite_prefix(args.satellite_prefix.as_deref().unwrap_or("_"))
         .startup(&args.command)
         .maybe_directory(args.dir.as_deref())
         .window_name(match args.window_name.as_deref() {
@@ -361,6 +367,7 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
         .maybe_config(args.tmux_config)
         .maybe_session_name(args.session_name)
         .grouped(args.group)
+        .maybe_satellite_prefix(args.satellite_prefix)
         .startup(args.command)
         .maybe_directory(args.dir)
         .window_name(match args.window_name.as_deref() {

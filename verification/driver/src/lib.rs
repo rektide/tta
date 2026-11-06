@@ -377,6 +377,11 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     }
     let deadline = Instant::now() + config.timeout;
     let mut last_observation = String::new();
+    let expected_name = if report.scenario == Scenario::Existing {
+        "_verify-project-1"
+    } else {
+        "verify-project"
+    };
     loop {
         if let Some(exit) = terminal.child.try_wait()? {
             terminal.exit = Some(exit.exit_code());
@@ -385,10 +390,10 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
                 exit.exit_code()
             );
         }
-        match fixture.state() {
+        match fixture.state_for(expected_name) {
             Ok(state) if state.attached == 1 && state.client_pids.len() == 1 => {
                 ensure!(state.cwd == fixture.project, "attached pane cwd mismatch: {state:?}");
-                ensure!(state.session_name == "verify-project", "wrong session: {state:?}");
+                ensure!(state.session_name == expected_name, "wrong session: {state:?}");
                 if report.mode == Mode::Direct {
                     ensure!(
                         report.terminal_pid == state.client_pids.first().copied(),
@@ -397,7 +402,11 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
                     );
                 }
                 if let Some(initial) = &report.initial {
-                    ensure!(state.session_id == initial.session_id, "attach replaced the seeded session");
+                    ensure!(state.session_id != initial.session_id, "existing entry did not create an independent view");
+                    ensure!(
+                        state.pane_id == initial.pane_id && state.pane_pid == initial.pane_pid,
+                        "satellite replaced the seeded work"
+                    );
                 }
                 if let Some(origin) = &report.origin_before {
                     ensure!(state.client_pids == origin.client_pids, "switch replaced the client or nested another client");
@@ -457,12 +466,23 @@ fn run(config: &Config, fixture: &Fixture, report: &mut Report, terminal: &mut O
     );
     let attached = report.attached.as_ref().unwrap();
     ensure!(
-        detached.session_id == attached.session_id && detached.pane_id == attached.pane_id && detached.pane_pid == attached.pane_pid,
+        detached.session_id == report.initial.as_ref().unwrap_or(attached).session_id
+            && detached.pane_id == attached.pane_id
+            && detached.pane_pid == attached.pane_pid,
         "detach replaced or destroyed session/pane state"
     );
     ensure!(detached.cwd == fixture.project, "detach changed cwd");
     report.detached = Some(detached);
-    record(report, "process exited cleanly; detached session and pane survived");
+    if report.scenario == Scenario::Existing {
+        ensure!(
+            fixture.state_for("_verify-project-1").is_err(),
+            "disposable view survived detach alongside base"
+        );
+    }
+    record(
+        report,
+        "process exited cleanly; workspace pane survived and disposable view followed lifecycle policy",
+    );
     terminal.settle_reader(config.timeout);
     if report.mode == Mode::Shell && !config.inside {
         ensure!(
@@ -499,11 +519,12 @@ fn check_trace(report: &Report) -> Result<()> {
         "trace backend disagrees with the selected backend"
     );
     if let Some(attached) = &report.attached {
+        let resolved_name = report.initial.as_ref().unwrap_or(attached).session_name.as_str();
         ensure!(
             report
                 .trace_events
                 .iter()
-                .any(|value| value["fields"]["event"] == "resolution" && value["fields"]["session_name"] == attached.session_name),
+                .any(|value| value["fields"]["event"] == "resolution" && value["fields"]["session_name"] == resolved_name),
             "trace session name disagrees with observed session"
         );
     }
