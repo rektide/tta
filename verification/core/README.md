@@ -6,7 +6,12 @@ resource: /verification/core/README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
+updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
+    title: Independently assess immutable replay costs and add a runner-free informational cost probe with explicit workload sizes
+  - resource: /verification/core/examples/replay_cost.rs
+    title: Median batch costs for ready next() and complete transcript replay, without target I/O or timing thresholds
   - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
     title: Link the promoted process-carrier round-trip sibling while preserving this toolkit's no-I/O supplied-facts and poison contract
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
@@ -71,6 +76,29 @@ The core's `Workflow::next()` yields `Observe(ObservationRequest)` or
 reply type. Errors from an observer stop at the observer boundary. There is no
 "unknown means empty" reply. Local I/O is implemented separately by
 [`tta-runner::driver`](../../session/runner/src/driver.rs).
+
+## Informational planning cost probe
+
+```sh
+cargo run --release -p tta-core-witness --example replay_cost -- --iterations 10000
+cargo run --release -p tta-core-witness --example replay_cost -- --extra-sessions 1000 --extra-projects 1000
+```
+
+[`replay_cost`](examples/replay_cost.rs) emits CSV for the four supplied-facts
+fixtures. It compares a repeated immutable `next()` on an already supplied
+workflow with a complete `replay(input.clone(), transcript)`, including input and
+reply cloning and `supply()`'s pending-request checks. Each operation drops its
+plan. Fixture construction, warmup and shared-graph compilation are outside the
+timed batches; CSV values are median per-operation batch means, not percentile
+latencies. `--iterations` and `--samples` must be positive (defaults: 1000 and 5).
+Extra inventories contain nonmatching names; they are workload dimensions, not
+simulated target discovery. Exact session hits intentionally retain their
+short-circuit path.
+
+This executable reads its arguments and a monotonic clock, but neither acquires
+target facts nor runs a plan. It has no timing assertions and establishes no
+latency budget, platform guarantee, or isolated runtime-versus-domain cost. Use
+it to inform a replay/caching decision, not to infer live tmux/SSH performance.
 
 ## Scope and independent runtime evidence
 
