@@ -99,6 +99,9 @@ This executable reads its arguments and a monotonic clock, but neither acquires
 target facts nor runs a plan. It has no timing assertions and establishes no
 latency budget, platform guarantee, or isolated runtime-versus-domain cost. Use
 it to inform a replay/caching decision, not to infer live tmux/SSH performance.
+The [entry architecture review](/design/entry/architecture0.gpt61sol.md#replay-cost-evidence-rather-than-an-assumed-optimization)
+records the first two workload measurements and why they did not justify actor
+persistence.
 
 ## Scope and independent runtime evidence
 

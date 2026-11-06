@@ -129,7 +129,8 @@ remain native. The graph has no actions, timers, invocations or I/O.
 The independent architecture review retains this progression rather than
 redesigning target bootstrap, resolver, matching or execution. The
 [port report](/design/entry/xmachines-port0.gpt61sol.md) records its baseline and
-friction. Completion takes
+friction; the [architecture review](/design/entry/architecture0.gpt61sol.md) records
+the retention decisions, hardening and measured replay costs. Completion takes
 `session_names()` and uses its shared `satellite_alias()` derivation without
 calling the winner-selection stage.
 

@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
+    title: Independently review entry architecture, retain the pure graph-driven contract and link typed dispatch, stricter conformance and measured replay costs
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
     title: Port supplied-facts progression faithfully to the selected XState 6 Rust runtime, preserve native API and emission, and document the control boundary
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
@@ -704,7 +706,9 @@ replays supplied facts through that graph; `Clone + Send + Sync`, native paths,
 argv and typed domain errors remain intact. No machine action performs I/O.
 The [overall input and session-resolution diagrams](doc/entry/README.md#input-state-machine)
 mirror the code; the [port report](design/entry/xmachines-port0.gpt61sol.md)
-records verification and architectural tradeoffs.
+records baseline verification and tradeoffs. The subsequent
+[architecture review](design/entry/architecture0.gpt61sol.md) retains the pure
+backbone, strengthens typed dispatch/diagram checks and measures replay cost.
 See the [runner-free toolkit](verification/core/README.md) for runnable examples.
 The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records the
 first milestone; the [SSH checkpoint](design/launcher/runner-core2.gpt61sol.md)
