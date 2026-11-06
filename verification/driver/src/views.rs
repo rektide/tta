@@ -46,7 +46,9 @@ pub fn exercise(config: &Config, mode: Mode, prefix: &str) -> ViewReport {
         let preflight = fixture.tmux(&["list-sessions"])?;
         isolation::verify_absence(&fixture.socket, &preflight)?;
         fixture.proved.set(true);
-        run(config, fixture, mode, prefix, &mut terminals, &mut report)
+        let mut config = config.clone();
+        config.tta = std::path::absolute(&config.tta)?;
+        run(&config, fixture, mode, prefix, &mut terminals, &mut report)
     })();
     if let Err(error) = result {
         report.failure = Some(format!("{error:#}"));
@@ -164,6 +166,20 @@ fn select(fixture: &Fixture, session: &str, window: &str) -> Result<()> {
     Ok(())
 }
 
+fn client_views(fixture: &Fixture, first: &State, first_window: &str, second: &State, second_window: &str, report: &mut ViewReport) -> Result<()> {
+    let rows = output(fixture, &["list-clients", "-F", "#{client_pid} #{window_id}"])?;
+    for (client, window) in [(first, first_window), (second, second_window)] {
+        ensure!(client.client_pids.len() == 1, "expected one real terminal client: {client:?}");
+        let expected = format!("{} {window}", client.client_pids[0]);
+        ensure!(
+            rows.lines().any(|row| row == expected),
+            "client display disagrees with selection: expected {expected}; {rows}"
+        );
+    }
+    report.observations.push(rows);
+    Ok(())
+}
+
 fn detach(terminal: &mut Terminal, timeout: Duration) -> Result<()> {
     terminal.writer.write_all(b"\x02d")?;
     terminal.writer.flush()?;
@@ -197,12 +213,14 @@ fn run(config: &Config, fixture: &Fixture, mode: Mode, prefix: &str, terminals: 
     report.observations.push(format!("cold={first:?}; later={second:?}; shared={initial_panes:?}"));
     select(fixture, &satellite, &other)?;
     ensure!(window(fixture, &satellite)? == other && window(fixture, base)? == original, "B moved A");
+    client_views(fixture, &first, &original, &second, &other, report)?;
     select(fixture, base, &other)?;
     select(fixture, &satellite, &original)?;
     ensure!(
         window(fixture, base)? == other && window(fixture, &satellite)? == original,
         "B's return moved A"
     );
+    client_views(fixture, &first, &other, &second, &original, report)?;
     select(fixture, base, &original)?;
     ensure!(window(fixture, &satellite)? == original, "A moved B");
     select(fixture, base, &other)?;
@@ -210,6 +228,7 @@ fn run(config: &Config, fixture: &Fixture, mode: Mode, prefix: &str, terminals: 
         window(fixture, base)? == other && window(fixture, &satellite)? == original,
         "A's selection moved B"
     );
+    client_views(fixture, &first, &other, &second, &original, report)?;
     select(fixture, base, &original)?;
     report
         .observations

@@ -722,6 +722,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         .env("TTA_ROOT", "/local/wrong")
         .env("TTA_CONFIG", "/local/wrong")
         .env("TTA_TMUX", "/local/wrong")
+        .env("TTA_SATELLITE_PREFIX", "local-wrong-")
         .env("TMUX", "/local/wrong,1,0");
     let emission = checked(&mut cli, fixture.timeout)?;
     ensure!(
@@ -731,7 +732,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     let mut eval = CommandBuilder::new("/bin/sh");
     eval.args(["-c", emission.stdout.trim_end_matches('\n')]);
     fixture.local_environment(&mut eval);
-    fixture.terminal(eval, name, report, false, false)?;
+    fixture.terminal(eval, &format!("_{name}-1"), report, false, false)?;
     report
         .checks
         .push(json!({"check": "CLI SSH print-shell discovers read-only and emits an evaluable LOCAL SSH invocation", "output": emission}));
@@ -787,7 +788,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     }
     let calls = std::fs::read(fixture.directory.path().join("tmux-argv"))?;
     let new_sessions = calls.split(|b| *b == 0).filter(|word| *word == b"new-session").count();
-    let expected = if config.consumer.is_some() { 7 } else { 5 };
+    let expected = if config.consumer.is_some() { 10 } else { 8 };
     ensure!(new_sessions == expected, "unexpected tmux creation replay: {new_sessions}, expected {expected}");
     report.checks.push(json!({"check": "recorded target tmux argv: exactly one mutation invocation per authorized attempt", "new_session_invocations": new_sessions, "argv_bytes": calls}));
     Ok(())
