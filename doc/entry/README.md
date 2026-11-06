@@ -7,12 +7,16 @@ status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
+  - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
+    title: Inspect the XState 6 target boundary and document existing session resolution as a separate code-aligned diagram without changing runtime behavior
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
     title: Declare and align the input state machine before implementation, then implement and verify independent outside views, prefix-aware aliases and actual-group matching
   - resource: /session/launcher/src/workflow.rs
     title: Existing pure observation-driven launch progression
   - resource: /session/launcher/src/resolve.rs
     title: Session-first resolution and project/scaffold fallback
+  - resource: /session/launcher/src/workspace.rs
+    title: Literal exact preference, alias ranking and actual-group tie collapse
   - resource: /session/launcher/src/plan.rs
     title: Existing grouped create, client handoff and keep-last queue
   - resource: /design/launcher/launch-backends1.gpt61sol.md
@@ -96,6 +100,43 @@ pending request. The chart's boxes name those real stages; it does not introduce
 a second scheduler or an unimplemented parallel state machine. Completion takes
 `session_names()` and uses its shared `satellite_alias()` derivation without
 calling the winner-selection stage.
+
+### Session-resolution detail
+
+This expands the overall chart's `resolve_unique(...) ?` stage, not the project
+fallback or satellite allocation. It follows `workspace::select` and the
+`resolve_unique` error guard in their actual order:
+
+```mermaid
+flowchart TD
+    resolveUnique["resolve_unique(sessions, argument, prefix)"] --> validateSessionInput["Guard: nonempty fragment and valid prefix"]
+    validateSessionInput --> rawExact{"Literal session name equals fragment?"}
+    rawExact -->|Yes| exactSession["Return that canonical session from workspace::select"]
+    rawExact -->|No| aliasCandidates["For each session: literal name + one-step satellite alias<br/>Keep literal substring matches; score by minimum Unicode length"]
+    aliasCandidates --> shortestCandidates["Retain globally shortest scores<br/>Sort by literal name, then canonical ID"]
+    shortestCandidates --> workspaceCandidates["Collapse equal IDs or equal nonempty actual groups<br/>Keep first sorted representative; ungrouped sessions stay distinct"]
+    workspaceCandidates --> uniqueGuard["Guard: at most one workspace candidate<br/>workspace::select error maps to ResolveError::Sessions via ?"]
+    uniqueGuard --> uniqueOption["Return Ok(None) or Ok(Some(session))"]
+    exactSession --> existingSelection["resolve_unique maps Some(session)<br/>to Some(Selection::Existing(session))"]
+    uniqueOption --> mapSelection["resolve_unique maps optional session<br/>to optional existing selection"]
+    mapSelection --> resolveContinuation["resolve(): resolve_unique(...) ?"]
+    existingSelection --> resolveContinuation
+    resolveContinuation --> selectionReturned{"Selection returned?"}
+    selectionReturned -->|Some| selectedSession["Return Resolution::Selected<br/>Do not inspect project directories"]
+    selectionReturned -->|None| projectContinuation["Continue to project facts<br/>NeedProjects if not supplied"]
+    validateSessionInput -.->|Invalid input| resolutionError["Return error; no selected/missing continuation"]
+    uniqueGuard -.->|Ambiguous| resolutionError
+```
+
+Exact aliases are not a separate search pass in the code: their score equals
+the fragment's length and therefore wins the same minimum-length comparison.
+Actual-group collapse happens **after** shortest ranking; group membership does
+not admit longer candidates. Ambiguity leaves through `?` before the final
+`Some`/`None` decision. Completion does not execute this selection procedure.
+
+The [XState 6 target investigation](/design/entry/xstate6-target0.gpt61sol.md)
+records the unresolved package/runtime choice for a future faithful port. These
+charts describe the current Rust implementation, not a completed XState port.
 
 ## Names, aliases and workspace winners
 
