@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
+  - resource: opencode://ses_e4dbbb07bffeqm6Khh2fp29jNR
+    title: Link the post-completion capability-oriented ticket proposal from its entry domain
   - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
     title: Review the port independently, retain immutable replay and the eight-stage graph, type native dispatch and enforce exact ordered diagram conformance
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
@@ -268,3 +270,11 @@ The [maintained user guide](/README.md#how-we-use-tmux) describes released behav
 the [historical two-terminal trial](/verification/trials/independent-views/README.md)
 preserves the defect evidence this contract must not erase. Current acceptance:
 [two-real-terminal verification](/verification/views/README.md).
+
+## Related work organization
+
+The [capability-oriented ticket pitch](/design/entry/ticket-surface0.gpt6a.md)
+proposes navigation from user-visible entry, discovery, creation and remote work
+to existing delivery and follow-up tickets. It preserves the distinction between
+shipped outside views, open guarded inside switching and multi-root discovery;
+the proposed ticket changes are not an adopted hierarchy or new runtime contract.
