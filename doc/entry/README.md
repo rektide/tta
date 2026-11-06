@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
+  - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
+    title: Review the port independently, retain immutable replay and the eight-stage graph, type native dispatch and enforce exact ordered diagram conformance
   - resource: opencode://ses_e4de0f8b5ffeW5ODAtJx9rWv3u
     title: Verify the XState 6 target, port pure progression to xmachines-runtime 1.1.0, preserve native data and errors, and align both diagrams with verified code
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
@@ -68,11 +70,11 @@ flowchart TD
     projects -->|observed| resolve
     resolve -->|destination_needed| destination
     destination -->|observed| resolve
-    resolve -->|resolved, needs_defaults first| defaults
+    resolve -->|resolved, needs_defaults| defaults
     defaults -->|observed| resolve
-    resolve -->|resolved, needs_satellite second| fresh_sessions
+    resolve -->|resolved, needs_satellite| fresh_sessions
     fresh_sessions -->|observed| prepare
-    resolve -->|resolved, neither guard| prepare
+    resolve -->|resolved, otherwise| prepare
     prepare -->|prepared| ready
 
     ready --> emission{"Output mode?"}
@@ -105,8 +107,9 @@ states, selections or opportunities to create a project.
 
 The eight lower-case nodes are exactly the states in
 [`entry.machine.json`](/session/launcher/src/workflow/entry.machine.json); their
-labeled arrows are its transitions. A regression test checks these diagram
-edges against the parsed executable graph. Preprocessing/completion and
+labeled arrows are its transitions. A regression test checks exact diagram
+routes and per-event guard order against the parsed executable graph, rejecting
+extra/missing routes as well as event-name drift. Preprocessing/completion and
 emission/execution stay outside the graph. The `resolved` transition tests
 `needs_defaults`, then `needs_satellite`, then the unguarded preparation path.
 Domain errors leave through native `?` **before** a successful control event;
@@ -118,15 +121,15 @@ missing fact it returns `Observe`; it performs no observation itself.
 `Workflow::supply()` answers only that pending request, storing the native fact;
 the next pull replays again. This preserves immutable pulls, independent clones
 and `Send + Sync` without retaining or locking a mutable actor. Rust handlers
-dispatch on the actor's active state and send outcome events; they do **not**
-choose a second independent next state. Only event kinds and two policy booleans
+exhaustively dispatch on the actor's typed `Stage` and send outcome events; they
+do **not** choose a second independent next state. Only event kinds and two policy booleans
 are serialized; paths, argv, config, generator functions, plans and typed errors
 remain native. The graph has no actions, timers, invocations or I/O.
 
-This is deliberately a faithful progression port, not a redesign of the target
-bootstrap, resolver, matching or execution. The
-[implementation report](/design/entry/xmachines-port0.gpt61sol.md) records evidence
-and friction for the next fresh architecture session. Completion takes
+The independent architecture review retains this progression rather than
+redesigning target bootstrap, resolver, matching or execution. The
+[port report](/design/entry/xmachines-port0.gpt61sol.md) records its baseline and
+friction. Completion takes
 `session_names()` and uses its shared `satellite_alias()` derivation without
 calling the winner-selection stage.
 

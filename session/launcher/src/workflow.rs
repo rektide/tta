@@ -141,7 +141,7 @@ impl Workflow {
     }
 
     pub fn next(&self) -> Result<Progress, Error> {
-        use machine::{Control, Event};
+        use machine::{Control, Event, Stage};
 
         let input = &self.input;
         let sessions_request = || ObservationRequest::Sessions {
@@ -161,14 +161,14 @@ impl Workflow {
         let mut satellite = None;
         let mut prepared = None;
         loop {
-            match control.state() {
-                "sessions" => {
+            match control.stage() {
+                Stage::Sessions => {
                     if self.sessions.is_none() {
                         return Ok(Progress::Observe(sessions_request()));
                     }
                     control.send(Event::Observed);
                 }
-                "resolve" => {
+                Stage::Resolve => {
                     let sessions = self.sessions.as_ref().expect("sessions stage supplied inventory");
                     let progress = scaffold::resolve()
                         .sessions(sessions.sessions())
@@ -209,21 +209,21 @@ impl Workflow {
                         scaffold::Progress::Observe(crate::Resolution::Selected(_)) => unreachable!("scaffold handles selections"),
                     }
                 }
-                "projects" => {
+                Stage::Projects => {
                     let Some(facts) = &self.projects else {
                         return Ok(Progress::Observe(pending.expect("resolver requested projects")));
                     };
                     projects = Some(facts);
                     control.send(Event::Observed);
                 }
-                "destination" => {
+                Stage::Destination => {
                     let Some(facts) = self.destination else {
                         return Ok(Progress::Observe(pending.expect("resolver requested destination")));
                     };
                     destination = Some(facts);
                     control.send(Event::Observed);
                 }
-                "defaults" => {
+                Stage::Defaults => {
                     let Some(facts) = &self.defaults else {
                         let generator = resolved
                             .as_ref()
@@ -240,7 +240,7 @@ impl Workflow {
                     defaults_supplied = true;
                     control.send(Event::Observed);
                 }
-                "fresh_sessions" => {
+                Stage::FreshSessions => {
                     let Selection::Existing(session) = &resolved.as_ref().expect("resolved before satellite guard").selection else {
                         unreachable!("satellite guard requires existing selection")
                     };
@@ -255,7 +255,7 @@ impl Workflow {
                     satellite = Some(name);
                     control.send(Event::Observed);
                 }
-                "prepare" => {
+                Stage::Prepare => {
                     let resolved = resolved.take().expect("resolved before preparation");
                     let plan = crate::prepare_launch()
                         .selection(&resolved.selection)
@@ -277,8 +277,7 @@ impl Workflow {
                     }));
                     control.send(Event::Prepared);
                 }
-                "ready" => return Ok(Progress::Ready(prepared.expect("prepared before readiness"))),
-                state => unreachable!("unhandled embedded entry machine state {state}"),
+                Stage::Ready => return Ok(Progress::Ready(prepared.expect("prepared before readiness"))),
             }
         }
     }

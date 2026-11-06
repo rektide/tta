@@ -11,6 +11,36 @@ use xmachines_runtime::{Actor, Ev, EventType, Machine, Registry};
 
 pub(super) const DEFINITION: &str = include_str!("entry.machine.json");
 
+/// The native handler vocabulary, not another transition table. The graph alone
+/// chooses the successor; Rust exhaustively implements each resulting stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Stage {
+    Sessions,
+    Resolve,
+    Projects,
+    Destination,
+    Defaults,
+    FreshSessions,
+    Prepare,
+    Ready,
+}
+
+impl Stage {
+    fn from_id(id: &str) -> Self {
+        match id {
+            "sessions" => Self::Sessions,
+            "resolve" => Self::Resolve,
+            "projects" => Self::Projects,
+            "destination" => Self::Destination,
+            "defaults" => Self::Defaults,
+            "fresh_sessions" => Self::FreshSessions,
+            "prepare" => Self::Prepare,
+            "ready" => Self::Ready,
+            _ => panic!("unhandled embedded entry machine stage {id}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum Event {
@@ -54,45 +84,102 @@ impl Control {
         Self(Actor::start(Arc::clone(&MACHINE), 0).expect("entry machine has no fallible initialization"))
     }
 
-    pub(super) fn state(&self) -> &str {
+    pub(super) fn stage(&self) -> Stage {
         let states = self.0.active_leaf_ids();
         assert_eq!(states.len(), 1, "entry machine must have one active leaf");
-        states[0]
+        Stage::from_id(states[0])
     }
 
     pub(super) fn send(&mut self, event: Event) {
-        let before = self.state().to_owned();
+        let before = self.stage();
         self.0.send(event, 0).expect("entry control events have no fallible actions");
-        assert_ne!(self.state(), before, "entry event must advance the embedded graph");
+        assert_ne!(self.stage(), before, "entry event must advance the embedded graph");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    const DOCUMENT: &str = include_str!("../../../../doc/entry/README.md");
+
+    fn overall_diagram() -> &'static str {
+        DOCUMENT.split("```mermaid\nflowchart TD\n").nth(1).unwrap().split("```").next().unwrap()
+    }
+
+    // Only the machine's subgraph belongs here. Prelude/completion, native error
+    // exits and emission/execution are intentionally outside its control graph.
+    // Preserve per-event arrow order: matching an unordered edge set would miss
+    // a diagram that reverses the runtime's ordered policy guards.
+    fn diagram_agrees(diagram: &str) -> bool {
+        type Routes = BTreeMap<(String, String), Vec<String>>;
+        let definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
+        let states = definition["states"].as_object().unwrap();
+        let mut expected = Routes::new();
+        for (source, state) in states {
+            if !diagram.lines().any(|line| line.trim_start().starts_with(&format!("{source}["))) {
+                return false;
+            }
+            let Some(events) = state.get("on").and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            for (event, transitions) in events {
+                let transitions = transitions.as_array().cloned().unwrap_or_else(|| vec![transitions.clone()]);
+                for transition in &transitions {
+                    let target = transition["target"].as_str().unwrap();
+                    let label = match transition["guard"]["type"].as_str() {
+                        Some(guard) => format!("{event}, {guard}"),
+                        None if transitions.len() > 1 => format!("{event}, otherwise"),
+                        None => event.clone(),
+                    };
+                    expected.entry((source.clone(), event.clone())).or_default().push(format!("{label}| {target}"));
+                }
+            }
+        }
+        let mut actual = Routes::new();
+        for line in diagram.lines() {
+            let Some((source, arrow)) = line.trim().split_once(" -->") else {
+                continue;
+            };
+            if !states.contains_key(source) {
+                continue;
+            }
+            let (label, target) = match arrow.strip_prefix('|').and_then(|arrow| arrow.split_once("| ")) {
+                Some(parts) => parts,
+                None => ("", arrow.trim()),
+            };
+            if !states.contains_key(target) {
+                continue;
+            }
+            let event = label.split(", ").next().unwrap();
+            actual.entry((source.into(), event.into())).or_default().push(format!("{label}| {target}"));
+        }
+        actual == expected
+    }
 
     #[test]
     fn executable_graph_routes_every_observation_and_guard_in_priority_order() {
         for (defaults, satellite, expected) in [
-            (true, true, "defaults"),
-            (true, false, "defaults"),
-            (false, true, "fresh_sessions"),
-            (false, false, "prepare"),
+            (true, true, Stage::Defaults),
+            (true, false, Stage::Defaults),
+            (false, true, Stage::FreshSessions),
+            (false, false, Stage::Prepare),
         ] {
             let mut control = Control::new();
-            assert_eq!(control.state(), "sessions");
+            assert_eq!(control.stage(), Stage::Sessions);
             control.send(Event::Observed);
-            for (event, pending) in [(Event::ProjectsNeeded, "projects"), (Event::DestinationNeeded, "destination")] {
+            for (event, pending) in [(Event::ProjectsNeeded, Stage::Projects), (Event::DestinationNeeded, Stage::Destination)] {
                 control.send(event);
-                assert_eq!(control.state(), pending);
+                assert_eq!(control.stage(), pending);
                 control.send(Event::Observed);
-                assert_eq!(control.state(), "resolve");
+                assert_eq!(control.stage(), Stage::Resolve);
             }
             control.send(Event::Resolved {
                 needs_defaults: defaults,
                 needs_satellite: satellite,
             });
-            assert_eq!(control.state(), expected);
+            assert_eq!(control.stage(), expected);
             if defaults {
                 control.send(Event::Observed);
                 control.send(Event::Resolved {
@@ -101,12 +188,12 @@ mod tests {
                 });
             }
             if satellite {
-                assert_eq!(control.state(), "fresh_sessions");
+                assert_eq!(control.stage(), Stage::FreshSessions);
                 control.send(Event::Observed);
             }
-            assert_eq!(control.state(), "prepare");
+            assert_eq!(control.stage(), Stage::Prepare);
             control.send(Event::Prepared);
-            assert_eq!(control.state(), "ready");
+            assert_eq!(control.stage(), Stage::Ready);
             assert_eq!(control.0.status(), xmachines_runtime::Status::Done);
             assert!(control.0.pending_effects().is_empty());
             assert_eq!(control.0.next_deadline(), None);
@@ -125,6 +212,9 @@ mod tests {
         let definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
         let states = definition["states"].as_object().unwrap();
         assert_eq!(states.len(), 8);
+        for id in states.keys() {
+            Stage::from_id(id);
+        }
         for state in states.values() {
             let fields = state.as_object().unwrap();
             assert!(fields.keys().all(|key| matches!(key.as_str(), "id" | "on" | "type")));
@@ -132,34 +222,23 @@ mod tests {
     }
 
     #[test]
-    fn maintained_overall_diagram_contains_every_executable_state_transition_and_guard() {
-        let document = include_str!("../../../../doc/entry/README.md");
-        let diagram = document.split("```mermaid\nflowchart TD\n").nth(1).unwrap().split("```").next().unwrap();
-        let definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
-        for (source, state) in definition["states"].as_object().unwrap() {
-            assert!(
-                diagram.lines().any(|line| line.trim_start().starts_with(&format!("{source}["))),
-                "missing state {source}"
-            );
-            let Some(events) = state.get("on").and_then(serde_json::Value::as_object) else {
-                continue;
-            };
-            for (event, transitions) in events {
-                let transitions = transitions.as_array().cloned().unwrap_or_else(|| vec![transitions.clone()]);
-                for transition in transitions {
-                    let target = transition["target"].as_str().unwrap();
-                    let guard = transition["guard"]["type"].as_str();
-                    assert!(
-                        diagram.lines().any(|line| {
-                            let line = line.trim();
-                            line.starts_with(&format!("{source} -->|{event}"))
-                                && line.ends_with(&format!("| {target}"))
-                                && guard.is_none_or(|guard| line.contains(guard))
-                        }),
-                        "diagram missing {source} / {event} / {guard:?} -> {target}"
-                    );
-                }
-            }
+    fn maintained_overall_diagram_matches_exact_routes_and_guard_priority() {
+        assert!(diagram_agrees(overall_diagram()));
+    }
+
+    #[test]
+    fn diagram_check_rejects_extra_missing_misnamed_and_reordered_routes() {
+        let diagram = overall_diagram();
+        let first = "resolve -->|resolved, needs_defaults| defaults";
+        let second = "resolve -->|resolved, needs_satellite| fresh_sessions";
+        for changed in [
+            format!("{diagram}\n    sessions -->|observed| prepare"),
+            format!("{diagram}\n    sessions --> prepare"),
+            diagram.replace(first, ""),
+            diagram.replace("projects_needed|", "projects_needed_typo|"),
+            diagram.replace(first, "TEMPORARY").replace(second, first).replace("TEMPORARY", second),
+        ] {
+            assert!(!diagram_agrees(&changed), "accepted diagram drift: {changed}");
         }
     }
 }
