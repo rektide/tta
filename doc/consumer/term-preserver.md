@@ -7,6 +7,8 @@ status: implemented-partial
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
+    title: Check the 0.6.0 independent-view API against the receiving consumer, preserve explicit grouping policy and refresh its lock
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
     title: Integrate and exercise the runner's SSH planning through the consumer's local attempt worker and real proxy/PTY
   - resource: file:///home/rektide/src/term-preserver/src/launcher.rs
@@ -22,12 +24,20 @@ sources:
 # Implemented adoption
 
 [term-preserver's launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md)
-owns consumer behavior. Its `tta-lib` feature embeds `tta-launcher` 0.4.0,
+owns consumer behavior. Its `tta-lib` feature now embeds `tta-launcher` 0.6.0,
 `tta-runner` and `tta-command`; both scaffold adapters are compiled. Local attempts
 reuse `tta_runner::prepare` and semantic native/CLI execution. SSH attempts keep
 the worker **local**, use `ssh::prepare` for context/registry and framed read-only
 observations, then pass `PreparedRemote::command()` to the consumer's transport.
 The parent proxy, PTY and user retry prompt remain consumer-owned.
+
+The 0.6.0 library default gives omitted outside grouping an independent view,
+but this consumer passes `.grouped(launch.tmux_group)` explicitly in both local
+and SSH preparation. Its intentional caller policy is preserved, not replaced
+by tta's CLI default. `cargo check --all-targets --all-features` and the nine
+`launcher::` tests pass with the updated receiving lock. This checks compatibility
+of actual adoption; it does not claim new consumer prefix UI or inside-origin
+inference support. The receiving lock also adopts the already-required tmax 0.7.0.
 
 Auto chooses embedding for SSH without probing for a target tta executable.
 Matching/read/generator/execution failures never fall through to classic creation.

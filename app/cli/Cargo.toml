@@ -1,6 +1,6 @@
 [package]
 name = "tta"
-description = "Attach to a matching tmux session, or start one in a matching project"
+description = "Enter persistent tmux project workspaces with independent terminal views"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

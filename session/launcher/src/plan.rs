@@ -73,6 +73,9 @@ pub enum PlanError {
 /// command as the first step, before entering the directory it must produce.
 /// Created sessions name their initial window per `window_name` (default:
 /// after the session); grouped satellites cannot take a window name.
+/// Omitted grouping means independent outside attachment and ordinary inside
+/// switching. Grouped existing selections require a supplied satellite name;
+/// the observation-driven workflow chooses it from fresh session facts.
 #[builder]
 pub fn launch(
     selection: &Selection,

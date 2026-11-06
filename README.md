@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#medium" }
+updated: { at: 2026-11-06, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
+    title: Declare the input state machine, implement independent outside defaults and configurable satellite aliases, and verify real-terminal and transport boundaries
   - resource: opencode://ses_e4e3219d0ffejILMxLRXqN5tWs
     title: Prefer the shortest matching session or project name, retaining ambiguity for shortest-name ties
   - resource: opencode://ses_e5127716effeh5HRrE4o5Cw1r2
@@ -71,14 +73,15 @@ into one command. Give it a name or a fragment: it finds a running session,
 opens a project directory in a new session, or scaffolds a fresh project with
 your configured generator.
 
-Its tmux trick is **shared work with independent window selection**. Open a
-grouped satellite from another terminal and navigate the same running windows
+Its tmux trick is **shared work with independent window selection**. Run plain
+tta from another terminal and navigate the same running windows
 without moving the first terminal to a different window. Detach when you're
 done; tmux keeps the work alive.
 
 ```sh
 tta myproject                            # resume it, or start it from ~/src
-tta --group myproject                    # another view of its running windows
+tta myproject                            # in another terminal: independent view, same work
+tta --group=false myproject              # intentionally share window selection
 tta --ssh work myproject                 # target needs tmux, not installed tta
 tta myproject -- nvim 'file with spaces'  # start nvim only if creating a session
 tta --scaffold=mine new-project           # generate a project, then enter it
@@ -103,13 +106,15 @@ a current-window selection. Each **window** contains panes and their running
 processes. A **session group** lets several sessions share the same windows
 while retaining their own current-window selection.
 
-That distinction makes two useful ways to enter a workspace:
+That distinction gives two outside-entry modes:
 
-- **`tta myproject`** joins the matching session. Clients attached to that same
-  session follow its current-window selection together.
-- **`tta --group myproject`** creates a satellite session in the same group.
+- **`tta myproject`**, outside tmux, creates a satellite session in the same group.
   Each session can select a different window, with the same underlying work
   available in both.
+- **`tta --group=false myproject`** joins the selected session directly. Clients
+  attached to that same session follow its current-window selection together.
+- Inside tmux, omitted grouping retains ordinary client switching. Explicit
+  `--group` requests a satellite there too; it does not resolve client identity.
 
 ```mermaid
 flowchart LR
@@ -128,7 +133,7 @@ of the terminal state.
 
 ### Grouped satellites, startup argv and initial directory
 
-On an existing match, `--group` chooses the smallest unused satellite suffix:
+On an existing outside match, tta chooses the smallest unused satellite suffix:
 `_myproject-1`, `_myproject-2`, and so on. It creates that satellite detached,
 attaches or switches to its exact name, then sets its session option
 `destroy-unattached` to `keep-last`.
@@ -136,13 +141,24 @@ attaches or switches to its exact name, then sets its session option
 **The view is disposable; the shared work persists.** An unattached satellite
 is removed while another session in the group remains. If it is the last
 session in the group, it is retained. This uses **tmux 3.4+**. When the project
-needs its first session, `--group` creates that ordinary session directly.
+needs its first session, tta creates that ordinary session directly.
+
+Set `--satellite-prefix view-` or `TTA_SATELLITE_PREFIX=view-` to use names such
+as `view-myproject-1` instead. The default prefix is `_`. Explicit CLI wins over
+environment. Prefixes must be nonempty, with no `.`, `:` or control characters;
+an empty environment value is unset, but an explicit empty prefix is an error.
+
+If only `_myproject-42` survives after the original session is gone, both
+`tta myproject` and Tab's `myproject` alias return to its running work. A new view
+is named `_myproject-1`, not `__myproject-42-1`. Alias recognition uses the active
+prefix plus one final `-DIGITS`, not arbitrary trailing digits or recursive
+stripping. Keep the same prefix configuration when returning to a workspace.
 
 | Entry option | New project session | Existing session | Grouped satellite |
 | --- | --- | --- | --- |
 | `--dir PATH` | Initial pane directory, overriding the project directory | No effect | Session starting directory; existing shared panes keep their cwd |
 | `-- ARGV...` | Startup executable and literal arguments | No effect | No effect; existing processes are shared |
-| `--session-name NAME` | Override the new session's name | No effect | Satellite name is derived from the matched session |
+| `--session-name NAME` | Override the new session's name | No effect | Actual group's logical base supplies the satellite name |
 | `--window-name NAME` | Name the initial window (default: the session name) | No effect | No effect; tmux rejects `-n` with `-t`, and satellites share the group's windows |
 
 ```sh
@@ -174,7 +190,8 @@ is currently heuristic, not a reliable input-origin identity.
 
 | Selected work | Outside tmux | Inside the same server |
 | --- | --- | --- |
-| Existing session | Attach by session ID | Switch a client by session ID |
+| Existing session, omitted grouping | Create a satellite, then attach | Switch a client by session ID |
+| Existing session with `--group=false` | Attach by session ID | Switch a client by session ID |
 | Existing session with `--group` | Create a satellite, then attach | Create a satellite, then switch a client |
 | Project directory | Create and attach | Create detached, then switch on success |
 | Missing project, configured scaffold active | Generate, then create and attach | Generate, create detached, then switch |
@@ -182,22 +199,23 @@ is currently heuristic, not a reliable input-origin identity.
 The real tmux client owns the terminal: direct execution replaces tta with it.
 Switching to a different server from inside tmux is an error.
 
-**Independent views today:** use `tta --group PROJECT` from each outside terminal.
-Plain `tta PROJECT` still shares one session's current-window selection. The
-[independent-view follow-up](design/launcher/launch-backends1.gpt61sol.md) proposes
-making independent views the default, but that default is not yet changed.
+**Independent views are the outside default**, including SSH and reusable
+workflow/runner APIs. Explicit caller grouping policy is preserved. The
+[input-state contract](doc/entry/README.md) connects the Mermaid flow to the
+actual core resolution, observation and planning stages.
 
 **Known inside-switch limitation:** when two clients show the same shared pane,
 they use the same shell/environment/tty. Recent activity can make tmux choose
 the other terminal for a switch. This is reproduced with two real terminals on
 both backends; using CLI switching does not solve the identity ambiguity. The
-[recorded trial](verification/trials/independent-views/README.md) and follow-up
-hold the explicit-client targeting decision rather than pretending a native
-client-name query would prove which terminal invoked tta.
+[historical trial](verification/trials/independent-views/README.md) preserves that
+defect. Guarded inside switching is separately scoped; this outside-default change
+does not claim to fix it or establish which terminal supplied shared-pane input.
 
 ## Build and install
 
-Requires Rust, a Unix terminal, and **tmux 3.2+** (**3.4+** for satellites).
+Requires Rust, a Unix terminal, and **tmux 3.4+** for default independent views
+(**3.2+** for explicit shared-only entry).
 The default native backend requires **little-endian Linux** and a
 tmux protocol supported by the [tmax checkout](file:///home/rektide/src/tmux-interface-control/README.md).
 This launch-backend slice was verified with a pinned tmux **3.7c** fixture and
@@ -332,7 +350,7 @@ registry and adapter decisions; work anchor: `tta-scaffold`.
 
 ## Zim / Zsh completion
 
-Complete **live session names and project directory names**, using prefixes,
+Complete **live workspace aliases and project directory names**, using prefixes,
 substrings, or wildcard patterns:
 
 ```text
@@ -344,6 +362,12 @@ tta *wire*nat*<Tab>    → tta pipewire-native
 **Press Tab before Enter.** Wildcards belong to completion; the launcher matches
 literal names. Multiple candidates remain available in Zsh's completion UI,
 and inserted names are shell-escaped. Options and `--scaffold=` names complete too.
+Generated satellites complete as their logical project name, including when the
+original session is gone. Literal selectors remain reachable by typing their
+decoration, for example `_myproj`; custom prefix configuration is forwarded to
+the read-only inventory. Completion offers all aliases, not just the shortest
+launch winner. Distinct workspaces with the same alias can still be ambiguous
+on Enter; use the reported literal selector to disambiguate.
 
 After installing the binary, put the local module in `.zimrc` before completion:
 
@@ -375,15 +399,15 @@ Work anchor: `tta-zsh-completion`.
 
 ## How a fragment becomes an action
 
-**Sessions first. Exact names first. Otherwise, the shortest literal substring match.**
+**Sessions first. Exact raw name, then exact workspace alias, then shortest substring.**
 
 ```mermaid
 flowchart TD
-    sessionMatch{"Session match?"} -->|Selected| enterSession["Attach, switch, or create satellite"]
-    sessionMatch -->|Ambiguous| stopResolution["Report candidates; stop"]
-    sessionMatch -->|None| projectMatch{"Project directory match?"}
-    projectMatch -->|Selected| createSession["Create session and enter"]
-    projectMatch -->|Ambiguous| stopResolution
+    resolveUnique["resolve_unique(sessions, fragment, prefix)?<br/>Ambiguity/error exits before continuation"] --> sessionMatch{"Selection returned?"}
+    sessionMatch -->|Some| enterSession["Attach, switch, or create satellite"]
+    sessionMatch -->|None| resolveProject["matching::select(projects, fragment)?<br/>Ambiguity/error exits before continuation"]
+    resolveProject --> projectMatch{"Project returned?"}
+    projectMatch -->|Some| createSession["Create session and enter"]
     projectMatch -->|None| generatorReady{"Scaffold active and configured?"}
     generatorReady -->|Yes| generateProject["Validate name and target; generate project"]
     generateProject --> createSession
@@ -395,6 +419,13 @@ match, `myfoo` wins over `foobar` because its name is shorter. Length is measure
 in Unicode characters; ties between shortest names (such as `afoo` and `zfoo`)
 remain ambiguous and report only those tied candidates. A directory named `foo`
 does not override either session result.
+
+Satellite aliases participate at their logical name's length: `_foo-42` offers
+`foo`. Equal winners in one **actual tmux group** are one workspace; equal winners
+in unrelated groups (or separate ungrouped sessions) remain ambiguous, regardless
+of similar names. An exact raw selector wins even over another group's identical
+alias. The [full state machine](doc/entry/README.md#input-state-machine) documents
+guards, numeric stripping, deterministic group representatives and pure stages.
 
 ### Matching and failure behavior
 
@@ -468,6 +499,7 @@ tta does not expand embedded `~`, variables, or argument strings.
 | `TTA_TRACE` | `--trace` / `--trace=false` | JSON stderr diagnostics; `true`/`1` or `false`/`0`; default off |
 | `TTA_SCAFFOLD` | `--scaffold[=NAME]` / `--scaffold=false` | Generator name; `default`/`true`/`1` for default; `false`/`0`/`off`/`none` to disable |
 | `TTA_CONFIG` | — | Scaffold registry path; default XDG/HOME location |
+| `TTA_SATELLITE_PREFIX` | `--satellite-prefix` | Satellite decoration and alias recognition; default `_` |
 
 Root precedence is `--root` > `TTA_ROOT` > `PROJECTS_DIR` > `$HOME/src`.
 For example, `PROJECTS_DIR=work` searches `$HOME/work`, whereas `TTA_ROOT=./work`
@@ -476,7 +508,7 @@ searches relative to the invocation cwd.
 Either explicit socket selector suppresses both environment socket selectors.
 Setting both selectors at the same active layer is an error. Invalid active
 backend/trace values fail before lookup; explicit overrides ignore replaced
-environment values. Grouping, initial directory, startup argv, session naming,
+environment values. Grouping (`--group[=true/false]`), initial directory, startup argv, session naming,
 and shell-output modes remain explicit per invocation.
 
 ### Endpoint and client options
@@ -499,7 +531,8 @@ The target needs tmux and the selected generator's tools, **not an installed tta
 
 ```sh
 tta --ssh work myproject
-tta --ssh work --group myproject
+tta --ssh work --group=false myproject   # intentional shared selection
+tta --ssh work --satellite-prefix view- myproject
 tta --ssh work --target-shell /bin/zsh --target-interactive myproject
 tta --ssh work --target-cwd /srv/work --dir ./editor myproject -- nvim 'literal file'
 tta --ssh work --ssh-option=-F --ssh-option=/path/to/private-ssh-config myproject
@@ -678,6 +711,12 @@ Resolution executes no generator. `scaffold::Resolved` contains the selection, o
 generator expression prefix, and generator metadata. Pass the prefix into
 `launch`; creation without it fails. Low-level grouped plans require an explicitly
 chosen satellite name; the workflow requests a fresh inventory and supplies it.
+Omitted grouping means independent outside attachment and ordinary inside
+switching. Pass `.grouped(false)` for deliberate shared attachment. Supply
+`.satellite_prefix("view-")` to the runner/resolver, or an owned string to
+`workflow::Input`; `target::Options` accepts an explicit prefix or observes the
+target's `TTA_SATELLITE_PREFIX`. Session facts retain actual `Session::group`;
+supplied-facts callers must not invent group membership from names.
 Errors retain underlying causes
 through `std::error::Error + Send + Sync` at the scaffold boundary.
 
@@ -718,6 +757,10 @@ I/O in the core. A reporting failure must not replace the original prepare error
 the caller owns uncertainty and must not blindly replay it. Version 0.4.0 introduced
 these interfaces; **0.5.0** adds shared diagnostic reporting and configurable CLI
 probe policy. Coordinated workspace dependencies remain exact-pinned.
+**0.6.0** adds the outside-independent default, optional explicit grouping policy,
+configurable satellite prefix and group-aware alias resolution (`resolve_unique`).
+`satellite_name` now takes the selected `Session`, inventory and prefix rather
+than decorating a raw base string.
 The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
 [launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
 implemented adoption and the separate mosh observation-channel choice.
@@ -732,6 +775,8 @@ cargo build -p tta --all-features
 cargo verify --backend native
 cargo verify --backend cli --inside --report report.json
 cargo verify --tta target/debug/tta --backend native --mode shell --scenario new
+cargo verify --backend native --independent-views --report /tmp/opencode/tta-views.json
+cargo verify --backend cli --independent-views --satellite-prefix view-
 ```
 
 The default exercises cold creation and existing-session entry, both directly
@@ -745,6 +790,7 @@ the evaluator survives; detach checks the session and pane persist. Independent
 tmux observations establish outcomes rather than treating trace messages as proof.
 
 Additional suites cover [satellite lifecycle and literal startup argv](session/runner/tests/satellites.rs),
+[two-real-terminal default independence and orphan rendezvous](verification/views/README.md),
 [native/CLI launch execution and failure ordering](app/cli/tests/launch.rs),
 [shared scaffold policy](session/runner/tests/scaffold.rs),
 [CLI scaffold behavior](app/cli/tests/scaffold.rs),

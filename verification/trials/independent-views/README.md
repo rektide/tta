@@ -7,6 +7,8 @@ status: defect-reproduced
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-23
 sources:
+  - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
+    title: Preserve the historical defect trial and point to positive acceptance for the implemented independent outside default
   - resource: opencode://ses_e9a6011b0ffeBJ4GW5UhFqoHb5
     title: Connect preserved wrong-client reproduction to the human-selected visibility guard and next implementation brief
   - resource: opencode://ses_e9a2dad06ffeFURNHXCj1ln0ea
@@ -24,10 +26,13 @@ sources:
 Work: **tta-launch-backends-independent-views**, child of **tta-launch-backends**.
 Decision checkpoint: [independent views and client origin](/design/launcher/launch-backends1.gpt61sol.md).
 
-The October 27 [implementation brief](/design/launcher/launch-backends2.gpt6a.md)
-selects independent outside views and guarded native switching. This trial remains
-historical defect evidence; future acceptance must assert rejection of ambiguous
-inside calls, not success in reproducing the wrong-client switch.
+The independent outside default is now implemented. Current positive acceptance
+lives in the [two-terminal verification toolkit](/verification/views/README.md)
+and follows the [input-state contract](/doc/entry/README.md). The October 27
+[implementation brief](/design/launcher/launch-backends2.gpt6a.md) separately
+commissions guarded inside switching; that guard remains unimplemented here.
+This trial remains historical defect evidence, not acceptance of wrong-client
+switching or a claim that outside independence fixes inside origin inference.
 
 This trial runs **two real PTYs**, each executing the actual tta binary, against
 fresh exclusively owned sockets under `/tmp/opencode`. It uses Python's standard
@@ -37,18 +42,20 @@ changes the targeting design, not because the current behavior is correct.
 
 ## Run
 
-Build tta with both backends. Put a version-asserted tmux fixture first on PATH,
-then run each backend separately. These runs used the local archive's **3.7c**
+Use an executable built from historical revision **9380e3c5**, not the current
+outside-independent launcher: the preserved script intentionally asserts the old
+plain shared default and will fail against the new default. Put a version-asserted
+tmux fixture first on PATH, then run each backend separately. These runs used **3.7c**
 tag, built in `.test-agent/launch-backends/tmux37c/`.
 
 ```sh
-cargo build -p tta --all-features
+HISTORICAL_TTA=/path/to/9380e3c5/tta
 PATH="$PWD/.test-agent/launch-backends/tmux37c:$PATH" \
   python3 verification/trials/independent-views/proof.py \
-  --tta target/debug/tta --backend native
+  --tta "$HISTORICAL_TTA" --backend native
 PATH="$PWD/.test-agent/launch-backends/tmux37c:$PATH" \
   python3 verification/trials/independent-views/proof.py \
-  --tta target/debug/tta --backend cli
+  --tta "$HISTORICAL_TTA" --backend cli
 ```
 
 Success means **the existing defect reproduced**; do not wire this expected-wrong

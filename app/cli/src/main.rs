@@ -34,7 +34,7 @@ enum Backend {
 #[command(
     version,
     about,
-    after_help = "Matching is case-sensitive and literal: exact name, otherwise a unique substring.\nExisting sessions always take priority. Quote shell metacharacters.\nExample: tta_plan=$(tta --print-shell project) && eval \"$tta_plan\""
+    after_help = "Matching is case-sensitive and literal: exact session name, then workspace alias, then shortest substring.\nTies across distinct workspaces are ambiguous. Sessions always take priority.\nOutside tmux, plain entry opens an independent view; --group=false shares window selection.\nExample: tta_plan=$(tta --print-shell project) && eval \"$tta_plan\""
 )]
 struct Args {
     /// Observe and launch on an SSH target; the target needs no installed tta

@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
+    title: Verify the independent SSH default, target-prefix environment and explicit override, and update expected mutation counts
   - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
     title: Correct the POSIX absence-status assertion and document encoded capture budgets and uncertified Fish/Nu execution
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
@@ -72,8 +74,10 @@ SSH; this is not evidence for a different operating system or network topology.
 - **Cold/project:** embedded runner preparation, target HOME/root/config/cwd versus
   contradictory local values, literal quoted/empty startup arguments and relative
   `--dir`, observed independently through target artifacts and tmux queries.
-- **Existing/grouped:** fresh suffix selection, one create → attach → `keep-last`
+- **Existing/grouped by default:** fresh suffix selection, one create → attach → `keep-last`
   command queue, shared window IDs, actual option value and detach lifecycle.
+  Target `TTA_SATELLITE_PREFIX` and an explicit prefix override are both exercised
+  over genuine SSH. Contradictory local prefix variables do not leak remotely.
 - **Scaffold:** real Git/jj native generation with target registry/Git-author/license
   defaults; injected generator failure stops before tmux/handoff and runs once.
 - **Read failures:** malformed typed session output and nonzero command diagnostics

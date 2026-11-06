@@ -3,12 +3,12 @@ type: ArchitectureContract
 title: Project entry — input states, workspace identity and independent views
 description: Declared input progression and mutation boundary for default independent tmux workspace entry
 resource: /doc/entry/README.md
-status: implementation-contract
+status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
-    title: Declare the input state machine before continuing implementation of default independent views and satellite aliases
+    title: Declare and align the input state machine before implementation, then implement and verify independent outside views, prefix-aware aliases and actual-group matching
   - resource: /session/launcher/src/workflow.rs
     title: Existing pure observation-driven launch progression
   - resource: /session/launcher/src/resolve.rs
@@ -25,8 +25,9 @@ sources:
 
 # Project entry contract
 
-This declares the implementation destination, not a retrospective claim that
-every transition is already implemented. The existing pure `Workflow` remains
+Declared before implementation in commit `285e3113`, then aligned with the
+human's guard-before-continuation correction in `2cb8dc6f`, this is the implemented
+contract. The existing pure `Workflow` remains
 the backbone: observers provide facts; resolution and planning perform no I/O;
 execution alone crosses the mutation boundary. The literal input fragment is
 never rewritten into a guessed project name.
@@ -35,11 +36,12 @@ never rewritten into a guessed project name.
 
 ```mermaid
 flowchart TD
-    input["Parse target-local input<br/>CLI overrides environment, then defaults"] --> validate["Validate fragment, registry/choice,<br/>prefix and endpoint/client policy"]
-    validate --> mode{"Read-only completion?"}
+    input["Parse target-local input<br/>CLI overrides environment, then defaults"] --> common["Validate active option/environment values<br/>and satellite prefix"]
+    common --> mode{"Read-only completion?"}
     mode -->|Yes| completionFacts["Observe sessions and projects independently"]
     completionFacts --> completion["Expose all literal names + satellite aliases<br/>No winner selection; never create or attach"]
-    mode -->|No| sessions["Observe session inventory<br/>Keep canonical IDs and actual group facts"]
+    mode -->|No| validate["Validate fragment, registry/choice,<br/>endpoint and same-server client policy"]
+    validate --> sessions["Observe session inventory<br/>Keep canonical IDs and actual group facts"]
     sessions --> aliases["Derive searchable literal names + logical aliases"]
     aliases --> rank["resolve_unique(sessions, fragment, prefix)?<br/>Exact raw → exact alias → shortest substring<br/>Ambiguity/error exits here before continuation"]
     rank --> outcome{"Selection returned?"}
@@ -190,4 +192,5 @@ matching and ambiguity, and reject changed fresh facts without authorizing mutat
 
 The [maintained user guide](/README.md#how-we-use-tmux) describes released behavior;
 the [historical two-terminal trial](/verification/trials/independent-views/README.md)
-preserves the defect evidence this contract must not erase.
+preserves the defect evidence this contract must not erase. Current acceptance:
+[two-real-terminal verification](/verification/views/README.md).
