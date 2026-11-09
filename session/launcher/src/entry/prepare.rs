@@ -1,6 +1,9 @@
 use super::{
-    action::{DecisionBasis, EntryDecision, EntryPlan, ViewDirectory, ViewNaming},
-    protocol::{BoundTarget, ClientEntry, EntryError, EntryIntent, ViewPreference},
+    action::{
+        CreationBasis, DecisionBasis, EntryDecision, EntryPlan, GeneratorProgram, NewSessionSpec, PaneDirectory, ProjectBasis, ViewDirectory, ViewNaming,
+    },
+    discover,
+    protocol::{BoundTarget, ClientEntry, EntryError, EntryIntent, GeneratorDefaults, ViewPreference},
     select::WorkspaceMatch,
 };
 
@@ -47,8 +50,90 @@ pub(super) fn enter_view(target: &BoundTarget, found: &WorkspaceMatch) -> EntryP
     }
 }
 
+/// StartProject plan: chosen physical identity, selected route, all routes and
+/// a once-settled new-session spec. Names, paths, startup and window policy
+/// are constructor-checked here, once.
+pub(super) fn start_project(
+    target: &BoundTarget,
+    intent: &EntryIntent,
+    selection: &super::select::WorkspaceCatalog,
+    task: &discover::Task,
+    project: &super::action::ProjectRef,
+) -> Result<EntryPlan, EntryError> {
+    let name = intent.session_name.as_deref().unwrap_or(&project.name);
+    discover::validate_new_session_name(selection, name)?;
+    super::action::validate_startup(&intent.startup)?;
+    Ok(EntryPlan {
+        target: target.clone(),
+        decision: EntryDecision::StartProject {
+            project: project.clone(),
+            session: NewSessionSpec {
+                name: name.to_owned(),
+                startup: intent.startup.clone(),
+                directory: PaneDirectory::new(intent.directory.as_deref().unwrap_or(&project.entry))?,
+                window: intent.window.clone(),
+            },
+            via: target.client,
+        },
+        basis: DecisionBasis::Project(Box::new(ProjectBasis {
+            selection: selection.request.clone(),
+            roots: task.roots_requests().to_vec(),
+            routes: project.routes.clone(),
+        })),
+    })
+}
+
+/// ScaffoldAndStart plan: fixed creation site and the generator program
+/// materialized exactly once with the actually observed defaults. No
+/// preliminary expression with fake empty defaults is ever built.
+pub(super) fn scaffold_and_start(
+    target: &BoundTarget,
+    intent: &EntryIntent,
+    selection: &super::select::WorkspaceCatalog,
+    task: &discover::Task,
+    creation: &discover::Creation,
+    generator: &crate::scaffold::Entry,
+    defaults: &GeneratorDefaults,
+) -> Result<EntryPlan, EntryError> {
+    let program = generator
+        .scaffold(
+            &creation.site.name,
+            &creation.site.root,
+            &crate::scaffold::Defaults {
+                author: defaults.author.clone(),
+                license: defaults.license.clone(),
+            },
+        )
+        .map_err(EntryError::Generator)?;
+    super::action::validate_startup(&intent.startup)?;
+    Ok(EntryPlan {
+        target: target.clone(),
+        decision: EntryDecision::ScaffoldAndStart {
+            destination: creation.site.clone(),
+            generator: GeneratorProgram {
+                generator: generator.name.clone(),
+                program,
+            },
+            session: NewSessionSpec {
+                name: creation.session_name.clone(),
+                startup: intent.startup.clone(),
+                directory: PaneDirectory::new(intent.directory.as_deref().unwrap_or(&creation.site.path))?,
+                window: intent.window.clone(),
+            },
+            via: target.client,
+        },
+        basis: DecisionBasis::Creation(Box::new(CreationBasis {
+            selection: selection.request.clone(),
+            roots: task.roots_requests().to_vec(),
+            destination: creation.destination.as_ref().map(|(request, _)| request.clone()),
+            defaults: creation.defaults.as_ref().map(|(request, _)| request.clone()),
+            generator: generator.name.clone(),
+        })),
+    })
+}
+
 fn basis(found: &WorkspaceMatch) -> DecisionBasis {
-    DecisionBasis {
+    DecisionBasis::Workspace {
         selection: found.request.clone(),
         workspace: found.work.key.clone(),
         matched_by: found.work.matched_by.clone(),

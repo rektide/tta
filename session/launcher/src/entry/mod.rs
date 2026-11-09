@@ -1,6 +1,7 @@
 //! Owned entry protocol, staged internally until the coherent frontend cutover.
 mod action;
 mod bind;
+mod discover;
 mod machine;
 mod prepare;
 mod protocol;
@@ -30,8 +31,13 @@ struct AttemptData {
     generator: Option<crate::scaffold::Entry>,
     selection: Option<select::WorkspaceCatalog>,
     workspace: Option<select::WorkspaceMatch>,
+    discovery: Option<discover::Task>,
+    project: Option<action::ProjectRef>,
+    creation: Option<discover::Creation>,
+    validated_generator: Option<crate::scaffold::Validated>,
     plan: Option<action::EntryPlan>,
     binding: Option<select::WorkspaceCatalog>,
+    binding_evidence: Option<(ReadRequest, bind::Evidence)>,
     bound: Option<action::BoundAction>,
     outcome: Option<AttemptOutcome>,
 }
@@ -44,6 +50,20 @@ impl EntryAttempt {
             return Err(InputError::EmptySelector);
         }
         crate::validate_satellite_prefix(&invocation.intent.satellite_prefix)?;
+        for root in &invocation.intent.roots {
+            if !root.is_absolute() {
+                return Err(InputError::Root(root.clone()));
+            }
+        }
+        if let Some(name) = &invocation.intent.session_name {
+            crate::resolve::validate_name(name)?;
+        }
+        if let InitialWindow::Named(name) = &invocation.intent.window
+            && (name.is_empty() || name.chars().any(char::is_control))
+        {
+            return Err(InputError::Window(name.clone()));
+        }
+        action::validate_startup(&invocation.intent.startup)?;
         let mut attempt = Self {
             control: Control::start(),
             data: AttemptData {
@@ -55,8 +75,13 @@ impl EntryAttempt {
                 generator: None,
                 selection: None,
                 workspace: None,
+                discovery: None,
+                project: None,
+                creation: None,
+                validated_generator: None,
                 plan: None,
                 binding: None,
+                binding_evidence: None,
                 bound: None,
                 outcome: None,
             },
@@ -106,23 +131,74 @@ impl EntryAttempt {
                         received: Box::new(completion.request),
                     });
                 }
-                // Exhaustive shape check belongs here as new observation kinds
-                // land. Sessions are the only supported fact type in this stage.
+                // Exhaustive request-kind/observation-kind compatibility check
+                // BEFORE consuming the pending request: a wrong-shape reply
+                // changes no actor, data or journal state.
+                if let Ok(observation) = &completion.result
+                    && !observation_answers_request(&expected.kind, observation)
+                {
+                    return Err(ProtocolError::ObservationShape {
+                        expected: Box::new(expected.clone()),
+                        received: Box::new(observation.clone()),
+                    });
+                }
                 let request = self.pending.take().expect("checked pending request");
                 self.journal.push(AttemptRecord::ReadAccepted(request.id));
                 match completion.result {
                     Ok(Observation::Sessions(inventory)) => {
                         let purpose = request.sessions_purpose();
                         match select::WorkspaceCatalog::from_read(request, inventory) {
-                            Ok(catalog) => {
-                                match purpose {
-                                    SessionReadPurpose::Selection => self.data.selection = Some(catalog),
-                                    SessionReadPurpose::BindAction => self.data.binding = Some(catalog),
+                            Ok(catalog) => match purpose {
+                                SessionReadPurpose::Selection => {
+                                    self.data.selection = Some(catalog);
+                                    self.send(ControlEvent::Observed);
                                 }
-                                self.send(ControlEvent::Observed);
-                            }
+                                SessionReadPurpose::BindAction => {
+                                    self.data.binding = Some(catalog);
+                                    let evidence_needed = self.data.plan.as_ref().is_some_and(|plan| plan.decision().needs_binding_evidence());
+                                    self.send(ControlEvent::BindingObserved { evidence_needed });
+                                }
+                            },
                             Err(error) => self.stop(error),
                         }
+                    }
+                    Ok(Observation::Projects(inventory)) => {
+                        let task = self.data.discovery.as_mut().expect("a projects reply answers a scoped discovery task");
+                        match task.accept(&self.data.intent.roots, request, inventory) {
+                            Ok(more_roots) => self.send(ControlEvent::ObservedProjects { more_roots }),
+                            Err(error) => self.stop(error),
+                        }
+                    }
+                    Ok(Observation::Destination(evidence)) => match request.destination_purpose() {
+                        DestinationPurpose::Preparation => {
+                            let path = self
+                                .data
+                                .creation
+                                .as_ref()
+                                .expect("a preparation destination reply answers an eligible creation")
+                                .site
+                                .path
+                                .clone();
+                            let absent = evidence == DestinationEvidence::Absent;
+                            self.data.creation.as_mut().expect("checked eligible creation").destination = Some((request, evidence));
+                            if absent {
+                                self.send(ControlEvent::Observed);
+                            } else {
+                                self.stop(EntryError::DestinationExists { path });
+                            }
+                        }
+                        DestinationPurpose::Binding => {
+                            self.data.binding_evidence = Some((request, bind::Evidence::Destination(evidence)));
+                            self.send(ControlEvent::Observed);
+                        }
+                    },
+                    Ok(Observation::Defaults(defaults)) => {
+                        self.data.creation.as_mut().expect("a defaults reply answers a validated generator").defaults = Some((request, defaults));
+                        self.send(ControlEvent::Observed);
+                    }
+                    Ok(Observation::ProjectIdentity(directory)) => {
+                        self.data.binding_evidence = Some((request, bind::Evidence::Route(directory)));
+                        self.send(ControlEvent::Observed);
                     }
                     Err(source) => self.stop(EntryError::Observation {
                         request: Box::new(request),
@@ -211,7 +287,92 @@ impl EntryAttempt {
                     None => ControlEvent::Empty,
                 })
             }
-            BeginProjects => return Err(EntryError::DiscoveryNotImplemented),
+            ScopeProjects => {
+                let scope = crate::projects::scope(&data.intent.selector, &data.intent.roots).map_err(EntryError::Discovery)?;
+                data.discovery = Some(discover::Task::new(scope));
+                Some(ControlEvent::Scoped)
+            }
+            ReadProjects => {
+                let (slot, root) = data
+                    .discovery
+                    .as_ref()
+                    .expect("scoped discovery task")
+                    .next_root(&data.intent.roots)
+                    .expect("the chart re-enters the read state only while a root remains");
+                self.issue_projects(slot, root);
+                None
+            }
+            RankProjects => {
+                // All required roots are complete; missing root evidence can
+                // never have supplied absence to reach this directive.
+                let task = data.discovery.as_ref().expect("scoped discovery task");
+                Some(match discover::rank(&data.intent.roots, &data.intent.selector, task)? {
+                    Some(project) => {
+                        data.project = Some(project);
+                        ControlEvent::ProjectUnique
+                    }
+                    None => ControlEvent::ProjectEmpty,
+                })
+            }
+            PrepareStart => {
+                data.plan = Some(prepare::start_project(
+                    &data.target,
+                    &data.intent,
+                    data.selection.as_ref().expect("selection inventory"),
+                    data.discovery.as_ref().expect("scoped discovery task"),
+                    data.project.as_ref().expect("ranked project"),
+                )?);
+                Some(ControlEvent::Prepared)
+            }
+            CreatePolicy => {
+                data.creation = Some(discover::creation_policy(
+                    &data.intent,
+                    data.selection.as_ref().expect("selection inventory"),
+                    data.discovery.as_ref().expect("scoped discovery task"),
+                    data.generator.as_ref(),
+                    &data.generator_choice,
+                    &data.registry,
+                )?);
+                Some(ControlEvent::Eligible)
+            }
+            ReadDestination => {
+                let path = data.creation.as_ref().expect("eligible creation").site.path.clone();
+                self.issue_destination(path, DestinationPurpose::Preparation);
+                None
+            }
+            ValidateGenerator => {
+                let generator = data.generator.as_ref().expect("chosen generator");
+                let validated = generator.validated().map_err(EntryError::Generator)?;
+                discover::refuse_undeclared_destination(generator, validated.destination, &data.intent.roots)?;
+                data.validated_generator = Some(validated.clone());
+                Some(ControlEvent::ValidatedGenerator {
+                    needs_defaults: discover::needs(validated.needs_defaults).any(),
+                })
+            }
+            ReadDefaults => {
+                let needs = discover::needs(data.validated_generator.as_ref().expect("validated generator").needs_defaults);
+                self.issue_defaults(needs);
+                None
+            }
+            PrepareCreation => {
+                data.plan = Some(prepare::scaffold_and_start(
+                    &data.target,
+                    &data.intent,
+                    data.selection.as_ref().expect("selection inventory"),
+                    data.discovery.as_ref().expect("scoped discovery task"),
+                    data.creation.as_ref().expect("eligible creation"),
+                    data.generator.as_ref().expect("chosen generator"),
+                    &data
+                        .creation
+                        .as_ref()
+                        .expect("checked eligible creation")
+                        .defaults
+                        .as_ref()
+                        .map(|(_, defaults)| defaults.clone())
+                        .unwrap_or_default(),
+                )?);
+                Some(ControlEvent::Prepared)
+            }
             SettleView => Some(ControlEvent::ViewPolicy {
                 independent: prepare::independent(data.intent.view, data.target.client),
             }),
@@ -231,14 +392,35 @@ impl EntryAttempt {
                 self.issue_sessions(SessionReadPurpose::BindAction);
                 None
             }
+            ReadBindingEvidence => {
+                enum EvidenceTarget {
+                    Route(action::ProjectRoute),
+                    Destination(std::path::PathBuf),
+                }
+                let target = match &data.plan.as_ref().expect("entry plan").decision() {
+                    action::EntryDecision::StartProject { project, .. } => EvidenceTarget::Route(project.route.clone()),
+                    action::EntryDecision::ScaffoldAndStart { destination, .. } => EvidenceTarget::Destination(destination.path.clone()),
+                    _ => unreachable!("the chart reads binding evidence only for new work"),
+                };
+                match target {
+                    EvidenceTarget::Route(route) => self.issue_project_identity(route),
+                    EvidenceTarget::Destination(path) => self.issue_destination(path, DestinationPurpose::Binding),
+                }
+                None
+            }
             CheckBinding => {
-                bind::check(data.plan.as_ref().expect("entry plan"), data.binding.as_ref().expect("binding inventory"))?;
+                bind::check(
+                    data.plan.as_ref().expect("entry plan"),
+                    data.binding.as_ref().expect("binding inventory"),
+                    data.binding_evidence.as_ref(),
+                )?;
                 Some(ControlEvent::Checked)
             }
             BindOperation => {
                 data.bound = Some(bind::operation(
                     data.plan.as_ref().expect("entry plan"),
                     data.binding.as_ref().expect("checked binding inventory"),
+                    data.binding_evidence.as_ref(),
                 )?);
                 Some(ControlEvent::Bound)
             }
@@ -256,7 +438,7 @@ impl EntryAttempt {
         })
     }
 
-    fn issue_sessions(&mut self, purpose: SessionReadPurpose) {
+    fn issue(&mut self, kind: ReadKind) {
         assert!(self.pending.is_none(), "one outstanding request per attempt");
         self.sequence = self.sequence.checked_add(1).expect("request sequence exhausted");
         let request = ReadRequest {
@@ -265,15 +447,53 @@ impl EntryAttempt {
                 sequence: self.sequence,
             },
             target: self.data.target.binding,
-            kind: ReadKind::Sessions {
-                endpoint: self.data.target.endpoint(),
-                program: self.data.target.program.as_os_str().to_owned(),
-                purpose,
-            },
+            kind,
         };
         self.journal.push(AttemptRecord::ReadIssued(request.clone()));
         self.pending = Some(request);
     }
+
+    fn issue_sessions(&mut self, purpose: SessionReadPurpose) {
+        let kind = ReadKind::Sessions {
+            endpoint: self.data.target.endpoint(),
+            program: self.data.target.program.as_os_str().to_owned(),
+            purpose,
+        };
+        self.issue(kind);
+    }
+
+    fn issue_projects(&mut self, slot: RootSlot, root: std::path::PathBuf) {
+        let filter = self.data.discovery.as_ref().expect("scoped discovery task").fragment().to_owned();
+        self.issue(ReadKind::Projects { slot, root, filter });
+    }
+
+    fn issue_destination(&mut self, path: std::path::PathBuf, purpose: DestinationPurpose) {
+        self.issue(ReadKind::Destination { path, purpose });
+    }
+
+    fn issue_defaults(&mut self, needs: DefaultNeeds) {
+        let cwd = self.data.target.cwd.clone();
+        self.issue(ReadKind::GeneratorDefaults { cwd, needs });
+    }
+
+    fn issue_project_identity(&mut self, route: action::ProjectRoute) {
+        self.issue(ReadKind::ProjectIdentity { route });
+    }
+}
+
+/// Exhaustive request-kind ↔ observation-kind compatibility. The request
+/// envelope's exact echo (path/slot/endpoint/purpose/program) is checked by
+/// `ReadRequest` equality before this; kind compatibility is the second,
+/// independent ingress gate.
+fn observation_answers_request(kind: &ReadKind, observation: &Observation) -> bool {
+    matches!(
+        (kind, observation),
+        (ReadKind::Sessions { .. }, Observation::Sessions(_))
+            | (ReadKind::Projects { .. }, Observation::Projects(_))
+            | (ReadKind::Destination { .. }, Observation::Destination(_))
+            | (ReadKind::GeneratorDefaults { .. }, Observation::Defaults(_))
+            | (ReadKind::ProjectIdentity { .. }, Observation::ProjectIdentity(_))
+    )
 }
 
 #[cfg(test)]

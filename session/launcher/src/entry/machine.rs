@@ -12,11 +12,20 @@ pub(crate) enum Directive {
     ValidateRegistry,
     ReadSelectionSessions,
     RankSessions,
-    BeginProjects,
+    ScopeProjects,
+    ReadProjects,
+    RankProjects,
+    PrepareStart,
+    CreatePolicy,
+    ReadDestination,
+    ValidateGenerator,
+    ReadDefaults,
+    PrepareCreation,
     SettleView,
     PlanOpenView,
     PlanEnterView,
     ReadBindingSessions,
+    ReadBindingEvidence,
     CheckBinding,
     BindOperation,
     ExportAction,
@@ -29,7 +38,24 @@ pub(crate) enum Event {
     Observed,
     Unique,
     Empty,
-    ViewPolicy { independent: bool },
+    Scoped,
+    /// The discovery task's remaining-root summary rides the transition; the
+    /// chart's `more_roots` guard re-enters the read state on it.
+    ObservedProjects {
+        more_roots: bool,
+    },
+    ProjectUnique,
+    ProjectEmpty,
+    Eligible,
+    ValidatedGenerator {
+        needs_defaults: bool,
+    },
+    BindingObserved {
+        evidence_needed: bool,
+    },
+    ViewPolicy {
+        independent: bool,
+    },
     Prepared,
     Export,
     Checked,
@@ -46,6 +72,13 @@ impl EventType for Event {
             Self::Observed => "observed",
             Self::Unique => "unique",
             Self::Empty => "empty",
+            Self::Scoped => "scoped",
+            Self::ObservedProjects { .. } => "observed_projects",
+            Self::ProjectUnique => "project_unique",
+            Self::ProjectEmpty => "project_empty",
+            Self::Eligible => "eligible",
+            Self::ValidatedGenerator { .. } => "validated_generator",
+            Self::BindingObserved { .. } => "binding_observed",
             Self::ViewPolicy { .. } => "view_policy",
             Self::Prepared => "prepared",
             Self::Export => "export",
@@ -61,6 +94,15 @@ impl EventType for Event {
 static MACHINE: LazyLock<Arc<Machine<(), Event>>> = LazyLock::new(|| {
     let mut registry = Registry::new();
     registry.guard("independent", |args| matches!(args.event, Ev::User(Event::ViewPolicy { independent: true })));
+    registry.guard("more_roots", |args| {
+        matches!(args.event, Ev::User(Event::ObservedProjects { more_roots: true }))
+    });
+    registry.guard("needs_defaults", |args| {
+        matches!(args.event, Ev::User(Event::ValidatedGenerator { needs_defaults: true }))
+    });
+    registry.guard("needs_binding_evidence", |args| {
+        matches!(args.event, Ev::User(Event::BindingObserved { evidence_needed: true }))
+    });
     Arc::new(Machine::from_json_str(DEFINITION, &registry).expect("valid embedded entry-attempt machine"))
 });
 
@@ -119,7 +161,7 @@ mod tests {
             assert!(control.take_directives().is_empty());
             for (event, directive) in [
                 (Event::Export, Directive::ReadBindingSessions),
-                (Event::Observed, Directive::CheckBinding),
+                (Event::BindingObserved { evidence_needed: false }, Directive::CheckBinding),
                 (Event::Checked, Directive::BindOperation),
                 (Event::Bound, Directive::ExportAction),
             ] {
@@ -134,15 +176,114 @@ mod tests {
         }
     }
 
+    // The machine-owned discovery course on the real actor: session miss,
+    // scope, per-root read reentry driven by the remaining-root summary,
+    // guarded physical rank, then the creation preparation ladder.
+    #[test]
+    fn discovery_emission_reenters_the_root_read_and_walks_the_creation_ladder() {
+        let mut control = Control::start();
+        control.take_directives();
+        for (event, directive) in [
+            (Event::Validated, Directive::ReadSelectionSessions),
+            (Event::Observed, Directive::RankSessions),
+            (Event::Empty, Directive::ScopeProjects),
+            (Event::Scoped, Directive::ReadProjects),
+            // Two configured roots: the first accept re-enters the read state.
+            (Event::ObservedProjects { more_roots: true }, Directive::ReadProjects),
+            (Event::ObservedProjects { more_roots: false }, Directive::RankProjects),
+        ] {
+            control.send(event);
+            assert_eq!(control.take_directives(), [directive]);
+            assert!(control.take_directives().is_empty());
+        }
+        control.send(Event::ProjectEmpty);
+        assert_eq!(control.take_directives(), [Directive::CreatePolicy]);
+        for (event, directive) in [
+            (Event::Eligible, Directive::ReadDestination),
+            (Event::Observed, Directive::ValidateGenerator),
+            (Event::ValidatedGenerator { needs_defaults: true }, Directive::ReadDefaults),
+            (Event::Observed, Directive::PrepareCreation),
+        ] {
+            control.send(event);
+            assert_eq!(control.take_directives(), [directive]);
+            assert!(control.take_directives().is_empty());
+        }
+        control.send(Event::Prepared);
+        assert_eq!(control.leaf(), "planned");
+        for (event, directive) in [
+            (Event::Export, Directive::ReadBindingSessions),
+            (Event::BindingObserved { evidence_needed: true }, Directive::ReadBindingEvidence),
+            (Event::Observed, Directive::CheckBinding),
+            (Event::Checked, Directive::BindOperation),
+            (Event::Bound, Directive::ExportAction),
+        ] {
+            control.send(event);
+            assert_eq!(control.take_directives(), [directive]);
+        }
+        control.send(Event::Exported);
+        assert_eq!(control.leaf(), "exported");
+        // A generator needing no defaults skips the defaults read entirely.
+        let mut control = Control::start();
+        control.take_directives();
+        for event in [
+            Event::Validated,
+            Event::Observed,
+            Event::Empty,
+            Event::Scoped,
+            Event::ObservedProjects { more_roots: false },
+        ] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ProjectEmpty);
+        control.take_directives();
+        for event in [Event::Eligible, Event::Observed] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ValidatedGenerator { needs_defaults: false });
+        assert_eq!(control.take_directives(), [Directive::PrepareCreation]);
+        // A unique physical project skips creation and prepares new work.
+        let mut control = Control::start();
+        control.take_directives();
+        for event in [
+            Event::Validated,
+            Event::Observed,
+            Event::Empty,
+            Event::Scoped,
+            Event::ObservedProjects { more_roots: false },
+        ] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ProjectUnique);
+        assert_eq!(control.take_directives(), [Directive::PrepareStart]);
+        control.send(Event::Prepared);
+        assert_eq!(control.leaf(), "planned");
+    }
+
     #[test]
     fn parent_stop_and_cancel_cover_nested_read_and_pure_states() {
         for event in [Event::Stop, Event::Cancel] {
-            for count in 0..5 {
+            for count in 0..12 {
                 let mut control = Control::start();
                 control.take_directives();
-                for event in [Event::Validated, Event::Observed, Event::Unique, Event::ViewPolicy { independent: true }]
-                    .into_iter()
-                    .take(count)
+                for event in [
+                    Event::Validated,
+                    Event::Observed,
+                    Event::Empty,
+                    Event::Scoped,
+                    Event::ObservedProjects { more_roots: false },
+                    Event::ProjectEmpty,
+                    Event::Eligible,
+                    Event::Observed,
+                    Event::ValidatedGenerator { needs_defaults: true },
+                    Event::Observed,
+                    Event::Prepared,
+                    Event::Export,
+                ]
+                .into_iter()
+                .take(count)
                 {
                     control.send(event);
                     control.take_directives();
@@ -203,11 +344,20 @@ mod tests {
             Directive::ValidateRegistry,
             Directive::ReadSelectionSessions,
             Directive::RankSessions,
-            Directive::BeginProjects,
+            Directive::ScopeProjects,
+            Directive::ReadProjects,
+            Directive::RankProjects,
+            Directive::PrepareStart,
+            Directive::CreatePolicy,
+            Directive::ReadDestination,
+            Directive::ValidateGenerator,
+            Directive::ReadDefaults,
+            Directive::PrepareCreation,
             Directive::SettleView,
             Directive::PlanOpenView,
             Directive::PlanEnterView,
             Directive::ReadBindingSessions,
+            Directive::ReadBindingEvidence,
             Directive::CheckBinding,
             Directive::BindOperation,
             Directive::ExportAction,
@@ -221,7 +371,9 @@ mod tests {
             );
         }
         let references = Machine::<(), Event>::references(&value).unwrap();
-        assert_eq!(references.guards.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["independent"]);
+        let mut guards = references.guards.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
+        guards.sort_unstable();
+        assert_eq!(guards, ["independent", "more_roots", "needs_binding_evidence", "needs_defaults"]);
         assert!(references.actions.is_empty() && references.actors.is_empty() && references.delays.is_empty());
     }
 }

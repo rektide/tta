@@ -1,12 +1,18 @@
 use super::*;
 use action::{BoundOperation, EntryDecision};
+use protocol::{DestinationEvidence, RootSlot};
 use select::{MatchReason, WorkspaceKey};
 use std::error::Error as _;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use tta_command::{Expression, Handoff};
 
 fn invocation(selector: &str) -> Invocation {
+    invocation_roots(selector, Vec::new())
+}
+
+fn invocation_roots(selector: &str, roots: Vec<PathBuf>) -> Invocation {
     Invocation {
         context: SuppliedContext {
             host: "supplied:test-host".into(),
@@ -21,6 +27,11 @@ fn invocation(selector: &str) -> Invocation {
             view: ViewPreference::Auto,
             satellite_prefix: "view-".into(),
             view_directory: None,
+            roots,
+            session_name: None,
+            startup: Vec::new(),
+            directory: None,
+            window: InitialWindow::default(),
         },
         registry: crate::scaffold::Config::parse(None, None).unwrap(),
         generator: crate::scaffold::Choice::Off,
@@ -39,6 +50,22 @@ fn orphan() -> crate::Session {
     session(42, "view-project-42", Some("project"))
 }
 
+/// A root inventory observation: requested spelling, observed physical root
+/// and immediate entries with their canonical directories.
+fn inventory(requested: &str, physical: &str, entries: &[(&str, &str)]) -> crate::ProjectInventory {
+    crate::ProjectInventory {
+        requested_root: requested.into(),
+        root: physical.into(),
+        entries: entries
+            .iter()
+            .map(|(name, directory)| crate::ProjectEntry {
+                name: (*name).into(),
+                directory: (*directory).into(),
+            })
+            .collect(),
+    }
+}
+
 fn request(attempt: &EntryAttempt) -> ReadRequest {
     match attempt.waiting() {
         Waiting::Read(request) => request.clone(),
@@ -46,13 +73,21 @@ fn request(attempt: &EntryAttempt) -> ReadRequest {
     }
 }
 
-fn supply(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>) {
+fn supply_observation(attempt: &mut EntryAttempt, result: Result<Observation, ObservationFailure>) {
     attempt
         .advance(Event::Observed(ReadCompletion {
             request: request(attempt),
-            result: Ok(Observation::Sessions(SessionInventory::Present(sessions))),
+            result,
         }))
         .unwrap();
+}
+
+fn supply(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>) {
+    supply_observation(attempt, Ok(Observation::Sessions(SessionInventory::Present(sessions))));
+}
+
+fn supply_project(attempt: &mut EntryAttempt, observed: crate::ProjectInventory) {
+    supply_observation(attempt, Ok(Observation::Projects(observed)));
 }
 
 fn plan(attempt: &EntryAttempt) -> &action::EntryPlan {
@@ -62,9 +97,25 @@ fn plan(attempt: &EntryAttempt) -> &action::EntryPlan {
     }
 }
 
-fn export(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>) -> &action::ExportedAction {
+fn deliver(attempt: &mut EntryAttempt) {
     attempt.advance(Event::Deliver(Delivery::Export)).unwrap();
+}
+
+fn export(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>) -> &action::ExportedAction {
+    deliver(attempt);
     supply(attempt, sessions);
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Exported(exported)) => exported,
+        _ => panic!("expected export: {:?}", attempt.snapshot()),
+    }
+}
+
+/// Deliver a new-work plan: fresh session inventory, then the binding
+/// evidence read (route identity or destination absence) it requires.
+fn export_new_work(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>, evidence: Observation) -> &action::ExportedAction {
+    deliver(attempt);
+    supply(attempt, sessions);
+    supply_observation(attempt, Ok(evidence));
     match attempt.waiting() {
         Waiting::Finished(AttemptOutcome::Exported(exported)) => exported,
         _ => panic!("expected export: {:?}", attempt.snapshot()),
@@ -84,6 +135,17 @@ fn controls(attempt: &EntryAttempt) -> Vec<ControlEvent> {
         .iter()
         .filter_map(|record| match record {
             AttemptRecord::Control(event) => Some(*event),
+            _ => None,
+        })
+        .collect()
+}
+
+fn reads(attempt: &EntryAttempt) -> Vec<&ReadRequest> {
+    attempt
+        .journal
+        .iter()
+        .filter_map(|record| match record {
+            AttemptRecord::ReadIssued(request) => Some(request),
             _ => None,
         })
         .collect()
@@ -121,17 +183,9 @@ fn orphan_only_work_reaches_one_exported_queue_with_no_filesystem_request() {
     );
     assert_eq!(exported.expression.steps().len(), 1);
     assert!(matches!(exported.action.operation(), BoundOperation::OpenView { name, .. } if name == "view-project-1"));
-    assert_eq!(exported.action.binding_request(), &binding_request);
+    assert_eq!(exported.action.binding_requests(), vec![&binding_request]);
     assert_eq!(attempt.snapshot().plan.as_ref(), Some(&selection_plan));
-    let reads: Vec<_> = attempt
-        .journal
-        .iter()
-        .filter_map(|r| match r {
-            AttemptRecord::ReadIssued(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(reads, [&selection_request, &binding_request]);
+    assert_eq!(reads(&attempt), [&selection_request, &binding_request]);
     assert_eq!(
         controls(&attempt),
         [
@@ -141,7 +195,7 @@ fn orphan_only_work_reaches_one_exported_queue_with_no_filesystem_request() {
             ControlEvent::ViewPolicy { independent: true },
             ControlEvent::Prepared,
             ControlEvent::Export,
-            ControlEvent::Observed,
+            ControlEvent::BindingObserved { evidence_needed: false },
             ControlEvent::Checked,
             ControlEvent::Bound,
             ControlEvent::Exported
@@ -201,19 +255,27 @@ fn wrong_attempt_target_endpoint_purpose_program_or_sequence_never_advances() {
     changed.id.sequence += 1;
     variants.push(changed);
     let mut changed = expected.clone();
-    let ReadKind::Sessions { endpoint, .. } = &mut changed.kind;
+    let ReadKind::Sessions { endpoint, .. } = &mut changed.kind else {
+        panic!("sessions kind")
+    };
     endpoint.socket = "/other/socket".into();
     variants.push(changed);
     let mut changed = expected.clone();
-    let ReadKind::Sessions { endpoint, .. } = &mut changed.kind;
+    let ReadKind::Sessions { endpoint, .. } = &mut changed.kind else {
+        panic!("sessions kind")
+    };
     endpoint.target = foreign.target;
     variants.push(changed);
     let mut changed = expected.clone();
-    let ReadKind::Sessions { purpose, .. } = &mut changed.kind;
+    let ReadKind::Sessions { purpose, .. } = &mut changed.kind else {
+        panic!("sessions kind")
+    };
     *purpose = SessionReadPurpose::BindAction;
     variants.push(changed);
     let mut changed = expected.clone();
-    let ReadKind::Sessions { program, .. } = &mut changed.kind;
+    let ReadKind::Sessions { program, .. } = &mut changed.kind else {
+        panic!("sessions kind")
+    };
     *program = "different-tmux".into();
     variants.push(changed);
     let before = format!("{:?}", attempt.snapshot());
@@ -330,7 +392,7 @@ fn incomplete_reads_stop_natively_with_original_bytes_type_and_nested_source_cha
 }
 
 #[test]
-fn classified_absence_and_complete_empty_are_not_failed_reads_but_discovery_is_staged() {
+fn classified_absence_and_complete_empty_reach_project_scope_and_rootless_fallback_needs_roots() {
     for inventory in [SessionInventory::Absent, SessionInventory::Present(vec![])] {
         let mut attempt = EntryAttempt::start(invocation("project")).unwrap();
         attempt
@@ -340,7 +402,9 @@ fn classified_absence_and_complete_empty_are_not_failed_reads_but_discovery_is_s
             }))
             .unwrap();
         assert_eq!(stopped(&attempt).0, "project_scope");
-        assert!(matches!(stopped(&attempt).1, EntryError::DiscoveryNotImplemented));
+        // A genuine session miss without configured roots is a typed scope
+        // error, never absence or a fallback to creation.
+        assert!(matches!(stopped(&attempt).1, EntryError::Discovery(source) if matches!(source, crate::ResolveError::MissingRoot)));
         assert!(controls(&attempt).contains(&ControlEvent::Empty));
         assert!(attempt.snapshot().plan.is_none());
     }
@@ -469,8 +533,11 @@ fn shared_and_independent_policy_settles_once_with_explicit_override_and_same_qu
             let mut attempt = EntryAttempt::start(input).unwrap();
             supply(&mut attempt, vec![orphan()]);
             assert_eq!(matches!(plan(&attempt).decision(), EntryDecision::OpenView { .. }), independent);
-            assert_eq!(plan(&attempt).basis().matched_by, MatchReason::Alias { name: "project".into() });
-            assert_eq!(plan(&attempt).basis().workspace, WorkspaceKey::Group("project".into()));
+            let action::DecisionBasis::Workspace { matched_by, workspace, .. } = plan(&attempt).basis() else {
+                panic!("workspace basis")
+            };
+            assert_eq!(matched_by, &MatchReason::Alias { name: "project".into() });
+            assert_eq!(workspace, &WorkspaceKey::Group("project".into()));
             let exported = export(&mut attempt, vec![orphan()]);
             let operation = if client == ClientEntry::AttachTerminal {
                 "attach-session"
@@ -563,7 +630,10 @@ fn native_program_socket_config_and_cwd_bytes_survive_actor_and_errors_without_l
             _ => unreachable!(),
         }
         let mut attempt = EntryAttempt::start(input).unwrap();
-        let ReadKind::Sessions { endpoint, program, .. } = request(&attempt).kind;
+        let request = request(&attempt);
+        let ReadKind::Sessions { endpoint, program, .. } = request.kind else {
+            panic!("sessions kind")
+        };
         if field == "program" {
             assert_eq!(program, raw);
         }
@@ -723,5 +793,735 @@ fn view_directory_is_constructor_checked_native_data_and_unused_for_shared_entry
         supply(&mut attempt, vec![orphan()]);
         assert!(matches!(plan(&attempt).decision(), EntryDecision::EnterView { .. }));
         assert!(!export(&mut attempt, vec![orphan()]).shell.contains("'-c'"));
+    }
+}
+
+// --- machine-owned discovery: scope, root loop, physical ranking ---
+
+#[test]
+fn literal_session_selector_wins_before_project_qualification_even_with_roots() {
+    let mut attempt = EntryAttempt::start(invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, vec![session(7, "@2/foo", None)]);
+    // Session-first on the ORIGINAL literal: the project-looking selector
+    // never reaches project scope and no root observation is ever requested.
+    assert!(matches!(plan(&attempt).decision(), EntryDecision::OpenView { .. }));
+    assert!(reads(&attempt).iter().all(|request| matches!(request.kind, ReadKind::Sessions { .. })));
+}
+
+#[test]
+fn qualified_selector_observes_only_its_selected_root_and_starts_the_project() {
+    let mut attempt = EntryAttempt::start(invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let root_request = request(&attempt);
+    let ReadKind::Projects { slot, root, filter } = root_request.kind.clone() else {
+        panic!("projects kind: {root_request:?}")
+    };
+    assert_eq!(slot, RootSlot(2));
+    assert_eq!(root, PathBuf::from("/r2"));
+    assert_eq!(filter, "foo");
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("foo", "/r2/foo")]));
+    let EntryDecision::StartProject { project, session, .. } = plan(&attempt).decision() else {
+        panic!("project decision: {:?}", attempt.snapshot())
+    };
+    assert_eq!(project.name, "foo");
+    assert_eq!(project.entry, PathBuf::from("/r2/foo"));
+    assert_eq!(project.physical, PathBuf::from("/r2/foo"));
+    assert_eq!(project.route.slot, 2);
+    assert_eq!(session.name, "foo");
+    assert_eq!(session.directory.path(), Path::new("/r2/foo"));
+    let action::DecisionBasis::Project(basis) = plan(&attempt).basis() else {
+        panic!("project basis")
+    };
+    assert_eq!(basis.roots, std::slice::from_ref(&root_request));
+    assert_eq!(basis.routes.len(), 1);
+    // Binding reads fresh sessions plus the chosen route's physical identity.
+    deliver(&mut attempt);
+    supply(&mut attempt, Vec::new());
+    let identity = request(&attempt);
+    assert!(matches!(identity.kind, ReadKind::ProjectIdentity { .. }));
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/r2/foo".into())));
+    let Waiting::Finished(AttemptOutcome::Exported(exported)) = attempt.waiting() else {
+        panic!("export: {:?}", attempt.snapshot())
+    };
+    assert_eq!(
+        exported.shell,
+        "cd -P '/r2/foo' && 'tmux' '-S' '/no/socket/read/by/core' 'new-session' '-s' 'foo' '-n' 'foo' '-c' '/r2/foo'"
+    );
+    assert_eq!(exported.action.binding_requests().len(), 2);
+    assert_eq!(reads(&attempt).len(), 4);
+}
+
+#[test]
+fn unqualified_miss_walks_every_required_root_in_order_before_global_ranking() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let first = request(&attempt);
+    let ReadKind::Projects { slot, .. } = first.kind.clone() else {
+        panic!("projects kind")
+    };
+    assert_eq!(slot, RootSlot(1));
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    // The remaining-root summary re-enters the read state for root two.
+    let second = request(&attempt);
+    let ReadKind::Projects { slot, root, .. } = second.kind.clone() else {
+        panic!("projects kind")
+    };
+    assert_eq!((slot, root), (RootSlot(2), PathBuf::from("/r2")));
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("bar-foo", "/r2/bar-foo"), ("foo", "/r2/foo")]));
+    // Global ranking across ALL required roots: shortest basename wins.
+    let EntryDecision::StartProject { project, .. } = plan(&attempt).decision() else {
+        panic!("project decision")
+    };
+    assert_eq!(project.name, "foo");
+    assert_eq!(
+        attempt
+            .journal
+            .iter()
+            .filter(|r| **r == AttemptRecord::Directive(Directive::ReadProjects))
+            .count(),
+        2
+    );
+    let action::DecisionBasis::Project(basis) = plan(&attempt).basis() else {
+        panic!("project basis")
+    };
+    assert_eq!(basis.roots.len(), 2);
+}
+
+#[test]
+fn distinct_physical_directories_tie_ambiguously_before_unique_or_empty() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/personal".into(), "/team".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/personal", "/personal", &[("foo", "/personal/foo")]));
+    supply_project(&mut attempt, inventory("/team", "/team", &[("foo", "/team/foo")]));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "projects_rank");
+    let EntryError::Discovery(crate::ResolveError::Projects { candidates, .. }) = error else {
+        panic!("ambiguity: {error:?}")
+    };
+    assert_eq!(candidates, &["@1/foo".to_string(), "@2/foo".to_string()]);
+    assert!(!controls(&attempt).contains(&ControlEvent::ProjectUnique));
+    assert!(!controls(&attempt).contains(&ControlEvent::ProjectEmpty));
+    assert!(attempt.snapshot().plan.is_none());
+    assert_inert(&attempt);
+}
+
+#[test]
+fn equivalent_routes_share_one_physical_identity_and_retain_every_route() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/alias".into(), "/physical".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    // /alias is a symlink to /physical: both configured slots observe one
+    // physical root, so both routes identify the same physical directory.
+    supply_project(&mut attempt, inventory("/alias", "/physical", &[("foo", "/physical/foo")]));
+    supply_project(&mut attempt, inventory("/physical", "/physical", &[("foo", "/physical/foo")]));
+    let EntryDecision::StartProject { project, .. } = plan(&attempt).decision() else {
+        panic!("unique physical winner: {:?}", attempt.snapshot())
+    };
+    assert_eq!(project.routes.len(), 2);
+    // Root order picks the deterministic entry route, not work priority.
+    assert_eq!(project.route.slot, 1);
+    assert_eq!(project.entry, PathBuf::from("/physical/foo"));
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::ProjectIdentity("/physical/foo".into()));
+    assert!(matches!(exported.action.operation(), BoundOperation::StartProject { .. }));
+}
+
+#[test]
+fn missing_root_evidence_stops_and_never_supplies_absence() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let root_request = request(&attempt);
+    supply_observation(
+        &mut attempt,
+        Err(ObservationFailure {
+            source: Box::new(NativeReadFailure {
+                path: "/r1".into(),
+                source: std::io::Error::from_raw_os_error(13),
+            }),
+        }),
+    );
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "projects_read");
+    let EntryError::Observation { request, .. } = error else {
+        panic!("observation failure: {error:?}")
+    };
+    assert_eq!(request.as_ref(), &root_request);
+    assert!(!controls(&attempt).contains(&ControlEvent::ProjectEmpty));
+    assert!(attempt.snapshot().plan.is_none());
+}
+
+#[test]
+fn malformed_root_inventory_is_a_native_stop_never_an_empty_root() {
+    for observed in [
+        inventory("/r1", "relative", &[("foo", "/r1/foo")]),
+        inventory("/other", "/other", &[("foo", "/other/foo")]),
+        inventory("/r1", "/r1", &[("bad/name", "/r1/bad")]),
+        inventory("/r1", "/r1", &[("foo", "/r1/foo"), ("foo", "/r1/foo")]),
+    ] {
+        let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into()])).unwrap();
+        supply(&mut attempt, Vec::new());
+        supply_project(&mut attempt, observed);
+        let (boundary, error) = stopped(&attempt);
+        assert_eq!(boundary, "projects_read");
+        assert!(matches!(error, EntryError::Discovery(crate::ResolveError::InvalidInventory)), "{error:?}");
+        assert!(!controls(&attempt).contains(&ControlEvent::ProjectEmpty));
+    }
+}
+
+#[test]
+fn wrong_observation_kind_is_rejected_before_the_pending_request_is_consumed() {
+    // A sessions-shaped reply to a pending projects request is a protocol
+    // error with NO actor, data or journal change; the read stays pending.
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let pending = request(&attempt);
+    let before = format!("{:?}", attempt.snapshot());
+    for wrong in [
+        Observation::Sessions(SessionInventory::Absent),
+        Observation::Destination(DestinationEvidence::Absent),
+        Observation::Defaults(GeneratorDefaults::default()),
+        Observation::ProjectIdentity("/somewhere".into()),
+    ] {
+        let result = attempt.advance(Event::Observed(ReadCompletion {
+            request: pending.clone(),
+            result: Ok(wrong),
+        }));
+        assert!(matches!(result, Err(ProtocolError::ObservationShape { .. })));
+        assert_eq!(format!("{:?}", attempt.snapshot()), before);
+    }
+    // The correctly-shaped reply then advances normally.
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    assert!(matches!(plan(&attempt).decision(), EntryDecision::StartProject { .. }));
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn wrong_observation_shape_for_destination_and_defaults_reads_is_rejected_too() {
+    let mut input = invocation_roots("@1/fresh", vec!["/r1".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    let destination = request(&attempt);
+    let before = format!("{:?}", attempt.snapshot());
+    let result = attempt.advance(Event::Observed(ReadCompletion {
+        request: destination,
+        result: Ok(Observation::Sessions(SessionInventory::Absent)),
+    }));
+    assert!(matches!(result, Err(ProtocolError::ObservationShape { .. })));
+    assert_eq!(format!("{:?}", attempt.snapshot()), before);
+}
+
+#[test]
+fn wrong_slot_or_root_echo_is_rejected_without_advancing() {
+    let mut attempt = EntryAttempt::start(invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let pending = request(&attempt);
+    let before = format!("{:?}", attempt.snapshot());
+    for changed in [
+        ReadKind::Projects {
+            slot: RootSlot(1),
+            root: "/r2".into(),
+            filter: "foo".into(),
+        },
+        ReadKind::Projects {
+            slot: RootSlot(2),
+            root: "/r1".into(),
+            filter: "foo".into(),
+        },
+        ReadKind::Projects {
+            slot: RootSlot(2),
+            root: "/r2".into(),
+            filter: "other".into(),
+        },
+    ] {
+        let mut reply = pending.clone();
+        reply.kind = changed;
+        let result = attempt.advance(Event::Observed(ReadCompletion {
+            request: reply,
+            result: Ok(Observation::Projects(inventory("/r2", "/r2", &[("foo", "/r2/foo")]))),
+        }));
+        assert!(matches!(result, Err(ProtocolError::ReadMismatch { .. })));
+        assert_eq!(format!("{:?}", attempt.snapshot()), before);
+    }
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("foo", "/r2/foo")]));
+    assert!(matches!(plan(&attempt).decision(), EntryDecision::StartProject { .. }));
+}
+
+#[test]
+fn duplicate_and_stale_discovery_replies_are_rejected() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    let root_request = request(&attempt);
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    let before = format!("{:?}", attempt.snapshot());
+    let stale = Event::Observed(ReadCompletion {
+        request: root_request,
+        result: Ok(Observation::Projects(inventory("/r1", "/r1", &[]))),
+    });
+    assert!(matches!(attempt.advance(stale), Err(ProtocolError::NoPendingRead)));
+    assert_eq!(format!("{:?}", attempt.snapshot()), before);
+}
+
+// --- creation policy ---
+
+#[test]
+fn clean_miss_without_a_generator_is_a_typed_missing_stop() {
+    let mut attempt = EntryAttempt::start(invocation_roots("foo", vec!["/r1".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "create_policy");
+    let EntryError::Discovery(crate::ResolveError::Missing { roots, .. }) = error else {
+        panic!("missing: {error:?}")
+    };
+    assert_eq!(roots, &vec![PathBuf::from("/r1")]);
+}
+
+#[test]
+fn bare_scaffold_mode_with_an_empty_registry_keeps_its_guidance() {
+    let mut input = invocation_roots("fresh", vec!["/r1".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "create_policy");
+    let EntryError::ScaffoldUnavailable { registry, .. } = error else {
+        panic!("scaffold guidance: {error:?}")
+    };
+    assert!(registry.contains("default location"), "{registry}");
+    assert!(error.to_string().contains("[scaffold.generators]"), "{error}");
+    assert!(
+        !attempt
+            .journal
+            .iter()
+            .any(|r| matches!(r, AttemptRecord::ReadIssued(r) if matches!(r.kind, ReadKind::Destination { .. })))
+    );
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn unsafe_unqualified_creation_name_stops_at_policy() {
+    let mut input = invocation_roots("a/b", vec!["/r1".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    assert_eq!(stopped(&attempt).0, "create_policy");
+    assert!(matches!(stopped(&attempt).1, EntryError::Discovery(crate::ResolveError::UnsafeName { .. })));
+    // A qualified selector with a slashed fragment is already a selector error.
+    let mut input = invocation_roots("@2/a/b", vec!["/r1".into(), "/r2".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    assert_eq!(stopped(&attempt).0, "project_scope");
+    assert!(matches!(stopped(&attempt).1, EntryError::Discovery(crate::ResolveError::Selector { .. })));
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn session_name_collision_at_planning_uses_the_selection_inventory() {
+    let mut input = invocation_roots("fresh", vec!["/r1".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    input.intent.session_name = Some("taken".into());
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    // "fresh" misses sessions; the explicit session name collides with live work.
+    supply(&mut attempt, vec![session(9, "taken", None)]);
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[]));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "create_policy");
+    let EntryError::NameCollision { name, id } = error else {
+        panic!("collision: {error:?}")
+    };
+    assert_eq!((name.as_str(), *id), ("taken", session(9, "taken", None).id));
+}
+
+#[cfg(feature = "scaffold-rekon")]
+fn rekon_registry() -> crate::scaffold::Config {
+    crate::scaffold::Config::parse(None, Some("[scaffold]\ndefault = \"rk\"\n\n[scaffold.generators.rk]\nadapter = \"rekon\"\n")).unwrap()
+}
+
+#[cfg(not(feature = "scaffold-rekon"))]
+fn rekon_registry() -> crate::scaffold::Config {
+    crate::scaffold::Config::parse(None, None).unwrap()
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn unqualified_creation_with_multiple_physical_roots_offers_qualified_selectors() {
+    let mut input = invocation_roots("fresh", vec!["/one".into(), "/two".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/one", "/one", &[]));
+    supply_project(&mut attempt, inventory("/two", "/two", &[]));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "create_policy");
+    let EntryError::Discovery(crate::ResolveError::Destinations { candidates, .. }) = error else {
+        panic!("destinations: {error:?}")
+    };
+    assert_eq!(candidates, &["@1/fresh".to_string(), "@2/fresh".to_string()]);
+    assert!(
+        !attempt
+            .journal
+            .iter()
+            .any(|r| matches!(r, AttemptRecord::ReadIssued(r) if matches!(r.kind, ReadKind::Destination { .. })))
+    );
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn destination_absence_precedes_adapter_work_and_present_stops_creation() {
+    for (evidence, reached_adapter) in [(DestinationEvidence::Absent, true), (DestinationEvidence::Present, false)] {
+        let mut input = invocation_roots("@2/fresh", vec!["/one".into(), "/two".into()]);
+        input.generator = crate::scaffold::Choice::Default;
+        input.registry = rekon_registry();
+        let mut attempt = EntryAttempt::start(input).unwrap();
+        supply(&mut attempt, Vec::new());
+        supply_project(&mut attempt, inventory("/two", "/two", &[]));
+        let destination = request(&attempt);
+        let ReadKind::Destination { path, purpose } = destination.kind.clone() else {
+            panic!("destination kind")
+        };
+        assert_eq!(path, PathBuf::from("/two/fresh"));
+        assert_eq!(purpose, DestinationPurpose::Preparation);
+        supply_observation(&mut attempt, Ok(Observation::Destination(evidence)));
+        let (boundary, error) = stopped(&attempt);
+        let validated = attempt
+            .journal
+            .iter()
+            .any(|r| matches!(r, AttemptRecord::Directive(Directive::ValidateGenerator)));
+        if reached_adapter {
+            // With two configured roots the external adapter's declared
+            // contract refuses right at adapter validation — after absence.
+            assert_eq!(boundary, "generator_spec");
+            assert!(validated);
+            assert!(matches!(error, EntryError::Generator(_)));
+        } else {
+            assert_eq!(boundary, "destination_read");
+            assert!(!validated);
+            assert!(matches!(error, EntryError::DestinationExists { path } if path.as_path() == Path::new("/two/fresh")));
+        }
+    }
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn external_rekon_keeps_its_documented_single_root_divergence() {
+    let mut input = invocation_roots("fresh", vec!["/only".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/only", "/only", &[]));
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    let EntryDecision::ScaffoldAndStart {
+        destination,
+        generator,
+        session,
+        ..
+    } = plan(&attempt).decision()
+    else {
+        panic!("scaffold decision: {:?}", attempt.snapshot())
+    };
+    assert_eq!(destination.path, PathBuf::from("/only/fresh"));
+    assert_eq!(destination.slot, 1);
+    assert_eq!(generator.generator, "rk");
+    assert_eq!(session.name, "fresh");
+    // External rekon needs no observed defaults; no defaults read was issued.
+    assert!(!reads(&attempt).iter().any(|request| matches!(request.kind, ReadKind::GeneratorDefaults { .. })));
+    let action::DecisionBasis::Creation(basis) = plan(&attempt).basis() else {
+        panic!("creation basis")
+    };
+    assert!(basis.defaults.is_none());
+    // Binding rechecks fresh name availability and destination absence.
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::Destination(DestinationEvidence::Absent));
+    assert_eq!(
+        exported.shell,
+        "'rekon' 'fresh' && cd -P '/only/fresh' && 'tmux' '-S' '/no/socket/read/by/core' 'new-session' '-s' 'fresh' '-n' 'fresh' '-c' '/only/fresh'"
+    );
+}
+
+#[cfg(feature = "scaffold-rekon-native")]
+#[test]
+fn required_defaults_are_observed_once_and_the_generator_materializes_once() {
+    let mut input = invocation_roots("fresh", vec!["/only".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = crate::scaffold::Config::parse(None, Some("[scaffold.generators.rn]\nadapter = \"rekon-native\"\n")).unwrap();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/only", "/only", &[]));
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    let defaults_request = request(&attempt);
+    let ReadKind::GeneratorDefaults { cwd, needs } = defaults_request.kind.clone() else {
+        panic!("defaults kind")
+    };
+    assert_eq!(cwd, PathBuf::from("/does/not/need/to/exist"));
+    assert_eq!(needs, DefaultNeeds { author: true, license: true });
+    // Explicitly absent license is a completed fact; author is observed.
+    supply_observation(
+        &mut attempt,
+        Ok(Observation::Defaults(GeneratorDefaults {
+            author: Some("Observed Author".into()),
+            license: None,
+        })),
+    );
+    let EntryDecision::ScaffoldAndStart { generator, .. } = plan(&attempt).decision() else {
+        panic!("scaffold decision: {:?}", attempt.snapshot())
+    };
+    let action::DecisionBasis::Creation(basis) = plan(&attempt).basis() else {
+        panic!("creation basis")
+    };
+    assert_eq!(basis.defaults.as_ref(), Some(&defaults_request));
+    assert_eq!(basis.generator, "rn");
+    // Exactly one materialization with the ACTUAL facts: the observed author
+    // is baked into the program; no fake-empty re-resolution happened.
+    let program = generator.program.shell(tta_command::Handoff::Run).unwrap();
+    assert!(program.contains("Observed Author"), "{program}");
+    for directive in [
+        Directive::RankSessions,
+        Directive::RankProjects,
+        Directive::CreatePolicy,
+        Directive::ValidateGenerator,
+        Directive::PrepareCreation,
+    ] {
+        assert_eq!(
+            attempt.journal.iter().filter(|r| **r == AttemptRecord::Directive(directive)).count(),
+            1,
+            "one {directive:?}"
+        );
+    }
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::Destination(DestinationEvidence::Absent));
+    assert!(
+        exported.shell.starts_with("'mkdir' '-p' '/only/fresh' && cd -P '/only/fresh'"),
+        "{}",
+        exported.shell
+    );
+}
+
+#[cfg(feature = "scaffold-rekon-native")]
+#[test]
+fn adapter_option_mistakes_stop_at_generator_validation_before_defaults_or_creation() {
+    let mut input = invocation_roots("fresh", vec!["/only".into()]);
+    input.generator = crate::scaffold::Choice::Named("rn".into());
+    input.registry = crate::scaffold::Config::parse(
+        None,
+        Some("[scaffold.generators.rn]\nadapter = \"rekon-native\"\n\n[scaffold.generators.rn.options]\nbrunch = \"main\"\n"),
+    )
+    .unwrap();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/only", "/only", &[]));
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "generator_spec");
+    assert!(matches!(error, EntryError::Generator(_)));
+    assert!(!reads(&attempt).iter().any(|request| matches!(request.kind, ReadKind::GeneratorDefaults { .. })));
+}
+
+// --- new-work binding and lowering ---
+
+#[test]
+fn fresh_session_name_collision_at_binding_fails_closed_without_reranking() {
+    let mut attempt = EntryAttempt::start(invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("foo", "/r2/foo")]));
+    let original = plan(&attempt).clone();
+    deliver(&mut attempt);
+    // Someone created a session named foo between planning and delivery.
+    supply(&mut attempt, vec![session(9, "foo", None)]);
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/r2/foo".into())));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "binding_check");
+    assert!(matches!(error, EntryError::NameCollision { name, .. } if name == "foo"));
+    assert_eq!(attempt.snapshot().plan.as_ref(), Some(&original));
+    assert!(attempt.snapshot().bound.is_none());
+    assert_eq!(
+        attempt
+            .journal
+            .iter()
+            .filter(|r| **r == AttemptRecord::Directive(Directive::RankProjects))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn changed_route_and_changed_destination_fail_closed_at_binding() {
+    // A symlink retarget between planning and binding changes the physical
+    // directory the chosen route resolves to.
+    let mut attempt = EntryAttempt::start(invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("foo", "/r2/foo")]));
+    deliver(&mut attempt);
+    supply(&mut attempt, Vec::new());
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/elsewhere/foo".into())));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "binding_check");
+    let EntryError::RouteChanged { expected, observed, .. } = error else {
+        panic!("route change: {error:?}")
+    };
+    assert_eq!((expected.as_path(), observed.as_path()), (Path::new("/r2/foo"), Path::new("/elsewhere/foo")));
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn occupied_creation_destination_at_binding_requires_a_new_attempt() {
+    let mut input = invocation_roots("fresh", vec!["/only".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/only", "/only", &[]));
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    deliver(&mut attempt);
+    supply(&mut attempt, Vec::new());
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Present)));
+    let (boundary, error) = stopped(&attempt);
+    assert_eq!(boundary, "binding_check");
+    assert!(matches!(error, EntryError::DestinationChanged { path } if path.as_path() == Path::new("/only/fresh")));
+}
+
+#[test]
+fn switch_client_creation_detaches_then_switches_with_literal_startup_argv() {
+    let mut input = invocation_roots("@1/foo", vec!["/r1".into()]);
+    input.context.client = ClientEntry::SwitchWithinServer;
+    input.intent.startup = vec!["editor".into(), "file name;".into()];
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::ProjectIdentity("/r1/foo".into()));
+    let Expression::And(and) = &exported.expression else {
+        panic!("short-circuit sequence")
+    };
+    assert_eq!(and.steps.len(), 3);
+    let Expression::Command(create) = &and.steps[1] else { panic!("create step") };
+    let args: Vec<_> = create.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect();
+    assert_eq!(
+        args,
+        [
+            "-S",
+            "/no/socket/read/by/core",
+            "new-session",
+            "-d",
+            "-s",
+            "foo",
+            "-n",
+            "foo",
+            "-c",
+            "/r1/foo",
+            "--",
+            "editor",
+            // The trailing semicolon is argv-escaped, never shell source.
+            "file name\\;"
+        ]
+    );
+    let Expression::Command(switch) = &and.steps[2] else { panic!("switch step") };
+    assert_eq!(switch.args.last().unwrap().as_os_str(), "=foo");
+    // A lone executable stays one argv value through the sh wrapper.
+    let mut input = invocation_roots("@1/foo", vec!["/r1".into()]);
+    input.context.client = ClientEntry::SwitchWithinServer;
+    input.intent.startup = vec!["solo prog".into()];
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::ProjectIdentity("/r1/foo".into()));
+    let Expression::And(and) = &exported.expression else { panic!("sequence") };
+    let Expression::Command(create) = &and.steps[1] else { panic!("create") };
+    assert_eq!(
+        create.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect::<Vec<_>>()[..],
+        [
+            "-S",
+            "/no/socket/read/by/core",
+            "new-session",
+            "-d",
+            "-s",
+            "foo",
+            "-n",
+            "foo",
+            "-c",
+            "/r1/foo",
+            "--",
+            "/bin/sh",
+            "-c",
+            "exec \"$0\"",
+            "solo prog"
+        ]
+    );
+}
+
+#[test]
+fn window_policy_and_directory_override_belong_to_new_work_only() {
+    for (window, directory, expect_n) in [
+        (InitialWindow::Named("edit: main".into()), Some("/other/dir"), Some("edit: main")),
+        (InitialWindow::Unnamed, None, None),
+        (InitialWindow::AfterSession, None, Some("foo")),
+    ] {
+        let mut input = invocation_roots("@1/foo", vec!["/r1".into()]);
+        input.intent.window = window.clone();
+        input.intent.directory = directory.map(PathBuf::from);
+        let mut attempt = EntryAttempt::start(input).unwrap();
+        supply(&mut attempt, Vec::new());
+        supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+        let exported = export_new_work(&mut attempt, Vec::new(), Observation::ProjectIdentity("/r1/foo".into()));
+        let expected_dir = directory.unwrap_or("/r1/foo");
+        assert!(exported.shell.contains(&format!("'-c' '{expected_dir}'")), "{}", exported.shell);
+        assert!(exported.shell.contains(&format!("cd -P '{expected_dir}'")), "{}", exported.shell);
+        match expect_n {
+            Some(window) => assert!(exported.shell.contains(&format!("'-n' '{window}'")), "{}", exported.shell),
+            None => assert!(!exported.shell.contains("'-n'"), "{}", exported.shell),
+        }
+    }
+    // Startup/window/directory fields never leak into existing-work types.
+    let mut input = invocation("project");
+    input.intent.startup = vec!["editor".into()];
+    input.intent.window = InitialWindow::Named("editor".into());
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, vec![orphan()]);
+    let exported = export(&mut attempt, vec![orphan()]);
+    assert!(!exported.shell.contains("--"));
+    assert!(!exported.shell.contains("'-n'"));
+}
+
+#[test]
+fn explicit_session_name_and_input_validation_for_new_work() {
+    let mut input = invocation_roots("@2/foo", vec!["/r1".into(), "/r2".into()]);
+    input.intent.session_name = Some("team-foo".into());
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r2", "/r2", &[("foo", "/r2/foo")]));
+    let EntryDecision::StartProject { session, .. } = plan(&attempt).decision() else {
+        panic!("start decision")
+    };
+    assert_eq!(session.name, "team-foo");
+    let exported = export_new_work(&mut attempt, Vec::new(), Observation::ProjectIdentity("/r2/foo".into()));
+    assert!(exported.shell.contains("'-s' 'team-foo'"), "{}", exported.shell);
+    // Invalid new-work inputs are rejected before any host read.
+    let relative_root = || {
+        let mut input = invocation_roots("foo", vec!["/r1".into()]);
+        input.intent.roots = vec![PathBuf::from("relative")];
+        input
+    };
+    let bad_session_name = || {
+        let mut input = invocation_roots("foo", vec!["/r1".into()]);
+        input.intent.session_name = Some("bad:name".into());
+        input
+    };
+    let bad_window = || {
+        let mut input = invocation_roots("foo", vec!["/r1".into()]);
+        input.intent.window = InitialWindow::Named("\u{7}".into());
+        input
+    };
+    let bad_startup = || {
+        let mut input = invocation_roots("foo", vec!["/r1".into()]);
+        input.intent.startup = vec![OsString::from_vec(b"bad\0argv".to_vec())];
+        input
+    };
+    for input in [relative_root(), bad_session_name(), bad_window(), bad_startup()] {
+        assert!(EntryAttempt::start(input).is_err());
     }
 }

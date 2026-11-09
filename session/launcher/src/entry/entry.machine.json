@@ -34,7 +34,26 @@
             },
             "project_scope": {
               "id": "project_scope",
-              "entry": [{ "type": "@xstate.emit", "event": { "type": "begin_projects" } }]
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "scope_projects" } }],
+              "on": { "scoped": { "target": "#projects_read" } }
+            },
+            "projects_read": {
+              "id": "projects_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_projects" } }],
+              "on": {
+                "observed_projects": [
+                  { "guard": { "type": "more_roots" }, "target": "projects_read", "reenter": true },
+                  { "target": "#projects_rank" }
+                ]
+              }
+            },
+            "projects_rank": {
+              "id": "projects_rank",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "rank_projects" } }],
+              "on": {
+                "project_unique": { "target": "#prepare_start" },
+                "project_empty": { "target": "#prepare_create" }
+              }
             }
           }
         },
@@ -64,6 +83,47 @@
             }
           }
         },
+        "prepare_start": {
+          "id": "prepare_start",
+          "entry": [{ "type": "@xstate.emit", "event": { "type": "prepare_start" } }],
+          "on": { "prepared": { "target": "#planned" } }
+        },
+        "prepare_create": {
+          "id": "prepare_create",
+          "initial": "create_policy",
+          "states": {
+            "create_policy": {
+              "id": "create_policy",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "create_policy" } }],
+              "on": { "eligible": { "target": "#destination_read" } }
+            },
+            "destination_read": {
+              "id": "destination_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_destination" } }],
+              "on": { "observed": { "target": "#generator_spec" } }
+            },
+            "generator_spec": {
+              "id": "generator_spec",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "validate_generator" } }],
+              "on": {
+                "validated_generator": [
+                  { "guard": { "type": "needs_defaults" }, "target": "#defaults_read" },
+                  { "target": "#creation" }
+                ]
+              }
+            },
+            "defaults_read": {
+              "id": "defaults_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_defaults" } }],
+              "on": { "observed": { "target": "#creation" } }
+            },
+            "creation": {
+              "id": "creation",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "prepare_creation" } }],
+              "on": { "prepared": { "target": "#planned" } }
+            }
+          }
+        },
         "planned": {
           "id": "planned",
           "on": { "export": { "target": "#bind_action" } }
@@ -75,6 +135,16 @@
             "binding_read": {
               "id": "binding_read",
               "entry": [{ "type": "@xstate.emit", "event": { "type": "read_binding_sessions" } }],
+              "on": {
+                "binding_observed": [
+                  { "guard": { "type": "needs_binding_evidence" }, "target": "#binding_evidence" },
+                  { "target": "#binding_check" }
+                ]
+              }
+            },
+            "binding_evidence": {
+              "id": "binding_evidence",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_binding_evidence" } }],
               "on": { "observed": { "target": "#binding_check" } }
             },
             "binding_check": {

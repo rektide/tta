@@ -53,14 +53,39 @@ pub(crate) enum ViewPreference {
     Shared,
 }
 
+/// Initial window naming for a session this attempt creates. Only new-work
+/// decisions can carry it; existing-work entry has no window policy.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub(crate) enum InitialWindow {
+    /// Name the initial window after the new session (the delivered default).
+    #[default]
+    AfterSession,
+    /// Name the initial window exactly this.
+    Named(String),
+    /// Leave the window unnamed so `automatic-rename` keeps applying.
+    Unnamed,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct EntryIntent {
     pub selector: String,
     pub view: ViewPreference,
     pub satellite_prefix: String,
     /// Only OpenView can retain this. Existing-work decisions have no startup
-    /// argv/window-policy fields; those belong to the next stage's new work.
+    /// argv/window-policy fields; those belong to new-work operations.
     pub view_directory: Option<PathBuf>,
+    /// Configured target-local project roots in configured order, absolute.
+    /// An empty list is legal until project fallback actually needs roots.
+    pub roots: Vec<PathBuf>,
+    /// Explicit session name for new work; `None` uses the project basename.
+    pub session_name: Option<String>,
+    /// Startup argv for new-work sessions. Raw bytes; crossing into a tmux
+    /// operand is exclusively the lowerer's encoding decision.
+    pub startup: Vec<OsString>,
+    /// Explicit pane start-directory override for new work; `None` uses the
+    /// selected project route's entry path (or the creation destination).
+    pub directory: Option<PathBuf>,
+    pub window: InitialWindow,
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +165,12 @@ pub(crate) enum InputError {
     Target(&'static str),
     #[error("supplied target path must be absolute: {0:?}")]
     Path(PathBuf),
+    #[error("project roots must be absolute target-local paths: {0:?}")]
+    Root(PathBuf),
+    #[error("invalid initial window name {0:?}: pass a printable name or window-name=false")]
+    Window(String),
+    #[error(transparent)]
+    Action(#[from] action::Error),
     #[error(transparent)]
     Name(#[from] crate::ResolveError),
     #[error(transparent)]
@@ -152,12 +183,57 @@ pub(crate) enum SessionReadPurpose {
     BindAction,
 }
 
+/// Destination checks happen at preparation (authorizing a creation) and again
+/// at binding (rechecking the already-chosen action); they never share proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DestinationPurpose {
+    Preparation,
+    Binding,
+}
+
+/// One-based position in the configured root list, matching `@N` selectors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RootSlot(pub usize);
+
+/// Which observed target defaults a validated generator still needs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DefaultNeeds {
+    pub author: bool,
+    pub license: bool,
+}
+
+impl DefaultNeeds {
+    pub(super) fn any(self) -> bool {
+        self.author || self.license
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReadKind {
     Sessions {
         endpoint: EndpointKey,
         program: OsString,
         purpose: SessionReadPurpose,
+    },
+    /// One required root's basename-filtered inventory. `root` is the exact
+    /// configured path the observation must answer.
+    Projects {
+        slot: RootSlot,
+        root: PathBuf,
+        filter: String,
+    },
+    Destination {
+        path: PathBuf,
+        purpose: DestinationPurpose,
+    },
+    GeneratorDefaults {
+        cwd: PathBuf,
+        needs: DefaultNeeds,
+    },
+    /// Canonicalize the chosen route's entry path; the reply is the physical
+    /// directory it resolves to now.
+    ProjectIdentity {
+        route: super::action::ProjectRoute,
     },
 }
 
@@ -172,12 +248,21 @@ impl ReadRequest {
     pub(super) fn sessions_purpose(&self) -> SessionReadPurpose {
         match self.kind {
             ReadKind::Sessions { purpose, .. } => purpose,
+            _ => panic!("sessions purpose of a sessions request"),
+        }
+    }
+
+    pub(super) fn destination_purpose(&self) -> DestinationPurpose {
+        match self.kind {
+            ReadKind::Destination { purpose, .. } => purpose,
+            _ => panic!("destination purpose of a destination request"),
         }
     }
 
     pub(super) fn endpoint(&self) -> &EndpointKey {
         match &self.kind {
             ReadKind::Sessions { endpoint, .. } => endpoint,
+            _ => panic!("endpoint of a sessions request"),
         }
     }
 }
@@ -199,8 +284,32 @@ impl SessionInventory {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Observation {
     Sessions(SessionInventory),
+    /// Complete successful inventory of one requested root. Partial reads
+    /// must be `Err`; they never convert to an (empty) inventory.
+    Projects(crate::ProjectInventory),
+    /// Exact lstat-shaped evidence: only `Absent` (NotFound) authorizes
+    /// creation; `Present` includes dangling symlinks.
+    Destination(DestinationEvidence),
+    Defaults(GeneratorDefaults),
+    ProjectIdentity(PathBuf),
+}
+
+/// Classified destination evidence, distinct from a failed inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DestinationEvidence {
+    Absent,
+    Present,
+}
+
+/// Observed target defaults. `None` fields are explicitly-absent completed
+/// facts, not missing values the generator must acquire itself.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GeneratorDefaults {
+    pub author: Option<String>,
+    pub license: Option<String>,
 }
 
 /// Native observer errors (including capture/protocol/UTF-8 failures) retain
@@ -240,6 +349,8 @@ pub(crate) enum ProtocolError {
     NoPendingRead,
     #[error("reply does not answer the exact pending request: expected {expected:?}; received {received:?}")]
     ReadMismatch { expected: Box<ReadRequest>, received: Box<ReadRequest> },
+    #[error("reply observation does not answer the pending request kind: expected {expected:?}; received {received:?}")]
+    ObservationShape { expected: Box<ReadRequest>, received: Box<Observation> },
     #[error("delivery is only allowed at planned")]
     NotPlanned,
     #[error("attempt is already finished")]
@@ -256,8 +367,26 @@ pub(crate) enum EntryError {
     InventoryName(#[source] crate::ResolveError),
     #[error("ambiguous session selector {selector:?}: {candidates:?}; use a literal session name")]
     Ambiguous { selector: String, candidates: Vec<crate::Session> },
-    #[error("project discovery is not yet implemented in the staged internal entry attempt")]
-    DiscoveryNotImplemented,
+    #[error("project discovery guard failed: {0}")]
+    Discovery(#[source] crate::ResolveError),
+    #[error(
+        "scaffold mode is on but no generators are configured: add [scaffold.generators] to {registry} or disable with --scaffold=false (no session or project matches {selector:?})"
+    )]
+    ScaffoldUnavailable { registry: String, selector: String },
+    #[error("generator validation failed: {0}")]
+    Generator(#[source] anyhow::Error),
+    #[error("cannot create {path:?}: something already exists there")]
+    DestinationExists { path: PathBuf },
+    #[error("chosen project route {route:?} changed before binding: expected physical directory {expected:?}, observed {observed:?}; start a new attempt")]
+    RouteChanged {
+        route: Box<super::action::ProjectRoute>,
+        expected: PathBuf,
+        observed: PathBuf,
+    },
+    #[error("chosen creation destination {path:?} is no longer absent; start a new attempt")]
+    DestinationChanged { path: PathBuf },
+    #[error("session name {name:?} already belongs to session {id}; choose another session name")]
+    NameCollision { name: String, id: crate::SessionId },
     #[error("read {request:?} failed: {source}")]
     Observation {
         request: Box<ReadRequest>,
