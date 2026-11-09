@@ -1,6 +1,10 @@
 //! Runner-free observation contracts, matching, registry parsing and launch planning.
 #![forbid(unsafe_code)]
 
+// Staged replacement: kept private until entry, discovery, hosts and execution
+// can cut over together. No facade over the legacy public Workflow.
+#[allow(dead_code)]
+mod entry;
 mod matching;
 mod plan;
 mod prepared;

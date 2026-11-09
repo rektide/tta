@@ -1,0 +1,102 @@
+{
+  "id": "entry_attempt",
+  "initial": "active",
+  "states": {
+    "active": {
+      "id": "active",
+      "initial": "bind_registry",
+      "on": {
+        "stop": { "target": "#stopped" },
+        "cancel": { "target": "#stopped" }
+      },
+      "states": {
+        "bind_registry": {
+          "id": "bind_registry",
+          "entry": [{ "type": "@xstate.emit", "event": { "type": "validate_registry" } }],
+          "on": { "validated": { "target": "#select" } }
+        },
+        "select": {
+          "id": "select",
+          "initial": "sessions_read",
+          "states": {
+            "sessions_read": {
+              "id": "sessions_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_selection_sessions" } }],
+              "on": { "observed": { "target": "#sessions_rank" } }
+            },
+            "sessions_rank": {
+              "id": "sessions_rank",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "rank_sessions" } }],
+              "on": {
+                "unique": { "target": "#prepare_view" },
+                "empty": { "target": "#project_scope" }
+              }
+            },
+            "project_scope": {
+              "id": "project_scope",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "begin_projects" } }]
+            }
+          }
+        },
+        "prepare_view": {
+          "id": "prepare_view",
+          "initial": "view_policy",
+          "states": {
+            "view_policy": {
+              "id": "view_policy",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "settle_view" } }],
+              "on": {
+                "view_policy": [
+                  { "guard": { "type": "independent" }, "target": "#open_view" },
+                  { "target": "#enter_view" }
+                ]
+              }
+            },
+            "open_view": {
+              "id": "open_view",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "plan_open_view" } }],
+              "on": { "prepared": { "target": "#planned" } }
+            },
+            "enter_view": {
+              "id": "enter_view",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "plan_enter_view" } }],
+              "on": { "prepared": { "target": "#planned" } }
+            }
+          }
+        },
+        "planned": {
+          "id": "planned",
+          "on": { "export": { "target": "#bind_action" } }
+        },
+        "bind_action": {
+          "id": "bind_action",
+          "initial": "binding_read",
+          "states": {
+            "binding_read": {
+              "id": "binding_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_binding_sessions" } }],
+              "on": { "observed": { "target": "#binding_check" } }
+            },
+            "binding_check": {
+              "id": "binding_check",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "check_binding" } }],
+              "on": { "checked": { "target": "#binding_lower" } }
+            },
+            "binding_lower": {
+              "id": "binding_lower",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "bind_operation" } }],
+              "on": { "bound": { "target": "#export_action" } }
+            }
+          }
+        },
+        "export_action": {
+          "id": "export_action",
+          "entry": [{ "type": "@xstate.emit", "event": { "type": "export_action" } }],
+          "on": { "exported": { "target": "#exported" } }
+        }
+      }
+    },
+    "exported": { "id": "exported", "type": "final" },
+    "stopped": { "id": "stopped", "type": "final" }
+  }
+}
