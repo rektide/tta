@@ -367,6 +367,13 @@ fn malformed_inventory_is_not_ambiguity_or_absence() {
 #[test]
 fn literal_alias_unicode_shortest_and_actual_group_rules_survive_semantic_selection() {
     let cases = [
+        ("@2/foo", vec![session(1, "@2/foo", None)], 1, MatchReason::Literal),
+        (
+            "*[",
+            vec![session(1, "a*[b", None), session(2, "ab", None)],
+            1,
+            MatchReason::Substring { name: "a*[b".into() },
+        ),
         ("project", vec![orphan(), session(9, "project", None)], 9, MatchReason::Literal),
         (
             "view-project-9",
