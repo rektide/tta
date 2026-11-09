@@ -4,16 +4,45 @@
   "states": {
     "active": {
       "id": "active",
-      "initial": "bind_registry",
+      "initial": "bind_target",
       "on": {
         "stop": { "target": "#stopped" },
         "cancel": { "target": "#stopped" }
       },
       "states": {
-        "bind_registry": {
-          "id": "bind_registry",
-          "entry": [{ "type": "@xstate.emit", "event": { "type": "validate_registry" } }],
-          "on": { "validated": { "target": "#select" } }
+        "bind_target": {
+          "id": "bind_target",
+          "initial": "context_read",
+          "states": {
+            "context_read": {
+              "id": "context_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_context" } }],
+              "on": { "observed": { "target": "#context_policy" }, "supplied": { "target": "#bind_registry" } }
+            },
+            "context_policy": {
+              "id": "context_policy",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "apply_context_policy" } }],
+              "on": { "context_policy": [
+                { "guard": { "type": "needs_endpoint_identity" }, "target": "#endpoint_read" },
+                { "target": "#registry_read" }
+              ] }
+            },
+            "endpoint_read": {
+              "id": "endpoint_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_endpoint_identity" } }],
+              "on": { "observed": { "target": "#registry_read" } }
+            },
+            "registry_read": {
+              "id": "registry_read",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_registry" } }],
+              "on": { "observed": { "target": "#bind_registry" } }
+            },
+            "bind_registry": {
+              "id": "bind_registry",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "validate_registry" } }],
+              "on": { "validated": { "target": "#select" } }
+            }
+          }
         },
         "select": {
           "id": "select",

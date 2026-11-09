@@ -9,6 +9,10 @@ pub(super) const DEFINITION: &str = include_str!("entry.machine.json");
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Directive {
+    ReadContext,
+    ApplyContextPolicy,
+    ReadEndpointIdentity,
+    ReadRegistry,
     ValidateRegistry,
     ReadSelectionSessions,
     RankSessions,
@@ -34,6 +38,10 @@ pub(crate) enum Directive {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Event {
+    Supplied,
+    ContextPolicy {
+        needs_identity: bool,
+    },
     Validated,
     Observed,
     Unique,
@@ -68,6 +76,8 @@ pub(crate) enum Event {
 impl EventType for Event {
     fn event_type(&self) -> &str {
         match self {
+            Self::Supplied => "supplied",
+            Self::ContextPolicy { .. } => "context_policy",
             Self::Validated => "validated",
             Self::Observed => "observed",
             Self::Unique => "unique",
@@ -93,6 +103,9 @@ impl EventType for Event {
 
 static MACHINE: LazyLock<Arc<Machine<(), Event>>> = LazyLock::new(|| {
     let mut registry = Registry::new();
+    registry.guard("needs_endpoint_identity", |args| {
+        matches!(args.event, Ev::User(Event::ContextPolicy { needs_identity: true }))
+    });
     registry.guard("independent", |args| matches!(args.event, Ev::User(Event::ViewPolicy { independent: true })));
     registry.guard("more_roots", |args| {
         matches!(args.event, Ev::User(Event::ObservedProjects { more_roots: true }))
@@ -137,10 +150,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn supplied_control() -> Control {
+        let mut control = Control::start();
+        assert_eq!(control.take_directives(), [Directive::ReadContext]);
+        control.send(Event::Supplied);
+        control
+    }
+
     #[test]
     fn actual_entry_emission_is_once_ordered_and_guarded_on_one_retained_actor() {
         for independent in [false, true] {
-            let mut control = Control::start();
+            let mut control = supplied_control();
             assert_eq!(control.take_directives(), [Directive::ValidateRegistry]);
             assert!(control.take_directives().is_empty());
             for (event, directive) in [
@@ -181,7 +201,7 @@ mod tests {
     // guarded physical rank, then the creation preparation ladder.
     #[test]
     fn discovery_emission_reenters_the_root_read_and_walks_the_creation_ladder() {
-        let mut control = Control::start();
+        let mut control = supplied_control();
         control.take_directives();
         for (event, directive) in [
             (Event::Validated, Directive::ReadSelectionSessions),
@@ -223,7 +243,7 @@ mod tests {
         control.send(Event::Exported);
         assert_eq!(control.leaf(), "exported");
         // A generator needing no defaults skips the defaults read entirely.
-        let mut control = Control::start();
+        let mut control = supplied_control();
         control.take_directives();
         for event in [
             Event::Validated,
@@ -244,7 +264,7 @@ mod tests {
         control.send(Event::ValidatedGenerator { needs_defaults: false });
         assert_eq!(control.take_directives(), [Directive::PrepareCreation]);
         // A unique physical project skips creation and prepares new work.
-        let mut control = Control::start();
+        let mut control = supplied_control();
         control.take_directives();
         for event in [
             Event::Validated,
@@ -266,7 +286,7 @@ mod tests {
     fn parent_stop_and_cancel_cover_nested_read_and_pure_states() {
         for event in [Event::Stop, Event::Cancel] {
             for count in 0..12 {
-                let mut control = Control::start();
+                let mut control = supplied_control();
                 control.take_directives();
                 for event in [
                     Event::Validated,
@@ -341,6 +361,10 @@ mod tests {
         let mut directives = Vec::new();
         walk(&value, &mut directives);
         let expected = [
+            Directive::ReadContext,
+            Directive::ApplyContextPolicy,
+            Directive::ReadEndpointIdentity,
+            Directive::ReadRegistry,
             Directive::ValidateRegistry,
             Directive::ReadSelectionSessions,
             Directive::RankSessions,
@@ -373,7 +397,16 @@ mod tests {
         let references = Machine::<(), Event>::references(&value).unwrap();
         let mut guards = references.guards.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
         guards.sort_unstable();
-        assert_eq!(guards, ["independent", "more_roots", "needs_binding_evidence", "needs_defaults"]);
+        assert_eq!(
+            guards,
+            [
+                "independent",
+                "more_roots",
+                "needs_binding_evidence",
+                "needs_defaults",
+                "needs_endpoint_identity"
+            ]
+        );
         assert!(references.actions.is_empty() && references.actors.is_empty() && references.delays.is_empty());
     }
 }

@@ -7,6 +7,8 @@ status: implemented-internal
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
 sources:
+  - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
+    title: Add machine-owned context policy and registry acquisition before selection; regenerate the structural graph
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Implement the approved first-stage retained actor, verify emission and guards, and generate this structural projection
   - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
@@ -33,6 +35,10 @@ self-reentry, guarded physical ranking, and the creation-preparation ladder
 one materialization). New-work bindings add a second evidence read — chosen
 route identity or destination absence — before the shared check/lower states.
 There are still no effect requests: export remains the only delivery.
+The initial `bind_target` compound now requests raw host context, applies shared
+whole-layer policy, optionally compares physical endpoint identities, and requests
+one semantic registry acquisition before validating the choice. Supplied frozen
+context skips acquisition through an explicit chart edge, not a separate driver.
 
 Generated from the actual JSON, not copied from the design sketch. Node labels
 show IDs, hierarchical paths and state-entry directives. Dotted initial edges
@@ -57,7 +63,12 @@ cover those separate contracts.
 flowchart TD
     entry_attempt["entry_attempt<br/>compound"]
     active["active<br/>compound"]
-    bind_registry["bind_registry<br/>active.bind_registry<br/>emit validate_registry"]
+    bind_target["bind_target<br/>active.bind_target<br/>compound"]
+    context_read["context_read<br/>active.bind_target.context_read<br/>emit read_context"]
+    context_policy["context_policy<br/>active.bind_target.context_policy<br/>emit apply_context_policy"]
+    endpoint_read["endpoint_read<br/>active.bind_target.endpoint_read<br/>emit read_endpoint_identity"]
+    registry_read["registry_read<br/>active.bind_target.registry_read<br/>emit read_registry"]
+    bind_registry["bind_registry<br/>active.bind_target.bind_registry<br/>emit validate_registry"]
     select["select<br/>active.select<br/>compound"]
     sessions_read["sessions_read<br/>active.select.sessions_read<br/>emit read_selection_sessions"]
     sessions_rank["sessions_rank<br/>active.select.sessions_rank<br/>emit rank_sessions"]
@@ -85,9 +96,16 @@ flowchart TD
     exported["exported<br/>final"]
     stopped["stopped<br/>final"]
     entry_attempt -.->|initial| active
-    active -.->|initial| bind_registry
+    active -.->|initial| bind_target
     active -->|stop| stopped
     active -->|cancel| stopped
+    bind_target -.->|initial| context_read
+    context_read -->|observed| context_policy
+    context_read -->|supplied| bind_registry
+    context_policy -->|context_policy, 1: needs_endpoint_identity| endpoint_read
+    context_policy -->|context_policy, 2: otherwise| registry_read
+    endpoint_read -->|observed| registry_read
+    registry_read -->|observed| bind_registry
     bind_registry -->|validated| select
     select -.->|initial| sessions_read
     sessions_read -->|observed| sessions_rank

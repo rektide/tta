@@ -50,6 +50,129 @@ fn orphan() -> crate::Session {
     session(42, "view-project-42", Some("project"))
 }
 
+fn acquired() -> EntryAttempt {
+    EntryAttempt::acquire(context::Acquisition {
+        scope: context::Scope {
+            origin: context::Origin::Ssh {
+                host: "supplied:no-host-I/O".into(),
+                setup: crate::target::TargetSetup::default(),
+            },
+            cwd: None,
+        },
+        overrides: context::Overrides {
+            satellite_prefix: Some("view-".into()),
+            ..Default::default()
+        },
+        intent: EntryIntent::selector("project"),
+        default_scaffold: "false".into(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn acquisition_is_in_the_same_attempt_and_exact_setup_echo_is_checked_before_consumption() {
+    let mut attempt = acquired();
+    let pending = request(&attempt);
+    assert!(matches!(pending.kind, ReadKind::TargetContext));
+    assert!(attempt.snapshot().target.is_none());
+    for change in 0..3 {
+        let mut wrong = pending.clone();
+        match change {
+            0 => wrong.scope.cwd = Some("/wrong".into()),
+            1 => {
+                let context::Origin::Ssh { setup, .. } = &mut wrong.scope.origin else {
+                    panic!()
+                };
+                setup.login = true;
+            }
+            _ => {
+                let context::Origin::Ssh { host, .. } = &mut wrong.scope.origin else {
+                    panic!()
+                };
+                *host = "wrong".into();
+            }
+        }
+        let before = attempt.snapshot();
+        assert!(matches!(
+            attempt.advance(Event::Observed(ReadCompletion {
+                request: wrong,
+                result: Ok(Observation::Registry(None))
+            })),
+            Err(ProtocolError::ReadMismatch { .. })
+        ));
+        assert_eq!(attempt.snapshot().journal, before.journal);
+        assert_eq!(request(&attempt), pending);
+    }
+    supply_observation(
+        &mut attempt,
+        Ok(Observation::Context(context::Facts {
+            cwd: "/poison/path/no-core-read".into(),
+            uid: 4321,
+            environment: Default::default(),
+        })),
+    );
+    let registry = request(&attempt);
+    assert!(matches!(registry.kind, ReadKind::Registry { path: None }));
+    assert_eq!(registry.scope.cwd, Some("/poison/path/no-core-read".into()));
+    let context::Origin::Ssh { setup, .. } = &registry.scope.origin else {
+        panic!()
+    };
+    assert_eq!(setup.cwd, registry.scope.cwd);
+    supply_observation(&mut attempt, Ok(Observation::Registry(None)));
+    assert!(matches!(request(&attempt).kind, ReadKind::Sessions { .. }));
+    supply(&mut attempt, vec![orphan()]);
+    assert!(matches!(plan(&attempt).decision(), EntryDecision::OpenView { .. }));
+    assert_eq!(plan(&attempt).target().client, ClientEntry::AttachTerminal);
+}
+
+#[test]
+fn acquired_registry_error_precedes_sessions_and_physical_endpoint_mismatch_stops() {
+    let mut attempt = acquired();
+    supply_observation(
+        &mut attempt,
+        Ok(Observation::Context(context::Facts {
+            cwd: "/target".into(),
+            uid: 1,
+            environment: Default::default(),
+        })),
+    );
+    supply_observation(&mut attempt, Ok(Observation::Registry(Some("invalid registry".into()))));
+    assert!(matches!(stopped(&attempt).1, EntryError::Registry(_)));
+    assert!(!reads(&attempt).iter().any(|r| matches!(r.kind, ReadKind::Sessions { .. })));
+
+    let mut attempt = EntryAttempt::acquire(context::Acquisition {
+        scope: context::Scope {
+            origin: context::Origin::Local { host: "local".into() },
+            cwd: None,
+        },
+        overrides: context::Overrides {
+            socket: Some(crate::socket::Selection::Path("/chosen".into())),
+            ..Default::default()
+        },
+        intent: EntryIntent::selector("work"),
+        default_scaffold: "false".into(),
+    })
+    .unwrap();
+    supply_observation(
+        &mut attempt,
+        Ok(Observation::Context(context::Facts {
+            cwd: "/target".into(),
+            uid: 1,
+            environment: [("TMUX".into(), "/current,1,1".into())].into(),
+        })),
+    );
+    assert!(matches!(request(&attempt).kind, ReadKind::EndpointIdentity { .. }));
+    supply_observation(
+        &mut attempt,
+        Ok(Observation::EndpointIdentity {
+            current: "/physical/a".into(),
+            selected: "/physical/b".into(),
+        }),
+    );
+    assert_eq!(stopped(&attempt).0, "endpoint_read");
+    assert!(matches!(stopped(&attempt).1, EntryError::Context(_)));
+}
+
 /// A root inventory observation: requested spelling, observed physical root
 /// and immediate entries with their canonical directories.
 fn inventory(requested: &str, physical: &str, entries: &[(&str, &str)]) -> crate::ProjectInventory {
@@ -189,6 +312,7 @@ fn orphan_only_work_reaches_one_exported_queue_with_no_filesystem_request() {
     assert_eq!(
         controls(&attempt),
         [
+            ControlEvent::Supplied,
             ControlEvent::Validated,
             ControlEvent::Observed,
             ControlEvent::Unique,

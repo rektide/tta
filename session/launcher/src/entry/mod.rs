@@ -1,6 +1,7 @@
 //! Owned entry protocol, staged internally until the coherent frontend cutover.
 mod action;
 mod bind;
+pub mod context;
 mod discover;
 mod machine;
 mod prepare;
@@ -24,7 +25,11 @@ pub(crate) struct EntryAttempt {
 
 struct AttemptData {
     id: AttemptId,
-    target: BoundTarget,
+    target: Option<BoundTarget>,
+    scope: context::Scope,
+    acquisition: Option<context::Acquisition>,
+    facts: Option<context::Facts>,
+    policy: Option<context::Policy>,
     intent: EntryIntent,
     registry: crate::scaffold::Config,
     generator_choice: crate::scaffold::Choice,
@@ -49,29 +54,56 @@ impl EntryAttempt {
         if invocation.intent.selector.is_empty() {
             return Err(InputError::EmptySelector);
         }
-        crate::validate_satellite_prefix(&invocation.intent.satellite_prefix)?;
-        for root in &invocation.intent.roots {
-            if !root.is_absolute() {
-                return Err(InputError::Root(root.clone()));
-            }
-        }
-        if let Some(name) = &invocation.intent.session_name {
-            crate::resolve::validate_name(name)?;
-        }
-        if let InitialWindow::Named(name) = &invocation.intent.window
-            && (name.is_empty() || name.chars().any(char::is_control))
-        {
-            return Err(InputError::Window(name.clone()));
-        }
-        action::validate_startup(&invocation.intent.startup)?;
+        validate_intent(&invocation.intent)?;
         let mut attempt = Self {
             control: Control::start(),
             data: AttemptData {
                 id,
-                target,
+                scope: target.scope.clone(),
+                target: Some(target),
+                acquisition: None,
+                facts: None,
+                policy: None,
                 intent: invocation.intent,
                 registry: invocation.registry,
                 generator_choice: invocation.generator,
+                generator: None,
+                selection: None,
+                workspace: None,
+                discovery: None,
+                project: None,
+                creation: None,
+                validated_generator: None,
+                plan: None,
+                binding: None,
+                binding_evidence: None,
+                bound: None,
+                outcome: None,
+            },
+            pending: None,
+            journal: Vec::new(),
+            sequence: 0,
+        };
+        attempt.pump();
+        Ok(attempt)
+    }
+
+    pub(crate) fn acquire(input: context::Acquisition) -> Result<Self, InputError> {
+        if input.intent.selector.is_empty() {
+            return Err(InputError::EmptySelector);
+        }
+        let mut attempt = Self {
+            control: Control::start(),
+            data: AttemptData {
+                id: AttemptId::new(),
+                target: None,
+                scope: input.scope.clone(),
+                intent: input.intent.clone(),
+                acquisition: Some(input),
+                facts: None,
+                policy: None,
+                registry: crate::scaffold::Config::parse(None, None).expect("empty registry"),
+                generator_choice: crate::scaffold::Choice::Off,
                 generator: None,
                 selection: None,
                 workspace: None,
@@ -145,6 +177,35 @@ impl EntryAttempt {
                 let request = self.pending.take().expect("checked pending request");
                 self.journal.push(AttemptRecord::ReadAccepted(request.id));
                 match completion.result {
+                    Ok(Observation::Context(facts)) => {
+                        self.data.facts = Some(facts);
+                        self.send(ControlEvent::Observed);
+                    }
+                    Ok(Observation::Registry(text)) => {
+                        let ReadKind::Registry { path } = &request.kind else { unreachable!() };
+                        match crate::scaffold::Config::parse(path.as_deref(), text.as_deref()) {
+                            Ok(registry) => {
+                                self.data.registry = registry;
+                                self.send(ControlEvent::Observed);
+                            }
+                            Err(error) => self.stop(EntryError::Registry(error)),
+                        }
+                    }
+                    Ok(Observation::EndpointIdentity { current, selected }) => {
+                        if current == selected {
+                            self.send(ControlEvent::Observed);
+                        } else {
+                            let (current, selected) = self
+                                .data
+                                .policy
+                                .as_ref()
+                                .expect("context policy")
+                                .endpoint_identity
+                                .clone()
+                                .expect("endpoint identity request");
+                            self.stop(EntryError::Context(crate::socket::Error::DifferentServer { current, selected }.into()));
+                        }
+                    }
                     Ok(Observation::Sessions(inventory)) => {
                         let purpose = request.sessions_purpose();
                         match select::WorkspaceCatalog::from_read(request, inventory) {
@@ -267,6 +328,44 @@ impl EntryAttempt {
         use Directive::*;
         let data = &mut self.data;
         Ok(match directive {
+            ReadContext => {
+                if data.acquisition.is_none() {
+                    Some(ControlEvent::Supplied)
+                } else {
+                    self.issue(ReadKind::TargetContext);
+                    None
+                }
+            }
+            ApplyContextPolicy => {
+                let policy = context::apply(data.acquisition.as_ref().expect("acquisition"), data.facts.as_ref().expect("context facts"))
+                    .map_err(EntryError::Context)?;
+                validate_intent(&policy.intent).map_err(|error| EntryError::Context(error.into()))?;
+                let mut target = BoundTarget::from_supplied(data.id, policy.supplied.clone()).map_err(|error| EntryError::Context(error.into()))?;
+                target.scope = policy.scope.clone();
+                data.scope = policy.scope.clone();
+                data.target = Some(target);
+                data.intent = policy.intent.clone();
+                data.generator_choice = policy.generator.clone();
+                let needs_identity = policy.endpoint_identity.is_some();
+                data.policy = Some(policy);
+                Some(ControlEvent::ContextPolicy { needs_identity })
+            }
+            ReadEndpointIdentity => {
+                let (current, selected) = data
+                    .policy
+                    .as_ref()
+                    .expect("context policy")
+                    .endpoint_identity
+                    .clone()
+                    .expect("different endpoint spellings");
+                self.issue(ReadKind::EndpointIdentity { current, selected });
+                None
+            }
+            ReadRegistry => {
+                let path = data.policy.as_ref().expect("context policy").registry.clone();
+                self.issue(ReadKind::Registry { path });
+                None
+            }
             ValidateRegistry => {
                 data.generator = prepare::generator(&data.registry, &data.generator_choice)?;
                 Some(ControlEvent::Validated)
@@ -316,7 +415,7 @@ impl EntryAttempt {
             }
             PrepareStart => {
                 data.plan = Some(prepare::start_project(
-                    &data.target,
+                    data.target.as_ref().expect("bound context"),
                     &data.intent,
                     data.selection.as_ref().expect("selection inventory"),
                     data.discovery.as_ref().expect("scoped discovery task"),
@@ -356,7 +455,7 @@ impl EntryAttempt {
             }
             PrepareCreation => {
                 data.plan = Some(prepare::scaffold_and_start(
-                    &data.target,
+                    data.target.as_ref().expect("bound context"),
                     &data.intent,
                     data.selection.as_ref().expect("selection inventory"),
                     data.discovery.as_ref().expect("scoped discovery task"),
@@ -374,18 +473,21 @@ impl EntryAttempt {
                 Some(ControlEvent::Prepared)
             }
             SettleView => Some(ControlEvent::ViewPolicy {
-                independent: prepare::independent(data.intent.view, data.target.client),
+                independent: prepare::independent(data.intent.view, data.target.as_ref().expect("bound context").client),
             }),
             PlanOpenView => {
                 data.plan = Some(prepare::open_view(
-                    &data.target,
+                    data.target.as_ref().expect("bound context"),
                     &data.intent,
                     data.workspace.as_ref().expect("workspace match"),
                 )?);
                 Some(ControlEvent::Prepared)
             }
             PlanEnterView => {
-                data.plan = Some(prepare::enter_view(&data.target, data.workspace.as_ref().expect("workspace match")));
+                data.plan = Some(prepare::enter_view(
+                    data.target.as_ref().expect("bound context"),
+                    data.workspace.as_ref().expect("workspace match"),
+                ));
                 Some(ControlEvent::Prepared)
             }
             ReadBindingSessions => {
@@ -446,7 +548,8 @@ impl EntryAttempt {
                 attempt: self.data.id,
                 sequence: self.sequence,
             },
-            target: self.data.target.binding,
+            target: TargetBindingId(self.data.id),
+            scope: self.data.scope.clone(),
             kind,
         };
         self.journal.push(AttemptRecord::ReadIssued(request.clone()));
@@ -455,8 +558,8 @@ impl EntryAttempt {
 
     fn issue_sessions(&mut self, purpose: SessionReadPurpose) {
         let kind = ReadKind::Sessions {
-            endpoint: self.data.target.endpoint(),
-            program: self.data.target.program.as_os_str().to_owned(),
+            endpoint: self.data.target.as_ref().expect("bound context").endpoint(),
+            program: self.data.target.as_ref().expect("bound context").program.as_os_str().to_owned(),
             purpose,
         };
         self.issue(kind);
@@ -472,7 +575,7 @@ impl EntryAttempt {
     }
 
     fn issue_defaults(&mut self, needs: DefaultNeeds) {
-        let cwd = self.data.target.cwd.clone();
+        let cwd = self.data.target.as_ref().expect("bound context").cwd.clone();
         self.issue(ReadKind::GeneratorDefaults { cwd, needs });
     }
 
@@ -488,12 +591,34 @@ impl EntryAttempt {
 fn observation_answers_request(kind: &ReadKind, observation: &Observation) -> bool {
     matches!(
         (kind, observation),
-        (ReadKind::Sessions { .. }, Observation::Sessions(_))
+        (ReadKind::TargetContext, Observation::Context(_))
+            | (ReadKind::Registry { .. }, Observation::Registry(_))
+            | (ReadKind::EndpointIdentity { .. }, Observation::EndpointIdentity { .. })
+            | (ReadKind::Sessions { .. }, Observation::Sessions(_))
             | (ReadKind::Projects { .. }, Observation::Projects(_))
             | (ReadKind::Destination { .. }, Observation::Destination(_))
             | (ReadKind::GeneratorDefaults { .. }, Observation::Defaults(_))
             | (ReadKind::ProjectIdentity { .. }, Observation::ProjectIdentity(_))
     )
+}
+
+fn validate_intent(intent: &EntryIntent) -> Result<(), InputError> {
+    crate::validate_satellite_prefix(&intent.satellite_prefix)?;
+    for root in &intent.roots {
+        if !root.is_absolute() {
+            return Err(InputError::Root(root.clone()));
+        }
+    }
+    if let Some(name) = &intent.session_name {
+        crate::resolve::validate_name(name)?;
+    }
+    if let InitialWindow::Named(name) = &intent.window
+        && (name.is_empty() || name.chars().any(char::is_control))
+    {
+        return Err(InputError::Window(name.clone()));
+    }
+    action::validate_startup(&intent.startup)?;
+    Ok(())
 }
 
 #[cfg(test)]

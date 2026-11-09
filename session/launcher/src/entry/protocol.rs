@@ -30,7 +30,7 @@ pub(crate) struct RequestId {
 /// Scoped to a frozen supplied target in this attempt. A host name or equal
 /// socket spelling alone is never an identity proof, nor is this an incarnation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TargetBindingId(AttemptId);
+pub(crate) struct TargetBindingId(pub(super) AttemptId);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EndpointKey {
@@ -107,6 +107,7 @@ pub(crate) struct Invocation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BoundTarget {
+    pub(super) scope: super::context::Scope,
     pub(super) binding: TargetBindingId,
     pub(super) host: String,
     pub(super) cwd: PathBuf,
@@ -139,6 +140,10 @@ impl BoundTarget {
             tta_command::Word::new(label.directory.as_os_str())?;
         }
         Ok(Self {
+            scope: super::context::Scope {
+                origin: super::context::Origin::Local { host: context.host.clone() },
+                cwd: Some(context.cwd.clone()),
+            },
             binding: TargetBindingId(attempt),
             host: context.host,
             cwd: context.cwd,
@@ -210,6 +215,16 @@ impl DefaultNeeds {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReadKind {
+    TargetContext,
+    /// One semantic registry acquisition. Any bounded component walk belongs
+    /// to the observer, never to the entry chart's selection course.
+    Registry {
+        path: Option<PathBuf>,
+    },
+    EndpointIdentity {
+        current: PathBuf,
+        selected: PathBuf,
+    },
     Sessions {
         endpoint: EndpointKey,
         program: OsString,
@@ -241,6 +256,7 @@ pub(crate) enum ReadKind {
 pub(crate) struct ReadRequest {
     pub id: RequestId,
     pub target: TargetBindingId,
+    pub scope: super::context::Scope,
     pub kind: ReadKind,
 }
 
@@ -286,6 +302,12 @@ impl SessionInventory {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Observation {
+    Context(super::context::Facts),
+    Registry(Option<String>),
+    EndpointIdentity {
+        current: PathBuf,
+        selected: PathBuf,
+    },
     Sessions(SessionInventory),
     /// Complete successful inventory of one requested root. Partial reads
     /// must be `Err`; they never convert to an (empty) inventory.
@@ -359,6 +381,8 @@ pub(crate) enum ProtocolError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EntryError {
+    #[error("target context policy failed: {0}")]
+    Context(#[source] anyhow::Error),
     #[error("generator registry/choice validation failed: {0}")]
     Registry(#[source] anyhow::Error),
     #[error("invalid complete session inventory: {0}")]
@@ -420,7 +444,7 @@ pub(crate) enum AttemptRecord {
 #[derive(Clone, Debug)]
 pub(crate) struct AttemptSnapshot {
     pub id: AttemptId,
-    pub target: BoundTarget,
+    pub target: Option<BoundTarget>,
     pub leaf: String,
     pub pending: Option<ReadRequest>,
     pub plan: Option<action::EntryPlan>,
