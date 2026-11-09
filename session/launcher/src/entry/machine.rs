@@ -8,7 +8,7 @@ pub(super) const DEFINITION: &str = include_str!("entry.machine.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum Directive {
+pub(crate) enum Directive {
     ValidateRegistry,
     ReadSelectionSessions,
     RankSessions,
@@ -24,7 +24,7 @@ pub(super) enum Directive {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(super) enum Event {
+pub(crate) enum Event {
     Validated,
     Observed,
     Unique,
@@ -199,7 +199,27 @@ mod tests {
         let value = serde_json::from_str(DEFINITION).unwrap();
         let mut directives = Vec::new();
         walk(&value, &mut directives);
-        assert_eq!(directives.len(), 11);
+        let expected = [
+            Directive::ValidateRegistry,
+            Directive::ReadSelectionSessions,
+            Directive::RankSessions,
+            Directive::BeginProjects,
+            Directive::SettleView,
+            Directive::PlanOpenView,
+            Directive::PlanEnterView,
+            Directive::ReadBindingSessions,
+            Directive::CheckBinding,
+            Directive::BindOperation,
+            Directive::ExportAction,
+        ];
+        assert_eq!(directives.len(), expected.len());
+        for directive in expected {
+            assert_eq!(
+                directives.iter().filter(|d| **d == directive).count(),
+                1,
+                "one chart entry for each exhaustive native handler"
+            );
+        }
         let references = Machine::<(), Event>::references(&value).unwrap();
         assert_eq!(references.guards.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["independent"]);
         assert!(references.actions.is_empty() && references.actors.is_empty() && references.delays.is_empty());
