@@ -32,8 +32,7 @@ sources:
 **The commissioned multi-root feature is implemented and verified across every
 accepted surface. The ticket's acceptance criteria are met; closing remains the
 owner's decision.** This slice implements the establishing checkpoint's handoff
-items 1–5 in six tta commits plus one term-preserver commit, each an explicit-path
-jj commit:
+items 1–5 in explicit-path jj commits:
 
 | Commit | Surface |
 | --- | --- |
@@ -43,6 +42,8 @@ jj commit:
 | `1083d60e` | External-rekon fail-closed multi-root creation guard |
 | `17d54fc2` | Actual multi-root SSH verification and real local-tmux repeated-root launch |
 | `6cf870ed` | Structural runner-free witness counts and the Python witness's scratch selection |
+| `b492e7c0` | Delivered-contract documentation and this checkpoint |
+| `d26064c1` | Workspace formatting reflow of the integration changes |
 
 Consumer: `0f97bfe3` (`vnpwlnws`), "Adopt plural local project roots and
 identity-aware completion".
