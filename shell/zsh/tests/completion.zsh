@@ -11,6 +11,8 @@ fixture=$3
 export TTA_LIVE_SOCKET=$4
 mkdir -p "$fixture/bin" "$fixture/root/pipewire-native" "$fixture/root/space project" \
   "$fixture/root/meta[x]*" "$fixture/root/quote'project" "$fixture/root/--dash" \
+  "$fixture/root/dup-project" "$fixture/second root/dup-project" \
+  "$fixture/second root/second-only" \
   "$fixture/override root/other-project"
 print -r -- 'not a socket' > "$fixture/bad-socket"
 ln -s "$binary" "$fixture/bin/tta"
@@ -74,6 +76,14 @@ check 'tta quote' "tta quote\\'project "
 check 'tta --roo' 'tta --root='
 check "tta --root '$fixture/override root' oth" "tta --root '$fixture/override root' other-project "
 check "tta --root='$fixture/override root' oth" "tta --root='$fixture/override root' other-project "
+# Repeated --root occurrences all reach the read-only inventory, in order, so
+# first-root and second-root projects complete and slot numbers stay stable.
+check "tta --root '$fixture/root' --root '$fixture/second root' pipe" "tta --root '$fixture/root' --root '$fixture/second root' pipewire-native "
+check "tta --root '$fixture/root' --root '$fixture/second root' seco" "tta --root '$fixture/root' --root '$fixture/second root' second-only "
+# A basename duplicated across roots never completes bare; its qualified
+# selectors are reachable by substring or wildcard on the basename.
+check "tta --root '$fixture/root' --root '$fixture/second root' @2/dup" "tta --root '$fixture/root' --root '$fixture/second root' @2/dup-project "
+check "tta --root '$fixture/root' --root '$fixture/second root' @1/*dup*" "tta --root '$fixture/root' --root '$fixture/second root' @1/dup-project "
 check "tta --socket-path '$TTA_LIVE_SOCKET' *work" "tta --socket-path '$TTA_LIVE_SOCKET' live-work "
 check "tta --socket-path='$TTA_LIVE_SOCKET' live" "tta --socket-path='$TTA_LIVE_SOCKET' live-work "
 check "tta --root /no-such-root --socket-path '$TTA_LIVE_SOCKET' work" "tta --root /no-such-root --socket-path '$TTA_LIVE_SOCKET' live-work "

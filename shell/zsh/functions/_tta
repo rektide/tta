@@ -6,7 +6,7 @@ local -a query sessions projects expl
 local option
 
 _arguments -s -S -C \
-  '--root=[Project root]:project root:_directories' \
+  '*--root=[Ordered project root, repeatable]:project root:_directories' \
   '--group=-[Independent view (default); false shares selection]:enabled:(true false)' \
   '--satellite-prefix=[Satellite name prefix]:prefix:' \
   '--dir=[Initial directory for a new session]:initial directory:_directories' \
@@ -36,7 +36,31 @@ elif [[ $state == scaffold ]]; then
 elif [[ $state == target ]]; then
   # Forward only lookup configuration, never an action or the typed pattern.
   # _arguments accepts both --root VALUE and --root=VALUE, including quoting.
-  for option in --root --backend --socket-name --socket-path --tmux --satellite-prefix; do
+  # opt_args concatenates repeated option values with ':', which legal paths
+  # may contain, so repeated --root values are collected from the command
+  # words instead: completion sees the same ordered root list a launch would
+  # use, keeping configured @N/name slot numbers stable. Words after a bare
+  # -- are positionals, never options.
+  local -a roots
+  local word value
+  integer expecting=0
+  for word in "${(@)words[2,-2]}"; do
+    if [[ $word == -- ]]; then
+      break
+    elif (( expecting )); then
+      roots+=( "${(Q)word}" )
+      expecting=0
+    elif [[ $word == --root ]]; then
+      expecting=1
+    elif [[ $word == --root=* ]]; then
+      value=${word#--root=}
+      roots+=( "${(Q)value}" )
+    fi
+  done
+  for word in "${roots[@]}"; do
+    query+=( --root "$word" )
+  done
+  for option in --backend --socket-name --socket-path --tmux --satellite-prefix; do
     if (( ${+opt_args[$option]} )); then
       query+=( "$option" "${(Q)opt_args[$option]}" )
     fi
