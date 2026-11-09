@@ -76,6 +76,12 @@ SSH; this is not evidence for a different operating system or network topology.
 - **Cold/project:** embedded runner preparation, target HOME/root/config/cwd versus
   contradictory local values, literal quoted/empty startup arguments and relative
   `--dir`, observed independently through target artifacts and tmux queries.
+- **Multi-root:** target-local `TTA_ROOTS` layering versus contradictory caller
+  values, an explicit repeated root list replacing the whole target layer,
+  duplicate-basename ambiguity reporting, a qualified `@2` selection attaching
+  through a real terminal, an unqualified clean miss refusing to choose a
+  destination, and a qualified creation landing in the selected root with
+  target Git/license defaults.
 - **Existing/grouped by default:** fresh suffix selection, one create → attach → `keep-last`
   command queue, shared window IDs, actual option value and detach lifecycle.
   Target `TTA_SATELLITE_PREFIX` and an explicit prefix override are both exercised

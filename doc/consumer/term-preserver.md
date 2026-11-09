@@ -1,12 +1,14 @@
 ---
 type: ConsumerAccount
 title: term-preserver — local attempts and prepared SSH handoff
-description: Implemented shared-runner adoption, target setup and SSH option ownership, verified no-target-tta behavior, and the remaining mosh observation choice
+description: Implemented shared-runner adoption, target setup and SSH option ownership, verified no-target-tta behavior, the local plural-roots/completion adoption, and the remaining mosh observation choice
 resource: /doc/consumer/term-preserver.md
 status: implemented-partial
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
+    title: Adopt the plural local roots environment and identity-aware completion at the consumer's real call sites; make its fixtures runnable under configurable scratch
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Port actual local/SSH call sites to 0.7.0 ordered-root APIs and refresh the receiving lock; distinguish the existing one-root consumer UI from pending multi-root integration
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
@@ -70,6 +72,35 @@ adopts the coordinated 0.7.0 packages. Explicit grouping, terminal transport and
 retry ownership are unchanged. This is an API adoption checkpoint, **not** a new
 consumer multi-root UI or local `TTA_ROOTS`/completion implementation. Target-local
 SSH defaults do use the shared new roots policy when no explicit root is supplied.
+
+## Local plural-roots adoption
+
+The consumer's local configuration and completion now mirror tta's declared
+plural precedence through its own call sites: `--session-root`, then `TTA_ROOTS`
+(a JSON array of nonempty paths), then `TTA_ROOT`, then home-relative
+`PROJECTS_DIR`, then `~/src` — one active layer replacing the whole list, relative
+entries frozen against the invocation cwd, and invalid active layers erroring
+rather than falling through. `launcher::project_roots` is one shared helper for
+embedded local launches and completion, deliberately implemented locally so
+completion keeps working in builds without the `tta-lib` feature; it tracks the
+tta contract
+([project-roots](file:///home/rektide/src/tta/doc/entry/project-roots.md)).
+
+Project completion is identity-aware across the whole list: a bare basename is
+offered only when exactly one physical directory of that exact name exists
+across all roots; ambiguous basenames stay reachable through one-based
+`@N/name` selectors, and launch-equivalent qualified duplicates are dropped so
+widget menus stay minimal. The `--session-root` option remains a single explicit
+override (the consumer's established input contract); repeated-root input is not
+new consumer UI. SSH attempts keep their explicit-only root override and layer
+defaults from target facts, unchanged. Its Zsh widget needed no change: it already
+forwards `--session-root`, and the environment reaches the binary.
+
+Verified with `cargo check --all-targets --all-features` and the full
+245-test suite (including the Zsh PTY widget and the formerly
+environment-blocked remote-classic fixture, restored by the consumer's
+`TTA_TEST_TMPDIR` scratch selection). Consumer commit `vnpwlnws`
+(`0f97bfe3`), "Adopt plural local project roots and identity-aware completion".
 
 `cargo check --all-targets --all-features --offline` passed. Of nine selected
 `launcher::` tests, eight passed; the existing remote-classic fixture failed to

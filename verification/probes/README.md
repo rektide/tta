@@ -50,8 +50,11 @@ owned fixtures. There is still no runner-backed execution.
 
 - Context and registry acquisition walk from `/` through a symlink component
   **and interior `..`**, with contradictory local HOME/TTA/TMUX/author/license.
-- Every happy-path probe runs selected-shell `-l -i -c`: 12 probes (8 setup,
-  4 workflow), with startup stdout and transport stderr kept distinct.
+- Every happy-path probe runs selected-shell `-l -i -c`: the registry walk's
+  setup probes follow the fixture's path depth, the launch workflow adds
+  exactly one Sessions + Projects + Destination + GeneratorDefaults probe, and
+  every probe maps to exactly one selected-shell invocation, with startup
+  stdout and transport stderr kept distinct.
 - Registry-selected native generation observes target Git author/license defaults
   and emits literal package JSON, target program/socket, and the correct final cwd.
 - Ready launch commands render as one selected-shell terminal handoff.

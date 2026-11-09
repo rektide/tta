@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-11-09, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
+    title: Complete multi-root CLI/environment/completion integration, external-rekon boundary, SSH acceptance and configurable fixture scratch for tta-project-roots
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Establish ordered-root core/API and physical provenance at 0.7.0; document the still-pending CLI/completion integration
   - resource: opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt
@@ -116,7 +118,7 @@ board; closed tickets remain the delivery history behind each row.
 
 | Surface | Available now | Edge |
 | --- | --- | --- |
-| **Find and return to work** | Session-first [matching](#matching-and-failure-behavior) — literal name, workspace alias, shortest substring; rootless session hits; one project root; read-only [Zsh completion](#zim--zsh-completion) | `tta-project-roots` extends discovery and completion across multiple configured roots |
+| **Find and return to work** | Session-first [matching](#matching-and-failure-behavior) — literal name, workspace alias, shortest substring; rootless session hits; [multiple ordered project roots](#environment-configuration) with `@N/name` selectors and identity-aware [Zsh completion](#zim--zsh-completion) | — |
 | **Open another view; switch work** | Outside entry gives [independent window selection](#how-we-use-tmux) over shared processes; explicit shared selection; orphan aliases, custom prefix and last-view survival | Guarded inside switching (`tta-launch-backends-switching`) and input-origin research (`tta-launch-backends-input-origin`) are separate open work |
 | **Create and start a project** | Configured [scaffold-on-miss](#scaffolding-missing-projects) with named adapters and native generator options; literal startup argv/cwd; [initial window naming](#grouped-satellites-startup-argv-and-initial-directory) | Delivered; a future generator need is a new bounded ticket |
 | **Enter work on another host** | [SSH target-local observation](#ssh-targets) and real terminal handoff — the target needs tmux, not installed tta | Remote-carrier and socket-tunnel siblings are optional directions pending a consumer-grounded relevance decision, not requirements of shipped SSH |
@@ -131,11 +133,12 @@ Historical delivery anchors — `tta-zsh-completion`,
 `tta-launch-backends-remote-target`, `tta-state-machine` and
 `tta-window-name` — are closed on the board with their evidence.
 
-Multi-root work is staged, not yet complete: the pure core and optional runner
-now accept ordered roots with physical provenance and qualified selectors; the
-CLI's repeated-root/environment/completion surface is the next integration turn.
-See the [contract](doc/entry/project-roots.md) and
-[establishing checkpoint](design/entry/project-roots0.gpt61sol.md).
+Multi-root discovery is delivered: ordered roots carry through the CLI,
+environment, pure core, local and SSH acquisition, completion and planning,
+with physical-directory provenance and qualified selectors. The
+[contract](doc/entry/project-roots.md), [establishing checkpoint](design/entry/project-roots0.gpt61sol.md)
+and [integration checkpoint](design/entry/project-roots1.glm53max.md) record
+the decisions and evidence.
 
 ## How we use tmux
 
@@ -354,7 +357,7 @@ entry. Multiple entries without a default require an explicit choice. Drop the
 | Adapter | What it does |
 | --- | --- |
 | [`rekon-native`](scaffold/rekon-native/src/lib.rs) | Honors the project root; initializes Git and colocated jj, creates starter files and an initial commit, configures remotes and bookmark tracking, optionally authors `package.json` and runs `pnpm install --silent` |
-| [`rekon`](scaffold/rekon/src/lib.rs) | Runs the external `rekon NAME` script from PATH; the script owns setup and hardcodes `~/src`, so another tta root may disagree with its output |
+| [`rekon`](scaffold/rekon/src/lib.rs) | Runs the external `rekon NAME` script from PATH; the script owns setup and hardcodes `~/src`, so another tta root may disagree with its output — with **multiple configured roots, creation fails closed** with an actionable error instead of generating in the wrong location |
 
 `rekon-native` needs Git, jj, and pnpm when package installation is enabled.
 Its options above show the branch, starter-file, license, package and install
@@ -429,8 +432,12 @@ If Tab's `expand-or-complete` expands wildcards against your current directory
 first, `bindkey '^I' complete-word` after keymap setup makes Tab completion-only
 for all commands. The module does not change global bindings or styles.
 
-Completion uses launch's root/endpoint settings, queries sessions and projects
-independently, and never creates or enters a session. Inventory errors are
+Completion uses launch's root/endpoint settings — including every repeated
+`--root` on the line, in order — queries sessions and projects independently,
+and never creates or enters a session. A basename offered bare always selects
+unambiguously on Enter; a name that exists in two distinct physical directories
+completes only through its qualified `@N/name` selector (substring and wildcard
+filtering match the basename inside the selector). Inventory errors are
 suppressed for Tab; run tta normally to diagnose them. Control-character names
 are omitted from its line-oriented protocol. See the
 [module](shell/zsh/functions/_tta) and [PTY integration tests](app/cli/tests/completion.rs).
@@ -478,11 +485,15 @@ project root or HOME, though registry/choice validation still happens first.
 
 #### Directory search is the fallback
 
-Only immediate directories under the configured root qualify. Directory
+Only immediate directories under the configured roots qualify. Directory
 symlinks count under their entry basename; files, dangling symlinks, deeper
 descendants, and non-UTF-8 names do not. Filesystem inspection errors stop the
 search. Missing or empty fragments are errors. Quote shell metacharacters and
 use `--` before a leading-`-` fragment: names are neither globs nor regexes.
+Across several roots the shortest matching basename wins globally; equal
+winners collapse to one selection only when their canonical physical directory
+is the same, otherwise tta reports the `@N/name` selectors that name each
+configured root slot.
 
 #### Creation and execution failures
 
@@ -528,8 +539,9 @@ tta does not expand embedded `~`, variables, or argument strings.
 
 | Variable | CLI override | Meaning / default |
 | --- | --- | --- |
-| `TTA_ROOT` | `--root` | Project root; relative to invocation cwd |
-| `PROJECTS_DIR` | `--root` or `TTA_ROOT` | dtachment compatibility: relative to HOME; absolute paths honored; default `$HOME/src` |
+| `TTA_ROOTS` | `--root` (repeatable) | JSON array of ordered nonempty paths, e.g. `'["/work/personal","/work/team"]'`; relative entries freeze against invocation cwd |
+| `TTA_ROOT` | `--root` or `TTA_ROOTS` | Single project root; relative to invocation cwd |
+| `PROJECTS_DIR` | any root layer above | dtachment compatibility: relative to HOME; absolute paths honored; default `$HOME/src` |
 | `TTA_BACKEND` | `--backend` | Compiled backend; native when available, otherwise cli |
 | `TTA_SOCKET_NAME` | Either socket option | tmux `-L` label |
 | `TTA_SOCKET_PATH` | Either socket option | tmux `-S` path; relative to invocation cwd |
@@ -540,9 +552,24 @@ tta does not expand embedded `~`, variables, or argument strings.
 | `TTA_CONFIG` | — | Scaffold registry path; default XDG/HOME location |
 | `TTA_SATELLITE_PREFIX` | `--satellite-prefix` | Satellite decoration and alias recognition; default `_` |
 
-Root precedence is `--root` > `TTA_ROOT` > `PROJECTS_DIR` > `$HOME/src`.
-For example, `PROJECTS_DIR=work` searches `$HOME/work`, whereas `TTA_ROOT=./work`
-searches relative to the invocation cwd.
+Root precedence is repeated `--root` > `TTA_ROOTS` > `TTA_ROOT` >
+`PROJECTS_DIR` > `$HOME/src`. **One active layer replaces the entire list**:
+explicit roots ignore lower layers entirely (an invalid `TTA_ROOTS` is never
+parsed), while an invalid *active* layer — an empty array, non-array, empty
+element or malformed JSON — fails before lookup. Empty environment strings
+mean unset. For example, `PROJECTS_DIR=work` searches `$HOME/work`, whereas
+`TTA_ROOT=./work` searches relative to the invocation cwd.
+
+With several roots, entry basenames rank by the existing literal shortest-name
+rule **globally across all roots** (root order is presentation, not priority),
+then tie-break by canonical physical directory. The same basename in two
+distinct physical directories is ambiguous and reports one-based `@N/name`
+selectors — `@N` names the configured root slot. A qualified selector observes
+only its root; a clean miss scaffolds only with an explicit `@N/new-name` or a
+single physical root. The external `rekon` script adapter refuses multi-root
+creation outright (see the [adapter table](#generator-adapters)); `rekon-native`
+honors the selected root. SSH layers roots from **target-local** facts;
+explicit caller roots replace target defaults and resolve on the target.
 
 Either explicit socket selector suppresses both environment socket selectors.
 Setting both selectors at the same active layer is an error. Invalid active
@@ -813,9 +840,11 @@ than decorating a raw base string.
 **0.7.0** replaces singular core/runner roots with ordered lists. `workflow::Input`
 has `roots: Vec<PathBuf>`, target options accept an optional explicit list, and
 project inventories supply requested/physical roots plus physical entry paths.
-Project/Create selections retain `sources` provenance. CLI list input/completion
-integration is still pending; see the checkpoint above rather than assuming the
-whole multi-root ticket is delivered.
+Project/Create selections retain `sources` provenance, and `projects::configured_roots`
+is the shared whole-layer configuration helper. Repeated `--root`, the `TTA_ROOTS`
+environment layer, identity-aware completion with `@N/name` selectors, target-local
+SSH root layering and the external-rekon multi-root guard are part of this surface;
+the checkpoints above record the verification.
 The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
 [launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
 implemented adoption and the separate mosh observation-channel choice.

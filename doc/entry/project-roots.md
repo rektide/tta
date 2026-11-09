@@ -1,14 +1,18 @@
 ---
 type: ArchitectureContract
 title: Ordered project roots — identity, selection and safe creation
-description: Multi-root input and observation contract, declared before implementation, with explicit root selectors and physical-directory provenance
+description: Multi-root input and observation contract with explicit root selectors and physical-directory provenance, implemented and verified across CLI, environment, completion, SSH and the consumer
 resource: /doc/entry/project-roots.md
-status: implemented-partial
+status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
 sources:
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Establish the commissioned multi-root contract and core/API slice before surface integration
+  - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
+    title: Implement the remaining CLI, environment, completion, SSH and consumer surfaces with acceptance evidence
+  - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
+    title: Parent commissions rotating Sol/G implementation after accepting the capability-ticket pitch
   - resource: /doc/entry/README.md
     title: Retained eight-stage supplied-facts graph and session-first guard
   - resource: /design/entry/ticket-surface0.gpt6a.md
@@ -21,12 +25,14 @@ sources:
 
 # Ordered roots, not implicit priority
 
-Work anchor: `tta-project-roots`. This declaration precedes implementation.
-Declared in commit `3247ce5e` before code; the establishing slice now implements
-core policy and the observer/API changes needed
-to keep the workspace coherent. CLI/environment/completion adoption and complete
-end-to-end acceptance belong to the next integration slice; this document does
-not claim those surfaces are already delivered.
+Work anchor: `tta-project-roots`. This declaration preceded implementation:
+declared in commit `3247ce5e` before code, implemented by the establishing
+slice `89c70249` (core policy and observer/API coherence) and completed by the
+integration slice — repeated CLI roots, the `TTA_ROOTS` environment layer,
+identity-aware Zsh completion with qualified selectors, target-local SSH
+acceptance, the external-rekon multi-root boundary and the consumer's local
+plural adoption. The [integration checkpoint](/design/entry/project-roots1.glm53max.md)
+records the final verification; the sections below are the delivered contract.
 
 ## Input contract
 
@@ -152,19 +158,24 @@ flowchart TD
 
 ## Acceptance and handoff
 
-Core tests must cover cross-root shortest matching, actionable duplicate ambiguity,
+Core tests cover cross-root shortest matching, actionable duplicate ambiguity,
 physical alias collapse and provenance, ordered deterministic routes, rootless
 session hits, qualified selection, wrong-root replies, and destination ambiguity
 before any absence/defaults/mutation request. Local and emitted-probe inventories
-must agree about canonical identity, symlinks, empty roots and failures. Final
-integration adds repeated CLI roots, environment precedence, target-local SSH,
-Zsh completion and actual embedded-consumer review/receiving locks. Keep the ticket
-open until these surfaces are implemented and meaningfully checked.
+agree about canonical identity, symlinks, empty roots and failures. The
+integration slice added: repeated CLI roots with whole-layer environment
+precedence (invalid lower layers ignored by explicit roots, invalid active
+layers failing before lookup), identity-aware completion offering bare names
+only for physically unique winners plus qualified `@N/name` selectors through
+real Zsh PTYs, actual target-local SSH `TTA_ROOTS`/explicit-override/qualified
+creation checks with real terminals, the external `rekon` adapter failing
+closed for multi-root creation, and the term-preserver consumer's local plural
+environment/completion adoption.
 
 The [establishing checkpoint](/design/entry/project-roots0.gpt61sol.md) records
-implemented interfaces, verification, the consumer port and the next G turn.
-The legacy external `rekon` adapter remains a consequential integration review
-point: its script ignores the chosen root. Safe multi-root **generation** must
-not be claimed for it merely because core destination selection is unambiguous;
-prefer a fail-closed multi-root guard or change that adapter's real destination
-contract before acceptance. `rekon-native` already receives and honors the root.
+the core slice; the [integration checkpoint](/design/entry/project-roots1.glm53max.md)
+records the delivered surfaces and verification. The legacy external `rekon`
+adapter boundary is implemented as the parent's decision: safe multi-root
+**generation** fails closed for that adapter — the name-only script ignores the
+chosen root — while `rekon-native` receives and honors the root. Changing that
+adapter's real destination contract remains the alternative to the guard.
