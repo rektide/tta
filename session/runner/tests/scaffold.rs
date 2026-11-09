@@ -184,6 +184,56 @@ fn ambiguous_matches_and_generator_choices_stop_without_creation() {
 
 #[cfg(feature = "scaffold-rekon")]
 #[test]
+fn external_rekon_refuses_multi_root_creation_without_mutating_any_root() {
+    let temp = common::scratch_dir("tta-scaffold-multir-");
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    let config = registry(temp.path(), REKON);
+    // A qualified selector across distinct roots reaches the adapter boundary
+    // after a single unambiguous destination check.
+    for argument in ["@2/fresh", "@1/fresh"] {
+        let error = scaffold::resolve()
+            .lookup(&Inventory(vec![]))
+            .argument(argument)
+            .roots(&[first.clone(), second.clone()])
+            .choice("default")
+            .config(&config)
+            .call()
+            .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("external rekon adapter") && text.contains("rekon-native"), "{text}");
+        assert!(!first.join("fresh").exists() && !second.join("fresh").exists(), "refusal must precede generation");
+    }
+    // An unqualified miss across two distinct roots is stopped earlier by the
+    // destination guard; across one physical root (symlinked alias) the
+    // adapter boundary is again what refuses.
+    let error = scaffold::resolve()
+        .lookup(&Inventory(vec![]))
+        .argument("fresh")
+        .roots(&[first.clone(), second.clone()])
+        .choice("default")
+        .config(&config)
+        .call()
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot choose a scaffold destination"));
+    std::os::unix::fs::symlink(&first, temp.path().join("alias")).unwrap();
+    let error = scaffold::resolve()
+        .lookup(&Inventory(vec![]))
+        .argument("fresh")
+        .roots(&[temp.path().join("alias"), first.clone()])
+        .choice("default")
+        .config(&config)
+        .call()
+        .unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("external rekon adapter") && text.contains("rekon-native"), "{text}");
+    assert!(!first.join("fresh").exists() && !second.join("fresh").exists(), "refusal must precede generation");
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
 fn generator_prefix_runs_before_creation_and_failure_blocks_the_client() {
     use std::os::unix::fs::PermissionsExt;
     use tta_command::{Assignment, Expression, Handoff, Word};

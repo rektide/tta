@@ -143,6 +143,20 @@ fn resolve_with_config(
     };
     let (prefix, generator) = if let Selection::Create { directory, .. } = &selection {
         let entry = generator.expect("create selections require a chosen generator");
+        // The external rekon script takes only the project name and lands it
+        // in its own hardcoded location, ignoring the selected root. With one
+        // configured root that divergence is the documented single-root
+        // limitation; with several configured roots no script destination can
+        // agree with the destination tta selected, so refuse before generation
+        // instead of mutating elsewhere. A qualified @N selector does not help:
+        // the script never sees it either.
+        if entry.adapter == "rekon" && roots.len() > 1 {
+            bail!(
+                "generator {:?} uses the external rekon adapter, whose script ignores the selected project root; refusing to create {:?} across configured roots {roots:?}: use a rekon-native generator (which honors the root), configure a single root, or change the rekon script's destination contract",
+                entry.name,
+                directory
+            );
+        }
         let project = directory
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
@@ -425,6 +439,73 @@ adapter = \"rekon\"
             .unwrap_err()
             .to_string();
         assert!(error.contains("is not configured"), "{error}");
+    }
+
+    #[cfg(feature = "scaffold-rekon")]
+    #[test]
+    fn external_rekon_fails_closed_for_multi_root_creation() {
+        use crate::{DestinationState, ProjectInventory, Selection};
+        let config = load(MINIMAL);
+        let inventory = |root: &str| ProjectInventory {
+            requested_root: root.into(),
+            root: root.into(),
+            entries: Vec::new(),
+        };
+        let resolve = |roots: &[std::path::PathBuf], argument: &str| {
+            crate::scaffold::resolve()
+                .sessions(&[])
+                .argument(argument)
+                .roots(roots)
+                .choice("default")
+                .config(&config)
+                .projects(&roots.iter().map(|root| inventory(root.to_str().unwrap())).collect::<Vec<_>>())
+                .maybe_destination(Some(DestinationState::Absent))
+                .defaults(&Defaults::default())
+                .call()
+        };
+        let single = resolve(&["/only".into()], "fresh").unwrap();
+        let Progress::Resolved(single) = single else {
+            panic!("all facts were supplied; expected a resolution");
+        };
+        assert!(
+            matches!(&single.selection, Selection::Create { directory, .. } if directory == std::path::Path::new("/only/fresh")),
+            "single-root external rekon keeps its documented divergence"
+        );
+        // A qualified selector with distinct roots, and an unqualified miss
+        // whose roots alias one physical destination: both would otherwise be
+        // creatable, so the adapter boundary is what must refuse.
+        for (roots, supplied, argument) in [
+            (vec!["/one".into(), "/two".into()], vec![("/two", "/two")], "@2/fresh"),
+            (
+                vec!["/alias".into(), "/physical".into()],
+                vec![("/alias", "/physical"), ("/physical", "/physical")],
+                "fresh",
+            ),
+        ] {
+            let projects = supplied
+                .iter()
+                .map(|&(requested, root): &(&str, &str)| ProjectInventory {
+                    requested_root: requested.into(),
+                    root: root.into(),
+                    entries: Vec::new(),
+                })
+                .collect::<Vec<_>>();
+            let error = crate::scaffold::resolve()
+                .sessions(&[])
+                .argument(argument)
+                .roots(&roots)
+                .choice("default")
+                .config(&config)
+                .projects(&projects)
+                .maybe_destination(Some(DestinationState::Absent))
+                .defaults(&Defaults::default())
+                .call()
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("external rekon adapter"), "{argument}: {error}");
+            assert!(error.contains("configured roots"), "{argument}: {error}");
+            assert!(error.contains("rekon-native"), "{argument}: {error}");
+        }
     }
 
     #[cfg(feature = "scaffold-rekon")]

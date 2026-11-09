@@ -87,3 +87,40 @@ fn cli_compiled_default_posture_is_preserved() {
         assert!(!output.status.success());
     }
 }
+
+#[test]
+fn external_rekon_generation_fails_closed_across_repeated_roots() {
+    let temp = fixture();
+    fs::create_dir(temp.path().join("elsewhere")).unwrap();
+    let run = |argument: &str| {
+        binary()
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("config"))
+            .arg("--root")
+            .arg(temp.path().join("projects"))
+            .arg("--root")
+            .arg(temp.path().join("elsewhere"))
+            .arg("--socket-path")
+            .arg(temp.path().join("absent-sock"))
+            .args(["--print-shell", argument])
+            .output()
+            .unwrap()
+    };
+    // A qualified selector makes the destination unambiguous; the adapter
+    // boundary still refuses because the external script cannot honor it.
+    let output = run("@1/fresh");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("external rekon adapter"), "{stderr}");
+    assert!(stderr.contains("rekon-native"), "{stderr}");
+    // An unqualified clean miss across two roots is stopped earlier by the
+    // destination guard, before any generator is consulted.
+    let output = run("fresh");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot choose a scaffold destination"), "{stderr}");
+    assert!(!stderr.contains("rekon-native"), "{stderr}");
+    assert!(!temp.path().join("projects/fresh").exists());
+    assert!(!temp.path().join("elsewhere/fresh").exists());
+    assert!(!temp.path().join("absent-sock").exists());
+}
