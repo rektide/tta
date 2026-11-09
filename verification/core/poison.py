@@ -2,11 +2,25 @@
 """Reusable runner-free environmental independence witness (no tmux/SSH)."""
 import argparse
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import tempfile
+
+
+def scratch_root():
+    """Owned fixture scratch root: TTA_TEST_TMPDIR overrides; /tmp/opencode
+    when this user can create directories there; otherwise the system default."""
+    override = os.environ.get("TTA_TEST_TMPDIR")
+    if override:
+        return override
+    try:
+        with tempfile.TemporaryDirectory(prefix="tta-scratch-probe-", dir="/tmp/opencode"):
+            return "/tmp/opencode"
+    except OSError:
+        return None
 
 
 def main():
@@ -18,7 +32,7 @@ def main():
     binary = args.binary.resolve(strict=True)
     source = Path(__file__).resolve().parents[2]
     trace_available = bool(shutil.which("strace"))
-    with tempfile.TemporaryDirectory(prefix="tta-pure-poison-", dir="/tmp/opencode") as temp:
+    with tempfile.TemporaryDirectory(prefix="tta-pure-poison-", dir=scratch_root()) as temp:
         root = Path(temp)
         commands = root / "bin"
         commands.mkdir()

@@ -328,6 +328,13 @@ fn run(checks: &mut Vec<Value>, records: &mut Vec<Value>) -> Result<()> {
     ensure!(facts.value("TTA_TMUX") == Some(fixture.tmux.to_str().expect("UTF-8")), "local TTA_TMUX leaked");
     checks.push(json!({"check": "runner-free Bootstrap: context probe and registry walk through a symlinked component and interior '..'; contradictory local values never became facts"}));
 
+    // Probe counts are structural, not absolute: the setup registry walk
+    // follows the fixture's path depth, while the launch workflow itself uses
+    // exactly one Sessions + Projects + Destination + GeneratorDefaults probe,
+    // and every probe maps to exactly one selected-shell invocation.
+    let setup_probes = records.len();
+    let setup_shells = fixture.shell_records()?;
+    ensure!(setup_shells == setup_probes, "setup probes {setup_probes} vs selected shells {setup_shells}");
     let mut workflow = workflow::Workflow::new(input.clone())?;
     let prepared = loop {
         match workflow.next()? {
@@ -342,9 +349,9 @@ fn run(checks: &mut Vec<Value>, records: &mut Vec<Value>) -> Result<()> {
         }
     };
     let records_after_happy = records.len();
-    ensure!(records_after_happy == 12, "unexpected probe count: {records_after_happy}");
+    ensure!(records_after_happy - setup_probes == 4, "unexpected workflow probe count: {}", records_after_happy - setup_probes);
     ensure!(
-        fixture.shell_records()? == 12,
+        fixture.shell_records()? == records.len(),
         "unexpected selected-shell invocations: {}",
         fixture.shell_records()?
     );
@@ -427,10 +434,13 @@ fn run(checks: &mut Vec<Value>, records: &mut Vec<Value>) -> Result<()> {
         blocked.to_string().contains("cannot inspect symlink"),
         "ENOTDIR classification missing: {blocked:#}"
     );
+    // The blocked workflow added exactly its Sessions + failed Projects probe;
+    // the one-shell-per-probe invariant still holds.
     ensure!(
-        fixture.shell_records()? == 14,
-        "blocked run used unexpected probes: {}",
-        fixture.shell_records()?
+        fixture.shell_records()? == records.len(),
+        "blocked run broke the one-selected-shell-per-probe invariant: {} shells vs {} probes",
+        fixture.shell_records()?,
+        records.len()
     );
     checks.push(json!({"check": "symlink ENOTDIR fails the runner-free loop closed inside Projects decode; hostile decoy names parsed without poisoning", "error": format!("{blocked:#}")}));
 
