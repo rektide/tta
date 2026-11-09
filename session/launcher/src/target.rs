@@ -184,8 +184,8 @@ impl Facts {
         let roots = crate::projects::configured_roots(
             options.roots.as_deref(),
             self.value("TTA_ROOTS"),
-            self.value("TTA_ROOT"),
-            self.value("PROJECTS_DIR"),
+            self.value("TTA_ROOT").map(std::ffi::OsStr::new),
+            self.value("PROJECTS_DIR").map(std::ffi::OsStr::new),
             self.value("HOME").map(Path::new),
             &self.cwd,
         )?;

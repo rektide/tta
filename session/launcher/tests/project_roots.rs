@@ -29,7 +29,16 @@ fn resolve(roots: &[PathBuf], facts: &[ProjectInventory], argument: &str, create
 fn whole_layer_configuration_preserves_order_and_one_root_semantics() {
     let cwd = Path::new("/invoke");
     let home = Some(Path::new("/home"));
-    let configured = |explicit: Option<&[PathBuf]>, many, one, legacy, home| projects::configured_roots(explicit, many, one, legacy, home, cwd);
+    let configured = |explicit: Option<&[PathBuf]>, many, one: Option<&str>, legacy: Option<&str>, home| {
+        projects::configured_roots(
+            explicit,
+            many,
+            one.map(std::ffi::OsStr::new),
+            legacy.map(std::ffi::OsStr::new),
+            home,
+            cwd,
+        )
+    };
     assert_eq!(
         configured(None, Some(r#"["two","/one: space"]"#), Some("ignored"), None, home).unwrap(),
         vec![PathBuf::from("/invoke/two"), "/one: space".into()]

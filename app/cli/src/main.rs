@@ -76,9 +76,10 @@ struct Args {
     /// Read-only shell completion inventory (one name per line)
     #[arg(long, hide = true, value_enum, conflicts_with_all = ["argument", "print_shell", "exec_shell", "session_name", "window_name", "scaffold"])]
     completion_candidates: Option<CompletionCandidates>,
-    /// Project root [env: TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
+    /// Ordered project roots, repeatable
+    /// [env: TTA_ROOTS as a JSON array, then TTA_ROOT, then home-relative PROJECTS_DIR; default: $HOME/src]
     #[arg(long)]
-    root: Option<PathBuf>,
+    root: Vec<PathBuf>,
     /// Override the name of a new session (does not change session matching)
     #[arg(long)]
     session_name: Option<String>,
@@ -183,8 +184,36 @@ fn run(mut args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if matches!(args.completion_candidates, Some(CompletionCandidates::Projects)) {
-        let root = args.root.as_deref().ok_or(tta_launcher::ResolveError::MissingRoot)?;
-        print_candidates(tta_runner::resolve::project_names(root)?);
+        // Identity-aware inventory: every configured root with an empty filter,
+        // then the pure completion helper. A basename is offered bare only when
+        // launch could select it unambiguously; every ambiguous basename stays
+        // reachable through qualified @N/name selectors. The pure helper exposes
+        // every qualified route: the line-oriented protocol keeps menus minimal
+        // by dropping a qualified selector whose bare basename is already
+        // offered and selects the same physical project.
+        if args.root.is_empty() {
+            return Err(tta_launcher::ResolveError::MissingRoot.into());
+        }
+        let inventories = args
+            .root
+            .iter()
+            .map(|root| tta_runner::resolve::project_inventory(root, ""))
+            .collect::<Result<Vec<_>, tta_launcher::ResolveError>>()?;
+        let candidates = tta_launcher::projects::completion_candidates(&args.root, &inventories)?;
+        let bare: std::collections::BTreeSet<String> = candidates
+            .iter()
+            .filter(|candidate| !candidate.starts_with('@'))
+            .cloned()
+            .collect();
+        print_candidates(
+            candidates
+                .into_iter()
+                .filter(|candidate| match candidate.strip_prefix('@').and_then(|selector| selector.split_once('/')) {
+                    Some((_, name)) => !bare.contains(name),
+                    None => true,
+                })
+                .collect(),
+        );
         return Ok(ExitCode::SUCCESS);
     }
     let config = match &args.scaffold_config {
@@ -263,7 +292,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .socket(&socket)
         .client_mode(mode)
         .program(&tmux)
-        .roots(&args.root.iter().cloned().collect::<Vec<_>>())
+        .roots(&args.root)
         .maybe_session_name(args.session_name.as_deref())
         .choice(choice)
         .config(&config)
@@ -370,7 +399,7 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
     };
     let options = target::Options::builder()
         .argument(args.argument.expect("fragment required"))
-        .maybe_roots(args.root.map(|root| vec![root]))
+        .maybe_roots((!args.root.is_empty()).then(|| args.root.clone()))
         .maybe_socket(socket)
         .maybe_program(args.tmux)
         .maybe_registry_path(args.scaffold_config)

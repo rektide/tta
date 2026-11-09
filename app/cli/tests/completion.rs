@@ -100,6 +100,73 @@ fn completion_root_precedence_matches_launch_configuration() {
 }
 
 #[test]
+fn project_completion_is_identity_aware_across_configured_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    fs::create_dir_all(first.join("shared")).unwrap();
+    fs::create_dir_all(first.join("solo-first")).unwrap();
+    fs::create_dir_all(second.join("shared")).unwrap();
+    fs::create_dir_all(second.join("solo-second")).unwrap();
+    // A basename duplicated across distinct physical directories is offered
+    // only through qualified selectors; physically unique names stay bare and
+    // their redundant qualified forms are dropped from the menu.
+    let inventory = |command: &mut Command| {
+        command.env_remove("HOME").env("TTA_SOCKET_PATH", temp.path().join("unused-socket")).env("TTA_TMUX", "/not/a/tmux");
+        names(command)
+    };
+    assert_eq!(
+        inventory(
+            tta()
+                .arg("--root")
+                .arg(&first)
+                .arg("--root")
+                .arg(&second)
+                .args(["--completion-candidates", "projects"])
+        ),
+        "@1/shared\n@2/shared\nsolo-first\nsolo-second\n"
+    );
+    // A repeated physical root through a symlink keeps the same identity: the
+    // duplicate basename never becomes launchable by bare name.
+    let aliased = temp.path().join("aliased-first");
+    symlink(&first, &aliased).unwrap();
+    assert_eq!(
+        inventory(
+            tta()
+                .arg("--root")
+                .arg(&first)
+                .arg("--root")
+                .arg(&aliased)
+                .arg("--root")
+                .arg(&second)
+                .args(["--completion-candidates", "projects"])
+        ),
+        "@1/shared\n@2/shared\n@3/shared\nsolo-first\nsolo-second\n"
+    );
+    // The environment layer drives completion identically to repeated --root.
+    let json = format!(r#"["{}","{}"]"#, first.display(), second.display());
+    assert_eq!(
+        inventory(
+            tta()
+                .env("TTA_ROOTS", &json)
+                .args(["--completion-candidates", "projects"])
+        ),
+        "@1/shared\n@2/shared\nsolo-first\nsolo-second\n"
+    );
+    // One configured root preserves the established single-root shape.
+    assert_eq!(
+        inventory(tta().arg("--root").arg(&first).args(["--completion-candidates", "projects"])),
+        "shared\nsolo-first\n"
+    );
+    // Without any root, project completion names the missing input; sessions
+    // completion stays independently available for rootless entry.
+    let rootless = tta().env_remove("HOME").args(["--completion-candidates", "projects"]).output().unwrap();
+    assert!(!rootless.status.success());
+    assert!(rootless.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&rootless.stderr).contains("set HOME or pass --root"));
+}
+
+#[test]
 fn live_session_inventory_uses_selected_endpoint_without_a_root_or_switching() {
     let temp = tempfile::tempdir().unwrap();
     let server = Server::start(temp.path().join("live-socket"));

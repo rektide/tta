@@ -91,14 +91,6 @@ pub fn project_inventory(root: &Path, argument: &str) -> Result<ProjectInventory
     })
 }
 
-/// Sorted immediate project basenames, using the same directory/symlink policy
-/// as resolution. Inventory only: no tmux connection or session-name validation.
-pub fn project_names(root: &Path) -> Result<Vec<String>, ResolveError> {
-    let mut names: Vec<_> = projects(root, "")?.into_iter().map(|project| project.name).collect();
-    names.sort();
-    Ok(names)
-}
-
 fn projects(root: &Path, argument: &str) -> Result<Vec<Project>, ResolveError> {
     let entries = fs::read_dir(root).map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
     let mut projects = Vec::new();

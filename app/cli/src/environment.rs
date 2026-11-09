@@ -1,7 +1,7 @@
 //! Small, explicit CLI > environment > default layering. Endpoint selectors form
 //! one family, so either explicit CLI selector suppresses both environment ones.
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 use clap::ValueEnum;
@@ -41,14 +41,27 @@ pub(crate) fn configure(mut args: Args) -> Result<Args> {
         configure_trace(&mut args)?;
         return Ok(args);
     }
-    args.root = args.root.or_else(|| value("TTA_ROOT").map(PathBuf::from)).or_else(|| {
-        let projects = value("PROJECTS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("src"));
-        if projects.is_absolute() {
-            Some(projects)
-        } else {
-            value("HOME").map(|home| PathBuf::from(home).join(projects))
-        }
-    });
+    // One active layer replaces the whole ordered root list: repeated --root >
+    // TTA_ROOTS (JSON array) > TTA_ROOT > HOME-relative PROJECTS_DIR > ~/src.
+    // Explicit roots suppress lower layers entirely, so an invalid TTA_ROOTS
+    // value is never even parsed. TTA_ROOTS itself must be UTF-8 JSON; the
+    // singular layers keep raw path bytes. Relative entries freeze against the
+    // invocation cwd. SSH keeps explicit roots only: its defaults are
+    // target-local and are layered from target facts.
+    let roots_json = match std::env::var("TTA_ROOTS") {
+        Ok(json) => Some(json),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => bail!("TTA_ROOTS must be a UTF-8 JSON array of paths"),
+    };
+    let explicit = (!args.root.is_empty()).then(|| args.root.clone());
+    args.root = tta_launcher::projects::configured_roots(
+        explicit.as_deref(),
+        roots_json.as_deref(),
+        value("TTA_ROOT").as_deref(),
+        value("PROJECTS_DIR").as_deref(),
+        value("HOME").as_deref().map(Path::new),
+        &std::env::current_dir()?,
+    )?;
     if args.backend.is_none()
         && let Some(value) = value("TTA_BACKEND")
     {

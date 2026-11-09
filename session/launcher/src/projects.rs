@@ -42,25 +42,26 @@ impl ProjectSource {
 
 /// One active layer replaces the entire list. Only PROJECTS_DIR is HOME-relative.
 /// Empty environment values are unset; explicit empty lists/paths are errors.
+/// `TTA_ROOTS` is UTF-8 JSON; the singular layers keep raw path bytes.
 pub fn configured_roots(
     explicit: Option<&[PathBuf]>,
     roots: Option<&str>,
-    root: Option<&str>,
-    projects_dir: Option<&str>,
+    root: Option<&std::ffi::OsStr>,
+    projects_dir: Option<&std::ffi::OsStr>,
     home: Option<&Path>,
     cwd: &Path,
 ) -> Result<Vec<PathBuf>, ResolveError> {
-    fn nonempty(value: Option<&str>) -> Option<&str> {
+    fn nonempty(value: Option<&std::ffi::OsStr>) -> Option<&std::ffi::OsStr> {
         value.filter(|value| !value.is_empty())
     }
     let paths = if let Some(paths) = explicit {
         paths.to_vec()
-    } else if let Some(json) = nonempty(roots) {
+    } else if let Some(json) = roots.filter(|json| !json.is_empty()) {
         serde_json::from_str::<Vec<PathBuf>>(json).map_err(|error| ResolveError::RootConfiguration(error.to_string()))?
     } else if let Some(root) = nonempty(root) {
         vec![root.into()]
     } else {
-        let project = PathBuf::from(nonempty(projects_dir).unwrap_or("src"));
+        let project = PathBuf::from(nonempty(projects_dir).unwrap_or(std::ffi::OsStr::new("src")));
         return Ok(if project.is_absolute() {
             vec![project]
         } else {
