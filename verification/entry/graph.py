@@ -5,6 +5,7 @@ This is a structural renderer, not another transition table or a claim about
 the native matching algorithm. Event arrays are emitted in their declared order.
 """
 import argparse
+import copy
 import html
 import json
 from pathlib import Path
@@ -17,6 +18,15 @@ DEFINITION = ROOT / "session/launcher/src/entry/entry.machine.json"
 DOCUMENT = ROOT / "doc/entry/attempt-graph.md"
 START = "<!-- entry-machine:start -->"
 END = "<!-- entry-machine:end -->"
+
+
+def catalog_definition(entry, catalog):
+    """Same static binding-subchart composition as catalog.rs::definition."""
+    catalog = copy.deepcopy(catalog)
+    binding = copy.deepcopy(entry["states"]["active"]["states"]["bind_target"])
+    binding["states"]["bind_registry"]["on"]["validated"]["target"] = "#catalog_sessions"
+    catalog["states"]["catalog_active"]["states"]["bind_target"] = binding
+    return catalog
 
 
 def render(definition):
@@ -88,15 +98,21 @@ def render(definition):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--catalog", action="store_true", help="compose/project the separate read-only catalog chart")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="fail on stale generated region, without writing")
     mode.add_argument("--write", action="store_true", help="replace only the generated region, preserving prose/provenance")
     args = parser.parse_args()
-    graph = render(json.loads(DEFINITION.read_text()))
+    definition = json.loads(DEFINITION.read_text())
+    document_path = DOCUMENT
+    if args.catalog:
+        definition = catalog_definition(definition, json.loads((DEFINITION.parent / "catalog.machine.json").read_text()))
+        document_path = ROOT / "doc/entry/catalog-graph.md"
+    graph = render(definition)
     if not args.check and not args.write:
         sys.stdout.write(graph)
         return
-    document = DOCUMENT.read_text()
+    document = document_path.read_text()
     if document.count(START) != 1 or document.count(END) != 1:
         raise ValueError("expected exactly one generated region")
     prefix, rest = document.split(START)
@@ -104,10 +120,10 @@ def main():
     expected = prefix + START + "\n\n```mermaid\n" + graph + "```\n\n" + END + suffix
     if args.check:
         if document != expected:
-            raise SystemExit(f"stale entry chart: run python3 {Path(__file__).relative_to(ROOT)} --write")
-        print("entry chart matches executable definition")
+            raise SystemExit(f"stale chart: run python3 {Path(__file__).relative_to(ROOT)} {'--catalog ' if args.catalog else ''}--write")
+        print(f"{'catalog' if args.catalog else 'entry'} chart matches executable definition")
     else:
-        DOCUMENT.write_text(expected)
+        document_path.write_text(expected)
 
 
 if __name__ == "__main__":

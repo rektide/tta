@@ -1,12 +1,15 @@
 //! Owned entry protocol, staged internally until the coherent frontend cutover.
-mod action;
+pub mod action;
 mod bind;
+pub mod catalog;
 pub mod context;
 mod discover;
-mod machine;
+pub mod machine;
 mod prepare;
-mod protocol;
-mod select;
+pub mod probe;
+pub mod protocol;
+pub mod registry;
+pub mod select;
 
 use std::sync::Arc;
 
@@ -15,7 +18,7 @@ use protocol::*;
 
 /// One owner and one retained actor for an attempt. Native facts, artifacts and
 /// errors never enter the runtime's serde context or event payloads.
-pub(crate) struct EntryAttempt {
+pub struct EntryAttempt {
     control: Control,
     data: AttemptData,
     pending: Option<ReadRequest>,
@@ -48,9 +51,33 @@ struct AttemptData {
 }
 
 impl EntryAttempt {
-    pub(crate) fn start(invocation: Invocation) -> Result<Self, InputError> {
+    pub fn start(invocation: Invocation) -> Result<Self, InputError> {
+        let scope = context::Scope {
+            origin: context::Origin::Local {
+                host: invocation.context.host.clone(),
+            },
+            cwd: Some(invocation.context.cwd.clone()),
+        };
+        Self::start_at(invocation, scope)
+    }
+
+    /// Supplied facts use the same frozen scope type as acquired contexts.
+    pub fn start_at(invocation: Invocation, scope: context::Scope) -> Result<Self, InputError> {
         let id = AttemptId::new();
-        let target = BoundTarget::from_supplied(id, invocation.context)?;
+        let mut target = BoundTarget::from_supplied(id, invocation.context)?;
+        let host = match &scope.origin {
+            context::Origin::Local { host } | context::Origin::Ssh { host, .. } => host,
+        };
+        if host != &target.host || scope.cwd.as_ref() != Some(&target.cwd) || scope.frozen(target.cwd.clone()) != scope {
+            return Err(InputError::Target("supplied scope does not match frozen host/cwd/setup"));
+        }
+        if matches!(scope.origin, context::Origin::Ssh { .. }) && target.client != ClientEntry::AttachTerminal {
+            return Err(InputError::Target("SSH context cannot authorize an inherited-client switch"));
+        }
+        if let context::Origin::Ssh { setup, .. } = &scope.origin {
+            setup.shell_command(":").map_err(InputError::Context)?;
+        }
+        target.scope = scope;
         if invocation.intent.selector.is_empty() {
             return Err(InputError::EmptySelector);
         }
@@ -88,7 +115,8 @@ impl EntryAttempt {
         Ok(attempt)
     }
 
-    pub(crate) fn acquire(input: context::Acquisition) -> Result<Self, InputError> {
+    pub fn acquire(input: context::Acquisition) -> Result<Self, InputError> {
+        context::validate_initial_scope(&input.scope).map_err(InputError::Context)?;
         if input.intent.selector.is_empty() {
             return Err(InputError::EmptySelector);
         }
@@ -127,7 +155,7 @@ impl EntryAttempt {
 
     /// Inspection is inert: no actor creation, emission drain, materialization,
     /// trace or native handler call happens here.
-    pub(crate) fn waiting(&self) -> Waiting<'_> {
+    pub fn waiting(&self) -> Waiting<'_> {
         if let Some(request) = &self.pending {
             return Waiting::Read(request);
         }
@@ -138,7 +166,7 @@ impl EntryAttempt {
         Waiting::Planned(self.data.plan.as_ref().expect("planned artifact"))
     }
 
-    pub(crate) fn snapshot(&self) -> AttemptSnapshot {
+    pub fn snapshot(&self) -> AttemptSnapshot {
         AttemptSnapshot {
             id: self.data.id,
             target: self.data.target.clone(),
@@ -153,27 +181,10 @@ impl EntryAttempt {
 
     /// Protocol errors reject the entire event before modifying any data, actor
     /// state or journal. Accepted acquisition/domain errors instead stop natively.
-    pub(crate) fn advance(&mut self, event: Event) -> Result<(), ProtocolError> {
+    pub fn advance(&mut self, event: Event) -> Result<(), ProtocolError> {
         match event {
             Event::Observed(completion) => {
-                let expected = self.pending.as_ref().ok_or(ProtocolError::NoPendingRead)?;
-                if completion.request != *expected {
-                    return Err(ProtocolError::ReadMismatch {
-                        expected: Box::new(expected.clone()),
-                        received: Box::new(completion.request),
-                    });
-                }
-                // Exhaustive request-kind/observation-kind compatibility check
-                // BEFORE consuming the pending request: a wrong-shape reply
-                // changes no actor, data or journal state.
-                if let Ok(observation) = &completion.result
-                    && !observation_answers_request(&expected.kind, observation)
-                {
-                    return Err(ProtocolError::ObservationShape {
-                        expected: Box::new(expected.clone()),
-                        received: Box::new(observation.clone()),
-                    });
-                }
+                check_completion(self.pending.as_ref(), &completion)?;
                 let request = self.pending.take().expect("checked pending request");
                 self.journal.push(AttemptRecord::ReadAccepted(request.id));
                 match completion.result {
@@ -219,6 +230,7 @@ impl EntryAttempt {
                                     let evidence_needed = self.data.plan.as_ref().is_some_and(|plan| plan.decision().needs_binding_evidence());
                                     self.send(ControlEvent::BindingObserved { evidence_needed });
                                 }
+                                SessionReadPurpose::Catalog => unreachable!("entry never requests a catalog inventory"),
                             },
                             Err(error) => self.stop(error),
                         }
@@ -337,8 +349,12 @@ impl EntryAttempt {
                 }
             }
             ApplyContextPolicy => {
-                let policy = context::apply(data.acquisition.as_ref().expect("acquisition"), data.facts.as_ref().expect("context facts"))
-                    .map_err(EntryError::Context)?;
+                let policy = context::apply(
+                    data.acquisition.as_ref().expect("acquisition"),
+                    data.facts.as_ref().expect("context facts"),
+                    context::Use::Entry,
+                )
+                .map_err(EntryError::Context)?;
                 validate_intent(&policy.intent).map_err(|error| EntryError::Context(error.into()))?;
                 let mut target = BoundTarget::from_supplied(data.id, policy.supplied.clone()).map_err(|error| EntryError::Context(error.into()))?;
                 target.scope = policy.scope.clone();
@@ -549,7 +565,7 @@ impl EntryAttempt {
                 sequence: self.sequence,
             },
             target: TargetBindingId(self.data.id),
-            scope: self.data.scope.clone(),
+            scope: Box::new(self.data.scope.clone()),
             kind,
         };
         self.journal.push(AttemptRecord::ReadIssued(request.clone()));
@@ -580,7 +596,7 @@ impl EntryAttempt {
     }
 
     fn issue_project_identity(&mut self, route: action::ProjectRoute) {
-        self.issue(ReadKind::ProjectIdentity { route });
+        self.issue(ReadKind::ProjectIdentity { route: Box::new(route) });
     }
 }
 
@@ -600,6 +616,26 @@ fn observation_answers_request(kind: &ReadKind, observation: &Observation) -> bo
             | (ReadKind::GeneratorDefaults { .. }, Observation::Defaults(_))
             | (ReadKind::ProjectIdentity { .. }, Observation::ProjectIdentity(_))
     )
+}
+
+fn check_completion(expected: Option<&ReadRequest>, completion: &ReadCompletion) -> Result<(), ProtocolError> {
+    let expected = expected.ok_or(ProtocolError::NoPendingRead)?;
+    if completion.request != *expected {
+        return Err(ProtocolError::ReadMismatch {
+            expected: Box::new(expected.clone()),
+            received: Box::new(completion.request.clone()),
+        });
+    }
+    // Validate shape BEFORE consuming pending or modifying actor/native data.
+    if let Ok(observation) = &completion.result
+        && !observation_answers_request(&expected.kind, observation)
+    {
+        return Err(ProtocolError::ObservationShape {
+            expected: Box::new(expected.clone()),
+            received: Box::new(observation.clone()),
+        });
+    }
+    Ok(())
 }
 
 fn validate_intent(intent: &EntryIntent) -> Result<(), InputError> {

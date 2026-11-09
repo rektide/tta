@@ -62,7 +62,7 @@ impl SessionLookup for Native {
 }
 
 #[cfg(feature = "native")]
-fn absent_server(error: &tmax::error::OperationError) -> bool {
+pub(crate) fn absent_server(error: &tmax::error::OperationError) -> bool {
     use tmax::error::OperationError;
     match error {
         OperationError::ServerConnection { source, .. } => matches!(source.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused),

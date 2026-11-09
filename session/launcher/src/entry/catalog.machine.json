@@ -1,0 +1,36 @@
+{
+  "id": "catalog_query",
+  "initial": "catalog_active",
+  "states": {
+    "catalog_active": {
+      "id": "catalog_active",
+      "initial": "bind_target",
+      "on": { "stop": { "target": "#catalog_report" }, "cancel": { "target": "#catalog_cancelled" } },
+      "states": {
+        "catalog_sessions": {
+          "id": "catalog_sessions",
+          "entry": [{ "type": "@xstate.emit", "event": { "type": "read_catalog_sessions" } }],
+          "on": { "catalog_sessions_observed": [
+            { "guard": { "type": "has_roots" }, "target": "#catalog_projects" },
+            { "target": "#catalog_report" }
+          ] }
+        },
+        "catalog_projects": {
+          "id": "catalog_projects",
+          "entry": [{ "type": "@xstate.emit", "event": { "type": "read_catalog_projects" } }],
+          "on": { "catalog_root_observed": [
+            { "guard": { "type": "more_catalog_roots" }, "target": "catalog_projects", "reenter": true },
+            { "target": "#catalog_report" }
+          ] }
+        }
+      }
+    },
+    "catalog_report": {
+      "id": "catalog_report",
+      "entry": [{ "type": "@xstate.emit", "event": { "type": "report_catalog" } }],
+      "on": { "reported": { "target": "#catalog_done" } }
+    },
+    "catalog_done": { "id": "catalog_done", "type": "final" },
+    "catalog_cancelled": { "id": "catalog_cancelled", "type": "final" }
+  }
+}

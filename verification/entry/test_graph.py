@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from graph import DEFINITION, render
+from graph import DEFINITION, catalog_definition, render
 
 
 class ChartProjection(unittest.TestCase):
@@ -11,9 +11,20 @@ class ChartProjection(unittest.TestCase):
         graph = render(json.loads(DEFINITION.read_text()))
         self.assertIn("active.prepare_view.view_policy", graph)
         self.assertIn("emit rank_sessions", graph)
-        self.assertIn("active -.->|initial| bind_registry", graph)
+        self.assertIn("active -.->|initial| bind_target", graph)
+        self.assertIn("bind_target -.->|initial| context_read", graph)
         self.assertIn("active -->|stop| stopped", graph)
         self.assertLess(graph.index("view_policy, 1: independent"), graph.index("view_policy, 2: otherwise"))
+
+    def test_catalog_composes_binding_without_mutation_or_delivery_routes(self):
+        entry = json.loads(DEFINITION.read_text())
+        catalog = json.loads((DEFINITION.parent / "catalog.machine.json").read_text())
+        graph = render(catalog_definition(entry, catalog))
+        self.assertIn("bind_target -.->|initial| context_read", graph)
+        self.assertIn("bind_registry -->|validated| catalog_sessions", graph)
+        self.assertIn("catalog_root_observed, 1: more_catalog_roots, reenter", graph)
+        for forbidden in ["planned", "export", "effect", "prepare_creation", "bind_action"]:
+            self.assertNotIn(forbidden, graph)
 
     def test_reordered_guard_array_changes_projection(self):
         definition = json.loads(DEFINITION.read_text())

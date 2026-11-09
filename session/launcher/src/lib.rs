@@ -1,10 +1,14 @@
 //! Runner-free observation contracts, matching, registry parsing and launch planning.
 #![forbid(unsafe_code)]
 
-// Staged replacement: kept private until entry, discovery, hosts and execution
-// can cut over together. No facade over the legacy public Workflow.
+// Private by default; opt-in, hidden cross-crate integration for the unreleased
+// host stage. Public production replacement/versioning belongs to cutover.
 #[allow(dead_code)]
+#[cfg(not(feature = "entry-internal"))]
 mod entry;
+#[doc(hidden)]
+#[cfg(feature = "entry-internal")]
+pub mod entry;
 mod matching;
 mod plan;
 mod prepared;

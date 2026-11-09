@@ -3,7 +3,7 @@
 use super::protocol::{EndpointKey, EntryError, EntryIntent, ReadRequest, RequestId, SessionInventory};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ViewFingerprint {
+pub struct ViewFingerprint {
     pub id: crate::SessionId,
     pub name: String,
     pub group: Option<String>,
@@ -20,27 +20,27 @@ impl From<&crate::Session> for ViewFingerprint {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorkspaceKey {
+pub enum WorkspaceKey {
     Group(String),
     Singleton(crate::SessionId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MatchReason {
+pub enum MatchReason {
     Literal,
     Alias { name: String },
     Substring { name: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ViewRef {
+pub struct ViewRef {
     pub endpoint: EndpointKey,
     pub observation: RequestId,
     pub fingerprint: ViewFingerprint,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorkspaceRef {
+pub struct WorkspaceRef {
     pub endpoint: EndpointKey,
     pub observation: RequestId,
     pub key: WorkspaceKey,
@@ -49,7 +49,7 @@ pub(crate) struct WorkspaceRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorkspaceMatch {
+pub struct WorkspaceMatch {
     pub work: WorkspaceRef,
     pub view: ViewRef,
     pub request: ReadRequest,

@@ -173,6 +173,29 @@ fn acquired_registry_error_precedes_sessions_and_physical_endpoint_mismatch_stop
     assert!(matches!(stopped(&attempt).1, EntryError::Context(_)));
 }
 
+#[test]
+fn supplied_context_and_acquired_scope_follow_the_same_frozen_target_contract() {
+    let input = invocation("project");
+    let scope = context::Scope {
+        origin: context::Origin::Ssh {
+            host: input.context.host.clone(),
+            setup: crate::target::TargetSetup {
+                cwd: Some(input.context.cwd.clone()),
+                ..Default::default()
+            },
+        },
+        cwd: Some(input.context.cwd.clone()),
+    };
+    let attempt = EntryAttempt::start_at(input, scope.clone()).unwrap();
+    assert_eq!(request(&attempt).scope.as_ref(), &scope);
+    let mut mismatch = scope.clone();
+    mismatch.cwd = Some("/other".into());
+    assert!(matches!(EntryAttempt::start_at(invocation("project"), mismatch), Err(InputError::Target(_))));
+    let mut input = invocation("project");
+    input.context.client = ClientEntry::SwitchWithinServer;
+    assert!(matches!(EntryAttempt::start_at(input, scope), Err(InputError::Target(_))));
+}
+
 /// A root inventory observation: requested spelling, observed physical root
 /// and immediate entries with their canonical directories.
 fn inventory(requested: &str, physical: &str, entries: &[(&str, &str)]) -> crate::ProjectInventory {

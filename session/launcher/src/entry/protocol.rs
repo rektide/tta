@@ -9,7 +9,7 @@ use super::{action, machine, select};
 
 /// Process-local correlation, not durable identity or crash-resume authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(crate) struct AttemptId(u64);
+pub struct AttemptId(u64);
 
 impl AttemptId {
     pub(super) fn new() -> Self {
@@ -22,7 +22,7 @@ impl AttemptId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestId {
+pub struct RequestId {
     pub attempt: AttemptId,
     pub sequence: u64,
 }
@@ -30,16 +30,22 @@ pub(crate) struct RequestId {
 /// Scoped to a frozen supplied target in this attempt. A host name or equal
 /// socket spelling alone is never an identity proof, nor is this an incarnation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TargetBindingId(pub(super) AttemptId);
+pub struct TargetBindingId(pub(super) AttemptId);
+
+impl TargetBindingId {
+    pub fn attempt(self) -> AttemptId {
+        self.0
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EndpointKey {
+pub struct EndpointKey {
     pub target: TargetBindingId,
     pub socket: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClientEntry {
+pub enum ClientEntry {
     AttachTerminal,
     /// Supplied same-server policy, NOT an observed invoking client ID. Guarded
     /// origin switching is a separate, uncommissioned capability.
@@ -47,7 +53,7 @@ pub(crate) enum ClientEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ViewPreference {
+pub enum ViewPreference {
     Auto,
     Independent,
     Shared,
@@ -56,7 +62,7 @@ pub(crate) enum ViewPreference {
 /// Initial window naming for a session this attempt creates. Only new-work
 /// decisions can carry it; existing-work entry has no window policy.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
-pub(crate) enum InitialWindow {
+pub enum InitialWindow {
     /// Name the initial window after the new session (the delivered default).
     #[default]
     AfterSession,
@@ -67,7 +73,7 @@ pub(crate) enum InitialWindow {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct EntryIntent {
+pub struct EntryIntent {
     pub selector: String,
     pub view: ViewPreference,
     pub satellite_prefix: String,
@@ -89,7 +95,7 @@ pub(crate) struct EntryIntent {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SuppliedContext {
+pub struct SuppliedContext {
     pub host: String,
     pub cwd: PathBuf,
     pub socket: crate::socket::Resolved,
@@ -98,7 +104,7 @@ pub(crate) struct SuppliedContext {
     pub client: ClientEntry,
 }
 
-pub(crate) struct Invocation {
+pub struct Invocation {
     pub context: SuppliedContext,
     pub intent: EntryIntent,
     pub registry: crate::scaffold::Config,
@@ -106,7 +112,7 @@ pub(crate) struct Invocation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BoundTarget {
+pub struct BoundTarget {
     pub(super) scope: super::context::Scope,
     pub(super) binding: TargetBindingId,
     pub(super) host: String,
@@ -118,6 +124,18 @@ pub(crate) struct BoundTarget {
 }
 
 impl BoundTarget {
+    pub fn scope(&self) -> &super::context::Scope {
+        &self.scope
+    }
+    pub fn program(&self) -> &std::ffi::OsStr {
+        self.program.as_os_str()
+    }
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+    pub fn client(&self) -> ClientEntry {
+        self.client
+    }
     pub(super) fn from_supplied(attempt: AttemptId, context: SuppliedContext) -> Result<Self, InputError> {
         if context.host.is_empty() || context.host.chars().any(char::is_control) || context.program.is_empty() {
             return Err(InputError::Target("host and tmux program must be nonempty; host must be printable"));
@@ -154,7 +172,7 @@ impl BoundTarget {
         })
     }
 
-    pub(crate) fn endpoint(&self) -> EndpointKey {
+    pub fn endpoint(&self) -> EndpointKey {
         EndpointKey {
             target: self.binding,
             socket: self.socket.path.clone(),
@@ -163,7 +181,9 @@ impl BoundTarget {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InputError {
+pub enum InputError {
+    #[error("invalid acquisition context: {0}")]
+    Context(#[source] anyhow::Error),
     #[error("provide a nonempty session/project selector")]
     EmptySelector,
     #[error("invalid supplied target: {0}")]
@@ -183,7 +203,8 @@ pub(crate) enum InputError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionReadPurpose {
+pub enum SessionReadPurpose {
+    Catalog,
     Selection,
     BindAction,
 }
@@ -191,18 +212,18 @@ pub(crate) enum SessionReadPurpose {
 /// Destination checks happen at preparation (authorizing a creation) and again
 /// at binding (rechecking the already-chosen action); they never share proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DestinationPurpose {
+pub enum DestinationPurpose {
     Preparation,
     Binding,
 }
 
 /// One-based position in the configured root list, matching `@N` selectors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RootSlot(pub usize);
+pub struct RootSlot(pub usize);
 
 /// Which observed target defaults a validated generator still needs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DefaultNeeds {
+pub struct DefaultNeeds {
     pub author: bool,
     pub license: bool,
 }
@@ -214,7 +235,7 @@ impl DefaultNeeds {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ReadKind {
+pub enum ReadKind {
     TargetContext,
     /// One semantic registry acquisition. Any bounded component walk belongs
     /// to the observer, never to the entry chart's selection course.
@@ -248,15 +269,15 @@ pub(crate) enum ReadKind {
     /// Canonicalize the chosen route's entry path; the reply is the physical
     /// directory it resolves to now.
     ProjectIdentity {
-        route: super::action::ProjectRoute,
+        route: Box<super::action::ProjectRoute>,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReadRequest {
+pub struct ReadRequest {
     pub id: RequestId,
     pub target: TargetBindingId,
-    pub scope: super::context::Scope,
+    pub scope: Box<super::context::Scope>,
     pub kind: ReadKind,
 }
 
@@ -286,13 +307,13 @@ impl ReadRequest {
 /// Only complete successful inventories supply presence/absence. A partial read
 /// must be an ObservationFailure; it has no conversion to this value.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SessionInventory {
+pub enum SessionInventory {
     Absent,
     Present(Vec<crate::Session>),
 }
 
 impl SessionInventory {
-    pub(crate) fn sessions(&self) -> &[crate::Session] {
+    pub fn sessions(&self) -> &[crate::Session] {
         match self {
             Self::Absent => &[],
             Self::Present(sessions) => sessions,
@@ -301,7 +322,7 @@ impl SessionInventory {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Observation {
+pub enum Observation {
     Context(super::context::Facts),
     Registry(Option<String>),
     EndpointIdentity {
@@ -321,7 +342,7 @@ pub(crate) enum Observation {
 
 /// Classified destination evidence, distinct from a failed inspection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DestinationEvidence {
+pub enum DestinationEvidence {
     Absent,
     Present,
 }
@@ -329,7 +350,7 @@ pub(crate) enum DestinationEvidence {
 /// Observed target defaults. `None` fields are explicitly-absent completed
 /// facts, not missing values the generator must acquire itself.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GeneratorDefaults {
+pub struct GeneratorDefaults {
     pub author: Option<String>,
     pub license: Option<String>,
 }
@@ -338,35 +359,35 @@ pub(crate) struct GeneratorDefaults {
 /// their source type, bytes and nested chain; the actor only sees `stop`.
 #[derive(Debug, thiserror::Error)]
 #[error("{source}")]
-pub(crate) struct ObservationFailure {
+pub struct ObservationFailure {
     #[source]
     pub source: Box<dyn std::error::Error + Send + Sync>,
 }
 
-pub(crate) struct ReadCompletion {
+pub struct ReadCompletion {
     /// Exact echo checks purpose/endpoint/program as well as ID/target. Future
     /// path/slot requests must extend this envelope, not rely on enum type alone.
     pub request: ReadRequest,
     pub result: Result<Observation, ObservationFailure>,
 }
 
-pub(crate) enum Delivery {
+pub enum Delivery {
     Export,
 }
-pub(crate) enum Event {
+pub enum Event {
     Observed(ReadCompletion),
     Deliver(Delivery),
     Cancel,
 }
 
-pub(crate) enum Waiting<'a> {
+pub enum Waiting<'a> {
     Read(&'a ReadRequest),
     Planned(&'a action::EntryPlan),
     Finished(&'a AttemptOutcome),
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ProtocolError {
+pub enum ProtocolError {
     #[error("no read is pending (reply is stale, duplicate, or out of order)")]
     NoPendingRead,
     #[error("reply does not answer the exact pending request: expected {expected:?}; received {received:?}")]
@@ -380,7 +401,7 @@ pub(crate) enum ProtocolError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EntryError {
+pub enum EntryError {
     #[error("target context policy failed: {0}")]
     Context(#[source] anyhow::Error),
     #[error("generator registry/choice validation failed: {0}")]
@@ -427,14 +448,14 @@ pub(crate) enum EntryError {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum AttemptOutcome {
+pub enum AttemptOutcome {
     Exported(Box<action::ExportedAction>),
     Stopped { boundary: String, cause: Arc<EntryError> },
     Cancelled { boundary: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AttemptRecord {
+pub enum AttemptRecord {
     Directive(machine::Directive),
     Control(machine::Event),
     ReadIssued(ReadRequest),
@@ -442,7 +463,7 @@ pub(crate) enum AttemptRecord {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AttemptSnapshot {
+pub struct AttemptSnapshot {
     pub id: AttemptId,
     pub target: Option<BoundTarget>,
     pub leaf: String,

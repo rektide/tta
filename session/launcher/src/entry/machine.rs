@@ -8,7 +8,7 @@ pub(super) const DEFINITION: &str = include_str!("entry.machine.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Directive {
+pub enum Directive {
     ReadContext,
     ApplyContextPolicy,
     ReadEndpointIdentity,
@@ -37,7 +37,7 @@ pub(crate) enum Directive {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum Event {
+pub enum Event {
     Supplied,
     ContextPolicy {
         needs_identity: bool,

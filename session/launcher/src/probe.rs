@@ -48,13 +48,63 @@ pub struct Output<'a> {
     pub complete: bool,
 }
 
+// Shared framing mechanics. Neither codec owns token generation or runs I/O.
+pub(crate) fn validate_token(token: &str) -> Result<()> {
+    ensure!(
+        (8..=128).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+        "invalid probe token"
+    );
+    Ok(())
+}
+
+pub(crate) fn frame(token: &str, operation: &str) -> Result<String> {
+    validate_token(token)?;
+    Ok(format!(
+        "printf '\\000TTA-PROBE/1/{token}/BEGIN\\000'\ntta_meta=$( {{ (\nset -e\n{operation}\n) 2>&1 1>&3; tta_rc=$?; printf '\\000%s' \"$tta_rc\"; }} | od -An -v -tx1 | head -c 786432 ) 3>&1\ntta_capture=$?\nprintf '\\000TTA-PROBE/1/{token}/END\\000%s\\000' \"$tta_meta\"\nexit \"$tta_capture\""
+    ))
+}
+
+pub(crate) struct Envelope<'a> {
+    pub(crate) payload: &'a [u8],
+    pub(crate) diagnostics: Diagnostics,
+}
+
+pub(crate) fn envelope<'a>(token: &str, output: Output<'a>) -> Result<Envelope<'a>> {
+    ensure!(output.complete, "incomplete probe capture (EOF/deadline/output cap)");
+    ensure!(
+        output.status == Some(0),
+        "probe carrier failed with {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(output.stderr)
+    );
+    let header = format!("\0TTA-PROBE/1/{token}/BEGIN\0").into_bytes();
+    let footer = format!("\0TTA-PROBE/1/{token}/END\0").into_bytes();
+    let begin = unique(output.stdout, &header)?;
+    let end = unique(output.stdout, &footer)?;
+    ensure!(end >= begin + header.len(), "probe envelope has inverted boundaries");
+    let payload = &output.stdout[begin + header.len()..end];
+    let tail = &output.stdout[end + footer.len()..];
+    let meta_end = tail.iter().position(|b| *b == 0).ok_or_else(|| anyhow::anyhow!("truncated probe metadata"))?;
+    let (stderr, status) = metadata(&tail[..meta_end])?;
+    Ok(Envelope {
+        payload,
+        diagnostics: Diagnostics {
+            startup_stdout: output.stdout[..begin].to_vec(),
+            trailing_stdout: tail[meta_end + 1..].to_vec(),
+            transport_stderr: output.stderr.to_vec(),
+            command_stderr: stderr,
+            command_status: status,
+        },
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct Probe {
     pub request: Request,
     token: String,
 }
 
-fn quote(value: impl Into<std::ffi::OsString>) -> Result<String> {
+pub(crate) fn quote(value: impl Into<std::ffi::OsString>) -> Result<String> {
     Ok(Word::new(value)?.shell()?)
 }
 
@@ -63,31 +113,15 @@ impl Probe {
     /// ordinary startup noise; it is not authentication against a hostile host.
     pub fn new(request: Request, token: impl Into<String>) -> Result<Self> {
         let token = token.into();
-        ensure!(
-            (8..=128).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
-            "invalid probe token"
-        );
+        validate_token(&token)?;
         Ok(Self { request, token })
-    }
-
-    fn header(&self) -> Vec<u8> {
-        format!("\0TTA-PROBE/1/{}/BEGIN\0", self.token).into_bytes()
-    }
-    fn footer(&self) -> Vec<u8> {
-        format!("\0TTA-PROBE/1/{}/END\0", self.token).into_bytes()
     }
 
     /// Command stdout streams literally, including NULs. Its stderr and status
     /// travel together as bounded hex metadata, so startup stderr cannot turn
     /// an exact endpoint-absence diagnostic into a false classification.
     pub fn script(&self) -> Result<String> {
-        let operation = self.operation()?;
-        // head bounds remote metadata retention too. Truncation loses the
-        // mandatory final NUL/status pair and is rejected, never accepted empty.
-        Ok(format!(
-            "printf '\\000TTA-PROBE/1/{token}/BEGIN\\000'\ntta_meta=$( {{ (\nset -e\n{operation}\n) 2>&1 1>&3; tta_rc=$?; printf '\\000%s' \"$tta_rc\"; }} | od -An -v -tx1 | head -c 786432 ) 3>&1\ntta_capture=$?\nprintf '\\000TTA-PROBE/1/{token}/END\\000%s\\000' \"$tta_meta\"\nexit \"$tta_capture\"",
-            token = self.token
-        ))
+        frame(&self.token, &self.operation()?)
     }
 
     pub fn shell(&self, setup: &target::TargetSetup) -> Result<String> {
@@ -144,32 +178,11 @@ impl Probe {
     }
 
     pub fn decode(&self, output: Output<'_>) -> Result<Decoded> {
-        ensure!(output.complete, "incomplete probe capture (EOF/deadline/output cap)");
-        ensure!(
-            output.status == Some(0),
-            "probe carrier failed with {:?}: {}",
-            output.status,
-            String::from_utf8_lossy(output.stderr)
-        );
-        let header = self.header();
-        let footer = self.footer();
-        let begin = unique(output.stdout, &header)?;
-        let end = unique(output.stdout, &footer)?;
-        ensure!(end >= begin + header.len(), "probe envelope has inverted boundaries");
-        let payload = &output.stdout[begin + header.len()..end];
-        let tail = &output.stdout[end + footer.len()..];
-        let meta_end = tail.iter().position(|b| *b == 0).ok_or_else(|| anyhow::anyhow!("truncated probe metadata"))?;
-        let (stderr, status) = metadata(&tail[..meta_end])?;
-        let reply = self.decode_payload(status, payload, &stderr)?;
+        let envelope = envelope(&self.token, output)?;
+        let reply = self.decode_payload(envelope.diagnostics.command_status, envelope.payload, &envelope.diagnostics.command_stderr)?;
         Ok(Decoded {
             reply,
-            diagnostics: Diagnostics {
-                startup_stdout: output.stdout[..begin].to_vec(),
-                trailing_stdout: tail[meta_end + 1..].to_vec(),
-                transport_stderr: output.stderr.to_vec(),
-                command_stderr: stderr,
-                command_status: status,
-            },
+            diagnostics: envelope.diagnostics,
         })
     }
 
@@ -271,7 +284,7 @@ fn scaffold_defaults(author: Option<String>, license: Option<String>) -> crate::
     crate::scaffold::Defaults { author, license }
 }
 
-fn listing(path: &Path) -> Result<String> {
+pub(crate) fn listing(path: &Path) -> Result<String> {
     // The sentinel checks actual -printf support even for an empty directory.
     // This is not `ls`: basenames and both lstat/stat kinds are NUL-delimited.
     // A single-operand stat gets its OWN stderr/status frame. GNU find's %Y=N
@@ -285,7 +298,7 @@ fn listing(path: &Path) -> Result<String> {
     ))
 }
 
-fn project_listing(path: &Path) -> Result<String> {
+pub(crate) fn project_listing(path: &Path) -> Result<String> {
     // A physical path is a separate NUL field, not an unquoted shell operand.
     // The decoder requires it for every directory in the type/stat inventory:
     // failed/racing cd or pwd can never silently erase a project candidate.
@@ -293,11 +306,11 @@ fn project_listing(path: &Path) -> Result<String> {
     Ok(format!("{} -exec /bin/sh -c {} tta-physical {{}} \\;", listing(path)?, quote(physical)?))
 }
 
-fn strip_newline(bytes: &[u8]) -> Result<&[u8]> {
+pub(crate) fn strip_newline(bytes: &[u8]) -> Result<&[u8]> {
     bytes.strip_suffix(b"\n").ok_or_else(|| anyhow::anyhow!("missing pwd/id newline"))
 }
 
-fn field(bytes: &[u8]) -> Result<(&[u8], &[u8])> {
+pub(crate) fn field(bytes: &[u8]) -> Result<(&[u8], &[u8])> {
     let end = bytes
         .iter()
         .position(|b| *b == 0)
@@ -305,15 +318,15 @@ fn field(bytes: &[u8]) -> Result<(&[u8], &[u8])> {
     Ok((&bytes[..end], &bytes[end + 1..]))
 }
 
-struct Found<'a> {
-    name: &'a [u8],
-    kind: target::Entry,
+pub(crate) struct Found<'a> {
+    pub(crate) name: &'a [u8],
+    pub(crate) kind: target::Entry,
     failure: Option<String>,
-    physical: &'a [u8],
+    pub(crate) physical: &'a [u8],
 }
 
 impl Found<'_> {
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         if let Some(failure) = &self.failure {
             bail!("cannot inspect symlink {:?}: {failure}", String::from_utf8_lossy(self.name));
         }
@@ -321,7 +334,7 @@ impl Found<'_> {
     }
 }
 
-fn entries(mut bytes: &[u8], physical: bool) -> Result<Vec<Found<'_>>> {
+pub(crate) fn entries(mut bytes: &[u8], physical: bool) -> Result<Vec<Found<'_>>> {
     let mut result = Vec::new();
     while !bytes.is_empty() {
         let (name, rest) = field(bytes)?;
@@ -372,7 +385,7 @@ fn entries(mut bytes: &[u8], physical: bool) -> Result<Vec<Found<'_>>> {
     Ok(result)
 }
 
-fn entry(payload: &[u8], name: &[u8], follow: bool) -> Result<Option<target::Entry>> {
+pub(crate) fn entry(payload: &[u8], name: &[u8], follow: bool) -> Result<Option<target::Entry>> {
     let Some(found) = entries(payload, false)?.into_iter().find(|found| found.name == name) else {
         return Ok(None);
     };
@@ -434,11 +447,18 @@ fn unhex(bytes: &[u8]) -> Result<Vec<u8>> {
 /// C-locale diagnostics for the selected endpoint classify server absence.
 pub fn decode_sessions(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path) -> Result<workflow::SessionInventory> {
     use workflow::SessionInventory;
+    Ok(match session_facts(status, stdout, stderr, socket)? {
+        None => SessionInventory::Absent,
+        Some(sessions) => SessionInventory::Present(sessions),
+    })
+}
+
+pub(crate) fn session_facts(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path) -> Result<Option<Vec<Session>>> {
     if status != 0 {
         let path = socket.to_str().ok_or_else(|| anyhow::anyhow!("socket diagnostic requires UTF-8"))?;
         if status == 1 && stdout.is_empty() {
             if stderr == b"no sessions\n" {
-                return Ok(SessionInventory::Present(Vec::new()));
+                return Ok(Some(Vec::new()));
             }
             for expected in [
                 format!("no server running on {path}\n"),
@@ -446,7 +466,7 @@ pub fn decode_sessions(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path)
                 format!("error connecting to {path} (Connection refused)\n"),
             ] {
                 if stderr == expected.as_bytes() {
-                    return Ok(SessionInventory::Absent);
+                    return Ok(None);
                 }
             }
         }
@@ -466,9 +486,7 @@ pub fn decode_sessions(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path)
         }
     }
     decoder.finish()?;
-    Ok(SessionInventory::Present(
-        tmax::query::Sessions::collect(rows)?.into_iter().map(Session::from).collect(),
-    ))
+    Ok(Some(tmax::query::Sessions::collect(rows)?.into_iter().map(Session::from).collect()))
 }
 
 #[cfg(test)]

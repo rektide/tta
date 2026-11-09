@@ -15,7 +15,7 @@ use super::{
 /// Constructor-checked native path. Tmux's `-c` format boundary currently needs
 /// UTF-8, but encoding is still exclusively the lowerer's job.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ViewDirectory(PathBuf);
+pub struct ViewDirectory(PathBuf);
 
 impl ViewDirectory {
     pub(super) fn new(path: &Path) -> Result<Self, Error> {
@@ -26,7 +26,7 @@ impl ViewDirectory {
         Ok(Self(path.to_owned()))
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -34,7 +34,7 @@ impl ViewDirectory {
 /// Constructor-checked new-work pane directory: the explicit override or the
 /// selected project route's entry path (or the creation destination).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PaneDirectory(PathBuf);
+pub struct PaneDirectory(PathBuf);
 
 impl PaneDirectory {
     pub(super) fn new(path: &Path) -> Result<Self, Error> {
@@ -45,13 +45,13 @@ impl PaneDirectory {
         Ok(Self(path.to_owned()))
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.0
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ViewNaming {
+pub struct ViewNaming {
     pub(super) prefix: String,
     pub(super) directory: Option<ViewDirectory>,
 }
@@ -60,7 +60,7 @@ pub(crate) struct ViewNaming {
 /// its requested spelling, the observed physical root, and the entry's
 /// basename plus canonical directory on that route.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProjectRoute {
+pub struct ProjectRoute {
     /// One-based configured root slot, matching `@N` selectors.
     pub slot: usize,
     pub requested_root: PathBuf,
@@ -73,7 +73,7 @@ pub(crate) struct ProjectRoute {
 
 impl ProjectRoute {
     /// The entry path through this route's physical root; tmux `-c`/cd target.
-    pub(crate) fn entry_path(&self) -> PathBuf {
+    pub fn entry_path(&self) -> PathBuf {
         self.root.join(&self.name)
     }
 }
@@ -93,7 +93,7 @@ impl From<&crate::ProjectSource> for ProjectRoute {
 /// A chosen existing project: physical identity, deterministic selected route
 /// and every observed equivalent route to the same physical directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProjectRef {
+pub struct ProjectRef {
     pub name: String,
     /// Selected route's entry path (physical root + basename).
     pub entry: PathBuf,
@@ -106,7 +106,7 @@ pub(crate) struct ProjectRef {
 /// The fixed destination of a scaffold creation: configured slot, observed
 /// physical creation root, new basename and the exact path to be created.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CreationSite {
+pub struct CreationSite {
     /// One-based configured root slot whose physical root was chosen.
     pub slot: usize,
     pub requested_root: PathBuf,
@@ -117,7 +117,7 @@ pub(crate) struct CreationSite {
 
 /// New-work session specification, settled once at planning.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NewSessionSpec {
+pub struct NewSessionSpec {
     pub name: String,
     pub startup: Vec<OsString>,
     pub directory: PaneDirectory,
@@ -127,13 +127,13 @@ pub(crate) struct NewSessionSpec {
 /// The materialized generator program of a scaffold decision, built exactly
 /// once with the actually observed defaults.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GeneratorProgram {
+pub struct GeneratorProgram {
     pub generator: String,
     pub program: Expression,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EntryDecision {
+pub enum EntryDecision {
     EnterView {
         view: ViewRef,
         via: ClientEntry,
@@ -165,7 +165,7 @@ impl EntryDecision {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EntryPlan {
+pub struct EntryPlan {
     pub(super) target: BoundTarget,
     pub(super) decision: EntryDecision,
     pub(super) basis: DecisionBasis,
@@ -174,7 +174,7 @@ pub(crate) struct EntryPlan {
 /// Typed provenance of a decision: which requests produced it and the
 /// identity/match facts that survive into the plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DecisionBasis {
+pub enum DecisionBasis {
     Workspace {
         selection: ReadRequest,
         workspace: WorkspaceKey,
@@ -185,14 +185,14 @@ pub(crate) enum DecisionBasis {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProjectBasis {
+pub struct ProjectBasis {
     pub selection: ReadRequest,
     pub roots: Vec<ReadRequest>,
     pub routes: Vec<ProjectRoute>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CreationBasis {
+pub struct CreationBasis {
     pub selection: ReadRequest,
     pub roots: Vec<ReadRequest>,
     pub destination: Option<ReadRequest>,
@@ -201,26 +201,26 @@ pub(crate) struct CreationBasis {
 }
 
 impl EntryPlan {
-    pub(crate) fn decision(&self) -> &EntryDecision {
+    pub fn decision(&self) -> &EntryDecision {
         &self.decision
     }
-    pub(crate) fn target(&self) -> &BoundTarget {
+    pub fn target(&self) -> &BoundTarget {
         &self.target
     }
-    pub(crate) fn selection_request(&self) -> &ReadRequest {
+    pub fn selection_request(&self) -> &ReadRequest {
         match &self.basis {
             DecisionBasis::Workspace { selection, .. } => selection,
             DecisionBasis::Project(basis) => &basis.selection,
             DecisionBasis::Creation(basis) => &basis.selection,
         }
     }
-    pub(crate) fn basis(&self) -> &DecisionBasis {
+    pub fn basis(&self) -> &DecisionBasis {
         &self.basis
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BoundOperation {
+pub enum BoundOperation {
     EnterView {
         view: ViewFingerprint,
         via: ClientEntry,
@@ -246,7 +246,7 @@ pub(crate) enum BoundOperation {
 /// A new-work session exactly as bound: fresh-checked name, pane directory,
 /// startup argv and window policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BoundSession {
+pub struct BoundSession {
     pub name: String,
     pub directory: PaneDirectory,
     pub startup: Vec<OsString>,
@@ -254,7 +254,7 @@ pub(crate) struct BoundSession {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BoundAction {
+pub struct BoundAction {
     pub(super) target: BoundTarget,
     pub(super) operation: BoundOperation,
     /// Fresh session inventory that witnessed the binding.
@@ -264,23 +264,23 @@ pub(crate) struct BoundAction {
 }
 
 impl BoundAction {
-    pub(crate) fn operation(&self) -> &BoundOperation {
+    pub fn operation(&self) -> &BoundOperation {
         &self.operation
     }
-    pub(crate) fn binding_requests(&self) -> Vec<&ReadRequest> {
+    pub fn binding_requests(&self) -> Vec<&ReadRequest> {
         self.evidence_witness.iter().chain(std::iter::once(&self.sessions_witness)).collect()
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExportedAction {
+pub struct ExportedAction {
     pub(super) action: BoundAction,
     pub(super) expression: Expression,
     pub(super) shell: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error(transparent)]
     Command(#[from] tta_command::Error),
     #[error(transparent)]

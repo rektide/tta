@@ -6,6 +6,9 @@ pub mod capture;
 pub mod command;
 pub mod driver;
 pub mod execution;
+#[cfg(feature = "entry-internal")]
+#[doc(hidden)]
+pub mod observe;
 pub mod resolve;
 pub mod scaffold;
 pub mod socket;

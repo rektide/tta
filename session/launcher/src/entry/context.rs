@@ -92,6 +92,21 @@ pub struct Acquisition {
     pub default_scaffold: String,
 }
 
+pub(super) fn validate_initial_scope(scope: &Scope) -> Result<()> {
+    ensure!(scope.cwd.is_none(), "acquisition scope must not claim an already-frozen cwd");
+    let host = match &scope.origin {
+        Origin::Local { host } | Origin::Ssh { host, .. } => host,
+    };
+    ensure!(
+        !host.is_empty() && !host.chars().any(char::is_control),
+        "target host must be nonempty and printable"
+    );
+    if let Origin::Ssh { setup, .. } = &scope.origin {
+        setup.shell_command(":")?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(super) struct Policy {
     pub supplied: SuppliedContext,
@@ -102,7 +117,13 @@ pub(super) struct Policy {
     pub endpoint_identity: Option<(PathBuf, PathBuf)>,
 }
 
-pub(super) fn apply(input: &Acquisition, facts: &Facts) -> Result<Policy> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Use {
+    Entry,
+    Catalog,
+}
+
+pub(super) fn apply(input: &Acquisition, facts: &Facts, usage: Use) -> Result<Policy> {
     ensure!(facts.cwd.is_absolute(), "observed target cwd is not absolute");
     let overrides = &input.overrides;
     // Do not even decode TTA_ROOTS if an explicit list replaces it.
@@ -139,9 +160,9 @@ pub(super) fn apply(input: &Acquisition, facts: &Facts) -> Result<Policy> {
     // Physical endpoint comparison is acquisition, not a core filesystem call.
     let endpoint_identity = current
         .as_ref()
-        .filter(|current| **current != socket.path)
+        .filter(|current| usage == Use::Entry && **current != socket.path)
         .map(|current| (current.clone(), socket.path.clone()));
-    let client = if current.is_some() {
+    let client = if usage == Use::Entry && current.is_some() {
         ClientEntry::SwitchWithinServer
     } else {
         ClientEntry::AttachTerminal
@@ -272,14 +293,14 @@ mod tests {
             satellite_prefix: Some("view-".into()),
             ..Default::default()
         };
-        let policy = apply(&input, &facts).unwrap();
+        let policy = apply(&input, &facts, Use::Entry).unwrap();
         assert_eq!(policy.intent.roots, [facts.cwd.join(OsString::from_vec(b"raw-\xff".to_vec()))]);
         assert_eq!(
             policy.supplied.program,
             facts.cwd.join(OsString::from_vec(b"./tmux-\xff".to_vec())).into_os_string()
         );
         input.overrides.roots = None;
-        assert!(apply(&input, &facts).unwrap_err().to_string().contains("TTA_ROOTS"));
+        assert!(apply(&input, &facts, Use::Entry).unwrap_err().to_string().contains("TTA_ROOTS"));
     }
 
     #[test]
@@ -294,7 +315,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let policy = apply(&input, &facts).unwrap();
+        let policy = apply(&input, &facts, Use::Entry).unwrap();
         assert_eq!(policy.intent.roots, [PathBuf::from("/target/work/projects")]);
         assert_eq!(policy.supplied.socket.path, Path::new("/tmp/tmux-4321/default"));
         assert_eq!(policy.supplied.client, ClientEntry::AttachTerminal);
