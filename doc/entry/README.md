@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
+  - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
+    title: Declare multi-root selection and safe creation before implementation; retain the eight-stage observation graph
   - resource: opencode://ses_e4dbbb07bffeqm6Khh2fp29jNR
     title: Link the post-completion capability-oriented ticket proposal from its entry domain
   - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
@@ -60,7 +62,7 @@ flowchart TD
 
     sessions["sessions: initial inventory<br/>Wait if missing; retain canonical IDs and actual groups"]
     resolve["resolve: scaffold::resolve(...) ?<br/>Session guard before Some/None; only None tries projects<br/>Project guard before Some/None; only missing may scaffold"]
-    projects["projects: immediate directory facts<br/>Wait if missing; use observed physical root"]
+    projects["projects: next required root's immediate directory facts<br/>Wait if missing; retain requested + physical root and physical entries"]
     destination["destination: requested safe creation path<br/>Wait if missing; present/error fails in resolver"]
     defaults["defaults: requested generator author/license facts<br/>Wait if missing; native values only"]
     fresh_sessions["fresh_sessions: second inventory for independent existing entry<br/>Wait if missing; guard unchanged ID/name/group<br/>Allocate prefix + logical base + smallest free suffix"]
@@ -172,6 +174,14 @@ not admit longer candidates. Ambiguity leaves through `?` before the final
 This remains the native resolver's algorithm inside the machine's `resolve`
 stage. Porting progression does not turn each candidate-loop operation into an
 actor or replace actual group facts with alias-based identity.
+
+## Ordered project roots
+
+The [multi-root declaration](/doc/entry/project-roots.md) specifies configuration
+precedence, qualified selectors, physical-directory provenance and safe scaffold
+destinations. The graph remains eight stages: resolve may request another root
+through its existing projects route before selecting a winner. Surface integration
+and final acceptance remain tracked by `tta-project-roots`.
 
 ## Names, aliases and workspace winners
 
