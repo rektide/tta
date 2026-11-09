@@ -30,9 +30,24 @@ pub enum Directive {
     PlanEnterView,
     ReadBindingSessions,
     ReadBindingEvidence,
+    ReadBindingDestination,
     CheckBinding,
     BindOperation,
     ExportAction,
+    DispatchExecution,
+    RequestGenerate,
+    RequestDirectory,
+    RequestNative,
+    RequestTerminal,
+}
+
+/// Which fresh non-session evidence a decision still needs at binding, as a
+/// serializable summary computed by the ingress — exactly like `ViewPolicy`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum BindingEvidence {
+    None,
+    Route,
+    RootThenDestination,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,16 +74,31 @@ pub enum Event {
         needs_defaults: bool,
     },
     BindingObserved {
-        evidence_needed: bool,
+        evidence: BindingEvidence,
+    },
+    /// The ingress-computed summary of an accepted binding-evidence read:
+    /// a verified creation root still needs its destination lstat; a route
+    /// identity does not.
+    ObservedEvidence {
+        destination_needed: bool,
     },
     ViewPolicy {
         independent: bool,
     },
     Prepared,
     Export,
+    Execute,
     Checked,
-    Bound,
+    Bound {
+        exported: bool,
+    },
     Exported,
+    EffectTerminal,
+    EffectGenerate,
+    EffectDirectory,
+    EffectStarted,
+    EffectFinished,
+    Delegated,
     Stop,
     Cancel,
 }
@@ -89,12 +119,20 @@ impl EventType for Event {
             Self::Eligible => "eligible",
             Self::ValidatedGenerator { .. } => "validated_generator",
             Self::BindingObserved { .. } => "binding_observed",
+            Self::ObservedEvidence { .. } => "observed_evidence",
             Self::ViewPolicy { .. } => "view_policy",
             Self::Prepared => "prepared",
             Self::Export => "export",
+            Self::Execute => "execute",
             Self::Checked => "checked",
-            Self::Bound => "bound",
+            Self::Bound { .. } => "bound",
             Self::Exported => "exported",
+            Self::EffectTerminal => "effect_terminal",
+            Self::EffectGenerate => "effect_generate",
+            Self::EffectDirectory => "effect_directory",
+            Self::EffectStarted => "effect_started",
+            Self::EffectFinished => "effect_finished",
+            Self::Delegated => "delegated",
             Self::Stop => "stop",
             Self::Cancel => "cancel",
         }
@@ -114,8 +152,17 @@ static MACHINE: LazyLock<Arc<Machine<(), Event>>> = LazyLock::new(|| {
         matches!(args.event, Ev::User(Event::ValidatedGenerator { needs_defaults: true }))
     });
     registry.guard("needs_binding_evidence", |args| {
-        matches!(args.event, Ev::User(Event::BindingObserved { evidence_needed: true }))
+        matches!(
+            args.event,
+            Ev::User(Event::BindingObserved {
+                evidence: BindingEvidence::Route | BindingEvidence::RootThenDestination
+            })
+        )
     });
+    registry.guard("needs_destination_evidence", |args| {
+        matches!(args.event, Ev::User(Event::ObservedEvidence { destination_needed: true }))
+    });
+    registry.guard("export_delivery", |args| matches!(args.event, Ev::User(Event::Bound { exported: true })));
     Arc::new(Machine::from_json_str(DEFINITION, &registry).expect("valid embedded entry-attempt machine"))
 });
 
@@ -181,9 +228,14 @@ mod tests {
             assert!(control.take_directives().is_empty());
             for (event, directive) in [
                 (Event::Export, Directive::ReadBindingSessions),
-                (Event::BindingObserved { evidence_needed: false }, Directive::CheckBinding),
+                (
+                    Event::BindingObserved {
+                        evidence: BindingEvidence::None,
+                    },
+                    Directive::CheckBinding,
+                ),
                 (Event::Checked, Directive::BindOperation),
-                (Event::Bound, Directive::ExportAction),
+                (Event::Bound { exported: true }, Directive::ExportAction),
             ] {
                 control.send(event);
                 assert_eq!(control.take_directives(), [directive]);
@@ -232,16 +284,47 @@ mod tests {
         assert_eq!(control.leaf(), "planned");
         for (event, directive) in [
             (Event::Export, Directive::ReadBindingSessions),
-            (Event::BindingObserved { evidence_needed: true }, Directive::ReadBindingEvidence),
+            (
+                Event::BindingObserved {
+                    evidence: BindingEvidence::RootThenDestination,
+                },
+                Directive::ReadBindingEvidence,
+            ),
+            (Event::ObservedEvidence { destination_needed: true }, Directive::ReadBindingDestination),
             (Event::Observed, Directive::CheckBinding),
             (Event::Checked, Directive::BindOperation),
-            (Event::Bound, Directive::ExportAction),
+            (Event::Bound { exported: true }, Directive::ExportAction),
         ] {
             control.send(event);
             assert_eq!(control.take_directives(), [directive]);
         }
         control.send(Event::Exported);
         assert_eq!(control.leaf(), "exported");
+        // A route-evidence binding goes straight from the identity read to
+        // the check state, with no destination recheck.
+        let mut control = supplied_control();
+        control.take_directives();
+        for event in [
+            Event::Validated,
+            Event::Observed,
+            Event::Empty,
+            Event::Scoped,
+            Event::ObservedProjects { more_roots: false },
+        ] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ProjectUnique);
+        control.take_directives();
+        control.send(Event::Prepared);
+        control.send(Event::Export);
+        control.take_directives();
+        control.send(Event::BindingObserved {
+            evidence: BindingEvidence::Route,
+        });
+        assert_eq!(control.take_directives(), [Directive::ReadBindingEvidence]);
+        control.send(Event::Observed);
+        assert_eq!(control.take_directives(), [Directive::CheckBinding]);
         // A generator needing no defaults skips the defaults read entirely.
         let mut control = supplied_control();
         control.take_directives();
@@ -382,9 +465,15 @@ mod tests {
             Directive::PlanEnterView,
             Directive::ReadBindingSessions,
             Directive::ReadBindingEvidence,
+            Directive::ReadBindingDestination,
             Directive::CheckBinding,
             Directive::BindOperation,
             Directive::ExportAction,
+            Directive::DispatchExecution,
+            Directive::RequestGenerate,
+            Directive::RequestDirectory,
+            Directive::RequestNative,
+            Directive::RequestTerminal,
         ];
         assert_eq!(directives.len(), expected.len());
         for directive in expected {
@@ -397,16 +486,136 @@ mod tests {
         let references = Machine::<(), Event>::references(&value).unwrap();
         let mut guards = references.guards.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
         guards.sort_unstable();
+        guards.dedup();
         assert_eq!(
             guards,
             [
+                "export_delivery",
                 "independent",
                 "more_roots",
                 "needs_binding_evidence",
                 "needs_defaults",
+                "needs_destination_evidence",
                 "needs_endpoint_identity"
             ]
         );
         assert!(references.actions.is_empty() && references.actors.is_empty() && references.delays.is_empty());
+    }
+
+    // The execution course on the real actor: pure dispatch chooses the first
+    // effect; every effect walks requested → in-flight → finished exactly once,
+    // and only a terminal effect can delegate.
+    #[test]
+    fn execution_emission_walks_requested_inflight_finished_once() {
+        let mut control = supplied_control();
+        control.take_directives();
+        for event in [Event::Validated, Event::Observed, Event::Unique] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ViewPolicy { independent: false });
+        control.take_directives();
+        control.send(Event::Prepared);
+        assert_eq!(control.leaf(), "planned");
+        // An existing-work decision always dispatches one terminal block.
+        control.send(Event::Execute);
+        assert_eq!(control.take_directives(), [Directive::ReadBindingSessions]);
+        control.send(Event::BindingObserved {
+            evidence: BindingEvidence::None,
+        });
+        assert_eq!(control.take_directives(), [Directive::CheckBinding]);
+        control.send(Event::Checked);
+        assert_eq!(control.take_directives(), [Directive::BindOperation]);
+        control.send(Event::Bound { exported: false });
+        assert_eq!(control.take_directives(), [Directive::DispatchExecution]);
+        control.send(Event::EffectTerminal);
+        assert_eq!(control.take_directives(), [Directive::RequestTerminal]);
+        assert_eq!(control.leaf(), "run_terminal_requested");
+        control.send(Event::Delegated);
+        assert_eq!(control.leaf(), "delegated");
+        // The native ladder: generate → directory → native → terminal.
+        let mut control = supplied_control();
+        control.take_directives();
+        for event in [
+            Event::Validated,
+            Event::Observed,
+            Event::Empty,
+            Event::Scoped,
+            Event::ObservedProjects { more_roots: false },
+        ] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ProjectEmpty);
+        control.take_directives();
+        for event in [Event::Eligible, Event::Observed, Event::ValidatedGenerator { needs_defaults: false }] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::Prepared);
+        control.send(Event::Execute);
+        control.take_directives();
+        control.send(Event::BindingObserved {
+            evidence: BindingEvidence::RootThenDestination,
+        });
+        control.take_directives();
+        control.send(Event::ObservedEvidence { destination_needed: true });
+        control.take_directives();
+        control.send(Event::Observed);
+        control.take_directives();
+        control.send(Event::Checked);
+        control.take_directives();
+        control.send(Event::Bound { exported: false });
+        assert_eq!(control.take_directives(), [Directive::DispatchExecution]);
+        control.send(Event::EffectGenerate);
+        assert_eq!(control.take_directives(), [Directive::RequestGenerate]);
+        assert_eq!(control.leaf(), "run_generate_requested");
+        control.send(Event::EffectStarted);
+        assert_eq!(control.leaf(), "run_generate_in_flight");
+        assert!(control.take_directives().is_empty());
+        control.send(Event::EffectFinished);
+        assert_eq!(control.take_directives(), [Directive::RequestDirectory]);
+        control.send(Event::EffectStarted);
+        control.send(Event::EffectFinished);
+        assert_eq!(control.take_directives(), [Directive::RequestNative]);
+        control.send(Event::EffectStarted);
+        control.send(Event::EffectFinished);
+        assert_eq!(control.take_directives(), [Directive::RequestTerminal]);
+        assert_eq!(control.leaf(), "run_terminal_requested");
+        control.send(Event::EffectStarted);
+        assert_eq!(control.leaf(), "run_terminal_in_flight");
+        control.send(Event::EffectFinished);
+        assert_eq!(control.leaf(), "completed");
+        assert_eq!(control.0.status(), xmachines_runtime::Status::Done);
+        // A start-project native shape skips generation entirely.
+        let mut control = supplied_control();
+        control.take_directives();
+        for event in [
+            Event::Validated,
+            Event::Observed,
+            Event::Empty,
+            Event::Scoped,
+            Event::ObservedProjects { more_roots: false },
+        ] {
+            control.send(event);
+            control.take_directives();
+        }
+        control.send(Event::ProjectUnique);
+        control.take_directives();
+        control.send(Event::Prepared);
+        control.send(Event::Execute);
+        control.take_directives();
+        control.send(Event::BindingObserved {
+            evidence: BindingEvidence::Route,
+        });
+        control.take_directives();
+        control.send(Event::Observed);
+        control.take_directives();
+        control.send(Event::Checked);
+        control.take_directives();
+        control.send(Event::Bound { exported: false });
+        assert_eq!(control.take_directives(), [Directive::DispatchExecution]);
+        control.send(Event::EffectDirectory);
+        assert_eq!(control.take_directives(), [Directive::RequestDirectory]);
     }
 }

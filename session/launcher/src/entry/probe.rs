@@ -127,6 +127,7 @@ impl Probe {
                 "cd -P {}\npwd -P\nprintf '\\000'",
                 quote(route.requested_root.join(&route.name).into_os_string())?
             ),
+            ReadKind::CreationRootIdentity { root, .. } => format!("cd -P {}\npwd -P\nprintf '\\000'", quote(root.as_os_str())?),
             ReadKind::EndpointIdentity { .. } => anyhow::bail!("endpoint comparison is a local-only acquisition"),
             ReadKind::Registry { .. } => unreachable!("registry task step required at construction"),
         })
@@ -238,7 +239,7 @@ impl Probe {
                     DestinationEvidence::Absent
                 })
             }
-            ReadKind::ProjectIdentity { .. } => {
+            ReadKind::ProjectIdentity { .. } | ReadKind::CreationRootIdentity { .. } => {
                 let (path, rest) = field(payload)?;
                 ensure!(rest.is_empty(), "extra physical-route fields");
                 let path = PathBuf::from(std::str::from_utf8(strip_newline(path)?)?);

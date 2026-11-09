@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 
 use super::{
-    action::{BoundAction, BoundOperation, BoundSession, EntryDecision, EntryPlan},
-    protocol::{DestinationEvidence, EntryError, ReadRequest},
+    action::{BoundAction, BoundOperation, BoundSession, EntryDecision, EntryPlan, ExecutionShape},
+    protocol::{ClientEntry, DestinationEvidence, EntryError, ReadRequest, SessionInventory},
     select::{ViewFingerprint, WorkspaceCatalog},
 };
 
@@ -13,10 +13,44 @@ use super::{
 pub(super) enum Evidence {
     /// Observed canonical directory the chosen route resolves to now.
     Route(PathBuf),
+    /// Observed canonical root of the chosen creation site.
+    CreationRoot(PathBuf),
     Destination(DestinationEvidence),
 }
 
-pub(super) fn check(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: Option<&(ReadRequest, Evidence)>) -> Result<(), EntryError> {
+/// Pure execution-shape choice from the decision, bound target, fresh
+/// binding inventory and the caller's native capability — made before any
+/// generation or mutation, never as an error fallback afterwards. Native
+/// detached creation is eligible only for the local, live nonempty server,
+/// inside-switch, representable-startup case on new work.
+pub(super) fn shape(plan: &EntryPlan, inventory: &SessionInventory, execution: Option<ExecutionChoice>) -> ExecutionShape {
+    let eligible = execution.is_some_and(|choice| choice.native)
+        && matches!(plan.target().scope().origin, super::context::Origin::Local { .. })
+        && plan.target().client() == ClientEntry::SwitchWithinServer
+        && matches!(inventory, SessionInventory::Present(sessions) if !sessions.is_empty())
+        && match plan.decision() {
+            EntryDecision::StartProject { session, .. } | EntryDecision::ScaffoldAndStart { session, .. } => {
+                // The native tmux invocation is UTF-8-only; raw Unix startup
+                // argv stays on the complete CLI queue.
+                session.startup.iter().all(|word| word.to_str().is_some())
+            }
+            _ => false,
+        };
+    if eligible {
+        ExecutionShape::NativeCreateThenEnter
+    } else {
+        ExecutionShape::TerminalBlock
+    }
+}
+
+/// The delivery the caller chose at `planned`: export (always a portable
+/// terminal block) or execute with the host's native capability stated.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExecutionChoice {
+    pub native: bool,
+}
+
+pub(super) fn check(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: &CollectedEvidence) -> Result<(), EntryError> {
     assert_eq!(
         sessions.request.endpoint(),
         &plan.target.endpoint(),
@@ -24,18 +58,16 @@ pub(super) fn check(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: Opt
     );
     match &plan.decision {
         EntryDecision::OpenView { work, .. } => {
-            assert!(evidence.is_none(), "existing-work bindings read no extra evidence");
+            assert!(evidence.0.is_empty(), "existing-work bindings read no extra evidence");
             anchor_check(&work.anchor, sessions)
         }
         EntryDecision::EnterView { view, .. } => {
-            assert!(evidence.is_none(), "existing-work bindings read no extra evidence");
+            assert!(evidence.0.is_empty(), "existing-work bindings read no extra evidence");
             anchor_check(&view.fingerprint, sessions)
         }
         EntryDecision::StartProject { project, session, .. } => {
             fresh_name_check(&session.name, sessions)?;
-            let (_, Evidence::Route(observed)) = evidence.expect("chart reads route identity for StartProject") else {
-                unreachable!("route evidence answers a route identity request");
-            };
+            let observed = evidence.route().expect("chart reads route identity for StartProject");
             if observed != &project.route.directory {
                 return Err(EntryError::RouteChanged {
                     route: Box::new(project.route.clone()),
@@ -45,11 +77,13 @@ pub(super) fn check(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: Opt
             }
             Ok(())
         }
+        // The creation-root identity was already verified when its observation
+        // was accepted, BEFORE the destination lstat was issued; here the
+        // collected witnesses must show that order.
         EntryDecision::ScaffoldAndStart { destination, session, .. } => {
             fresh_name_check(&session.name, sessions)?;
-            let (_, Evidence::Destination(evidence)) = evidence.expect("chart reads destination absence for ScaffoldAndStart") else {
-                unreachable!("destination evidence answers a destination request");
-            };
+            assert!(evidence.creation_root().is_some(), "creation-root witness precedes destination binding");
+            let evidence = evidence.destination().expect("chart reads destination absence after the creation root");
             match evidence {
                 DestinationEvidence::Absent => Ok(()),
                 DestinationEvidence::Present => Err(EntryError::DestinationChanged {
@@ -57,6 +91,37 @@ pub(super) fn check(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: Opt
                 }),
             }
         }
+    }
+}
+
+/// Fresh non-session evidence a new-work binding collected, in request order.
+#[derive(Clone, Debug, Default)]
+pub(super) struct CollectedEvidence(Vec<(ReadRequest, Evidence)>);
+
+impl CollectedEvidence {
+    pub(super) fn push(&mut self, request: ReadRequest, evidence: Evidence) {
+        self.0.push((request, evidence));
+    }
+    fn route(&self) -> Option<&PathBuf> {
+        self.0.iter().find_map(|(_, evidence)| match evidence {
+            Evidence::Route(path) => Some(path),
+            _ => None,
+        })
+    }
+    fn creation_root(&self) -> Option<&PathBuf> {
+        self.0.iter().find_map(|(_, evidence)| match evidence {
+            Evidence::CreationRoot(path) => Some(path),
+            _ => None,
+        })
+    }
+    fn destination(&self) -> Option<&DestinationEvidence> {
+        self.0.iter().find_map(|(_, evidence)| match evidence {
+            Evidence::Destination(evidence) => Some(evidence),
+            _ => None,
+        })
+    }
+    pub(super) fn requests(&self) -> Vec<ReadRequest> {
+        self.0.iter().map(|(request, _)| request.clone()).collect()
     }
 }
 
@@ -81,7 +146,12 @@ fn fresh_name_check(name: &str, catalog: &WorkspaceCatalog) -> Result<(), EntryE
     Ok(())
 }
 
-pub(super) fn operation(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence: Option<&(ReadRequest, Evidence)>) -> Result<BoundAction, EntryError> {
+pub(super) fn operation(
+    plan: &EntryPlan,
+    sessions: &WorkspaceCatalog,
+    evidence: &CollectedEvidence,
+    execution: Option<ExecutionChoice>,
+) -> Result<BoundAction, EntryError> {
     let operation = match &plan.decision {
         EntryDecision::EnterView { view, via } => BoundOperation::EnterView {
             view: view.fingerprint.clone(),
@@ -108,11 +178,13 @@ pub(super) fn operation(plan: &EntryPlan, sessions: &WorkspaceCatalog, evidence:
             via: *via,
         },
     };
+    let shape = shape(plan, &sessions.inventory, execution);
     Ok(BoundAction {
         target: plan.target.clone(),
         operation,
+        shape,
         sessions_witness: sessions.request.clone(),
-        evidence_witness: evidence.map(|(request, _)| request.clone()),
+        evidence_witnesses: evidence.requests(),
     })
 }
 

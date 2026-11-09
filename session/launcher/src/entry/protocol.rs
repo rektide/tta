@@ -27,6 +27,15 @@ pub struct RequestId {
     pub sequence: u64,
 }
 
+/// Attempt-scoped effect correlation, sharing the attempt's monotonic
+/// sequence with reads. An ID authorizes one dispatch in its issuing
+/// attempt; it is not a crash-recovery or exactly-once promise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EffectId {
+    pub attempt: AttemptId,
+    pub sequence: u64,
+}
+
 /// Scoped to a frozen supplied target in this attempt. A host name or equal
 /// socket spelling alone is never an identity proof, nor is this an incarnation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -271,6 +280,13 @@ pub enum ReadKind {
     ProjectIdentity {
         route: Box<super::action::ProjectRoute>,
     },
+    /// Fresh canonical identity of a chosen creation root: canonicalize the
+    /// configured spelling and compare against the physical root observed at
+    /// preparation. A destination lstat alone never proves the root unchanged.
+    CreationRootIdentity {
+        root: PathBuf,
+        expected: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,17 +389,124 @@ pub struct ReadCompletion {
 
 pub enum Delivery {
     Export,
+    /// Execute the bound action. `native` states whether the driving host can
+    /// perform native detached creation; eligibility itself is still decided
+    /// purely from the fresh binding inventory and bound target.
+    Execute {
+        native: bool,
+    },
 }
 pub enum Event {
     Observed(ReadCompletion),
     Deliver(Delivery),
+    /// The driver records dispatch intent BEFORE invoking the operation.
+    /// Another start for the same ID is rejected; waiting does not reissue.
+    EffectStarted(EffectId),
+    EffectFinished(EffectCompletion),
+    /// Transfer one outstanding, undispatched terminal request and end this
+    /// attempt's ownership honestly. The consumer observes the later outcome.
+    DelegateTerminal(EffectId),
     Cancel,
 }
 
 pub enum Waiting<'a> {
     Read(&'a ReadRequest),
     Planned(&'a action::EntryPlan),
+    Effect(&'a EffectRequest),
+    InFlight(EffectId),
     Finished(&'a AttemptOutcome),
+}
+
+/// One executable effect as bound. Native payloads (generator programs, tmux
+/// invocations, expressions) never cross serde; they stay in the attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EffectKind {
+    /// Foreground generator program; success must produce the directory the
+    /// following check verifies.
+    Generate { program: tta_command::Expression },
+    /// Post-generation observation in the execution phase, not another
+    /// selection opportunity: the produced directory must exist.
+    CheckCreatedDirectory { path: PathBuf },
+    /// One native detached tmux session creation. Never retried and never
+    /// followed by a CLI fallback once dispatched.
+    CreateNative {
+        invocation: tmax::operation::Invocation,
+        directory: PathBuf,
+    },
+    /// The terminal action: a complete CLI block (aggregate for shell paths)
+    /// or the native tail (directory entry + exact client move).
+    Terminal { expression: tta_command::Expression },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectRequest {
+    pub id: EffectId,
+    pub target: TargetBindingId,
+    pub kind: EffectKind,
+}
+
+impl EffectRequest {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.kind, EffectKind::Terminal { .. })
+    }
+}
+
+/// What an acknowledged effect established, kept native and typed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EffectReceipt {
+    /// Foreground generator completed successfully.
+    Generated,
+    /// The expected directory exists and is a directory.
+    Directory,
+    /// The server acknowledged the native creation.
+    Created,
+    /// A dispatched terminal block returned under `Handoff::Run`; `code` is
+    /// the aggregate exit status, never proof of each internal substep.
+    Terminal { code: Option<i32> },
+}
+
+/// Honest mutation knowledge for a stopped effect. `NotStarted` means the
+/// effect never dispatched; it is not a claim that an earlier failed
+/// generator left no residue. `Acknowledged` completion is recorded in the
+/// receipt list, not here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum MutationKnowledge {
+    #[default]
+    NotStarted,
+    MayHaveOccurred,
+}
+
+/// Dispatch knowledge retained across cancellation or failure: finished
+/// effects with their receipts in dispatch order, and dispatched-but-
+/// unfinished IDs whose outcome is unknown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EffectKnowledge {
+    pub finished: Vec<(EffectId, EffectReceipt)>,
+    pub in_flight: Vec<EffectId>,
+}
+
+/// A failed effect keeps its native source chain and what may have happened.
+#[derive(Debug)]
+pub struct EffectFailure {
+    pub source: Box<dyn std::error::Error + Send + Sync>,
+    pub mutation: MutationKnowledge,
+}
+
+impl std::fmt::Display for EffectFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "mutation may have occurred: {:?}; {}", self.mutation, self.source)
+    }
+}
+
+impl std::error::Error for EffectFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+pub struct EffectCompletion {
+    pub id: EffectId,
+    pub result: Result<EffectReceipt, EffectFailure>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -398,6 +521,16 @@ pub enum ProtocolError {
     NotPlanned,
     #[error("attempt is already finished")]
     Finished,
+    #[error("no effect is pending (reply is stale, duplicate, or out of order)")]
+    NoPendingEffect,
+    #[error("reply does not answer the exact pending effect: expected {expected:?}; received {received:?}")]
+    EffectMismatch { expected: EffectId, received: EffectId },
+    #[error("effect {0:?} already started; waiting cannot reissue or redispatch it")]
+    AlreadyStarted(EffectId),
+    #[error("reply receipt does not answer the in-flight effect kind: effect {effect:?}; received {received:?}")]
+    ReceiptShape { effect: EffectId, received: EffectReceipt },
+    #[error("only an outstanding undispatched terminal effect can be delegated")]
+    NotDelegatable,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -438,6 +571,14 @@ pub enum EntryError {
         #[source]
         source: ObservationFailure,
     },
+    #[error("chosen creation root {root:?} changed before binding: expected physical root {expected:?}, observed {observed:?}; start a new attempt")]
+    CreationRootChanged { root: PathBuf, expected: PathBuf, observed: PathBuf },
+    #[error("effect {effect:?} failed: {failure}")]
+    Effect {
+        effect: Box<EffectRequest>,
+        #[source]
+        failure: EffectFailure,
+    },
     #[error("chosen view changed before binding: expected {expected:?}, observed {observed:?}; start a new attempt")]
     AnchorChanged {
         expected: select::ViewFingerprint,
@@ -450,8 +591,27 @@ pub enum EntryError {
 #[derive(Clone, Debug)]
 pub enum AttemptOutcome {
     Exported(Box<action::ExportedAction>),
-    Stopped { boundary: String, cause: Arc<EntryError> },
-    Cancelled { boundary: String },
+    /// Every dispatched effect finished; the receipts record what was
+    /// established, including an aggregate terminal status.
+    Completed {
+        effects: EffectKnowledge,
+    },
+    /// Ownership of the outstanding terminal effect transferred to the
+    /// caller; later outcomes are the consumer's to observe and report.
+    Delegated {
+        terminal: EffectId,
+        effects: EffectKnowledge,
+    },
+    Stopped {
+        boundary: String,
+        effects: EffectKnowledge,
+        cause: Arc<EntryError>,
+    },
+    Cancelled {
+        boundary: String,
+        /// Prior receipts and any dispatched-but-unfinished uncertainty.
+        effects: EffectKnowledge,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -460,6 +620,10 @@ pub enum AttemptRecord {
     Control(machine::Event),
     ReadIssued(ReadRequest),
     ReadAccepted(RequestId),
+    EffectIssued(EffectRequest),
+    EffectStarted(EffectId),
+    EffectFinished(EffectId),
+    EffectDelegated(EffectId),
 }
 
 #[derive(Clone, Debug)]
@@ -468,6 +632,8 @@ pub struct AttemptSnapshot {
     pub target: Option<BoundTarget>,
     pub leaf: String,
     pub pending: Option<ReadRequest>,
+    /// The outstanding requested or in-flight effect, when one exists.
+    pub pending_effect: Option<EffectRequest>,
     pub plan: Option<action::EntryPlan>,
     pub bound: Option<action::BoundAction>,
     pub outcome: Option<AttemptOutcome>,

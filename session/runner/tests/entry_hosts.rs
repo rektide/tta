@@ -534,7 +534,7 @@ fn ssh_capture_caps_and_decode_failures_keep_receipts_and_native_source_types() 
     .unwrap();
     let mut observer = observe::ssh::Ssh::acquire(ssh.clone(), scope.clone(), Default::default()).unwrap();
     observe::drive_reads(&mut attempt, &mut observer).unwrap();
-    let Waiting::Finished(AttemptOutcome::Stopped { boundary, cause }) = attempt.waiting() else {
+    let Waiting::Finished(AttemptOutcome::Stopped { boundary, cause, .. }) = attempt.waiting() else {
         panic!()
     };
     assert_eq!(boundary, "registry_read");
@@ -575,7 +575,7 @@ fn ssh_capture_caps_and_decode_failures_keep_receipts_and_native_source_types() 
     .unwrap();
     observe::drive_reads(&mut attempt, &mut observer).unwrap();
     assert!(
-        matches!(attempt.waiting(), Waiting::Finished(AttemptOutcome::Stopped { boundary, cause }) if boundary == "context_read" && cause.source().is_some())
+        matches!(attempt.waiting(), Waiting::Finished(AttemptOutcome::Stopped { boundary, cause, .. }) if boundary == "context_read" && cause.source().is_some())
     );
     assert_eq!(observer.observations.len(), 1);
     let output = observer.observations[0].output.as_ref().unwrap();

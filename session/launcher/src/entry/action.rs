@@ -8,6 +8,7 @@ use tmax::operation::Invocation;
 use tta_command::{And, Assignment, ChangeDir, Command, Expression, Word};
 
 use super::{
+    machine::BindingEvidence,
     protocol::{BoundTarget, ClientEntry, InitialWindow, ReadRequest},
     select::{MatchReason, ViewFingerprint, ViewRef, WorkspaceKey, WorkspaceRef},
 };
@@ -157,10 +158,15 @@ pub enum EntryDecision {
 }
 
 impl EntryDecision {
-    /// New-work decisions need a second binding read (route identity or
-    /// destination absence) beyond the fresh session inventory.
-    pub(crate) fn needs_binding_evidence(&self) -> bool {
-        matches!(self, Self::StartProject { .. } | Self::ScaffoldAndStart { .. })
+    /// New-work decisions need fresh non-session evidence (route identity, or
+    /// creation-root identity plus destination absence) beyond the fresh
+    /// session inventory.
+    pub(crate) fn binding_evidence(&self) -> BindingEvidence {
+        match self {
+            Self::StartProject { .. } => BindingEvidence::Route,
+            Self::ScaffoldAndStart { .. } => BindingEvidence::RootThenDestination,
+            Self::EnterView { .. } | Self::OpenView { .. } => BindingEvidence::None,
+        }
     }
 }
 
@@ -243,6 +249,18 @@ pub enum BoundOperation {
     },
 }
 
+/// The pure execution shape chosen at binding, before any generation or
+/// mutation. Cold/sessionless creation, outside terminal startup, raw Unix
+/// startup argv, remote targets and CLI-only hosts use the complete terminal
+/// block by chosen policy — it is never an error fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionShape {
+    /// One complete CLI expression; may include generation and creation.
+    TerminalBlock,
+    /// Generate → directory verify → native create once → terminal tail.
+    NativeCreateThenEnter,
+}
+
 /// A new-work session exactly as bound: fresh-checked name, pane directory,
 /// startup argv and window policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -257,18 +275,25 @@ pub struct BoundSession {
 pub struct BoundAction {
     pub(super) target: BoundTarget,
     pub(super) operation: BoundOperation,
+    pub(super) shape: ExecutionShape,
     /// Fresh session inventory that witnessed the binding.
     pub(super) sessions_witness: ReadRequest,
-    /// Route-identity or destination-absence witness for new-work bindings.
-    pub(super) evidence_witness: Option<ReadRequest>,
+    /// Route-identity / creation-root / destination witnesses in read order.
+    pub(super) evidence_witnesses: Vec<ReadRequest>,
 }
 
 impl BoundAction {
     pub fn operation(&self) -> &BoundOperation {
         &self.operation
     }
+    pub fn shape(&self) -> ExecutionShape {
+        self.shape
+    }
+    pub(super) fn bound_target(&self) -> &BoundTarget {
+        &self.target
+    }
     pub fn binding_requests(&self) -> Vec<&ReadRequest> {
-        self.evidence_witness.iter().chain(std::iter::once(&self.sessions_witness)).collect()
+        self.evidence_witnesses.iter().chain(std::iter::once(&self.sessions_witness)).collect()
     }
 }
 
@@ -371,10 +396,9 @@ fn tmux_queue(target: &BoundTarget, invocations: Vec<Invocation>, startup: &[OsS
         .into())
 }
 
-/// New-work session creation: enter the pane directory, create the session
-/// (detached only when this client switches within the server), then move
-/// this client onto it by exact name. Startup argv rides the creation queue.
-fn session_steps(target: &BoundTarget, session: &BoundSession, via: ClientEntry) -> Result<Vec<Expression>, Error> {
+/// The detached-or-attached `new-session` invocation without startup argv;
+/// shared by the CLI queue and the native creation path.
+fn creation_invocation(session: &BoundSession, via: ClientEntry) -> Result<Invocation, Error> {
     crate::resolve::validate_name(&session.name)?;
     let mut create = Invocation::new("new-session")?;
     if via == ClientEntry::SwitchWithinServer {
@@ -385,6 +409,56 @@ fn session_steps(target: &BoundTarget, session: &BoundSession, via: ClientEntry)
         create = create.args(["-n", &window]);
     }
     create = create.args(["-c", &directory_format(session.directory.path())?]);
+    Ok(create)
+}
+
+/// Native detached creation for an eligible inside binding. Startup argv
+/// rides the invocation as literal `--` operands with the same lone-
+/// executable wrapper and final-semicolon escaping as the CLI queue; native
+/// eligibility already required UTF-8-representable words.
+pub(super) fn native_creation(session: &BoundSession) -> Result<(Invocation, PathBuf), Error> {
+    let mut invocation = creation_invocation(session, ClientEntry::SwitchWithinServer)?;
+    if !session.startup.is_empty() {
+        invocation = invocation.arg("--");
+        if session.startup.len() == 1 {
+            invocation = invocation.args(["/bin/sh", "-c", "exec \"$0\""]);
+        }
+        for word in &session.startup {
+            invocation = invocation.arg(&escaped(word)?);
+        }
+    }
+    Ok((invocation, session.directory.path().to_owned()))
+}
+
+/// The exact tmux argv boundary rule for one raw startup operand, in text
+/// form for the native (UTF-8-only) invocation path.
+fn escaped(word: &OsString) -> Result<String, Error> {
+    let text = word.to_str().ok_or_else(|| Error::Command(tta_command::Error::NonUtf8(word.clone())))?;
+    Ok(match text.strip_suffix(';') {
+        Some(prefix) => format!("{prefix}\\;"),
+        None => text.to_owned(),
+    })
+}
+
+/// Terminal tail after an acknowledged native creation: enter the pane
+/// directory, then move this client onto the exact new session. Never a
+/// CLI fallback — the creation already happened.
+pub(super) fn native_tail(target: &BoundTarget, session: &BoundSession) -> Result<Expression, Error> {
+    let switch = tmux_queue(target, vec![Invocation::new("switch-client")?.args(["-t", &format!("={}", session.name)])], &[])?;
+    Ok(And::builder()
+        .steps(vec![
+            ChangeDir::builder().path(Word::new(session.directory.path().as_os_str())?).build().into(),
+            switch,
+        ])
+        .build()
+        .into())
+}
+
+/// New-work session creation: enter the pane directory, create the session
+/// (detached only when this client switches within the server), then move
+/// this client onto it by exact name. Startup argv rides the creation queue.
+fn session_steps(target: &BoundTarget, session: &BoundSession, via: ClientEntry) -> Result<Vec<Expression>, Error> {
+    let create = creation_invocation(session, via)?;
     let mut steps = vec![
         ChangeDir::builder().path(Word::new(session.directory.path().as_os_str())?).build().into(),
         tmux_queue(target, vec![create], &session.startup)?,

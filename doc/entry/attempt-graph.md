@@ -94,10 +94,27 @@ flowchart TD
     bind_action["bind_action<br/>active.bind_action<br/>compound"]
     binding_read["binding_read<br/>active.bind_action.binding_read<br/>emit read_binding_sessions"]
     binding_evidence["binding_evidence<br/>active.bind_action.binding_evidence<br/>emit read_binding_evidence"]
+    binding_destination["binding_destination<br/>active.bind_action.binding_destination<br/>emit read_binding_destination"]
     binding_check["binding_check<br/>active.bind_action.binding_check<br/>emit check_binding"]
     binding_lower["binding_lower<br/>active.bind_action.binding_lower<br/>emit bind_operation"]
     export_action["export_action<br/>active.export_action<br/>emit export_action"]
+    run["run<br/>active.run<br/>compound"]
+    run_dispatch["run_dispatch<br/>active.run.dispatch<br/>emit dispatch_execution"]
+    run_generate["run_generate<br/>active.run.generate<br/>compound"]
+    run_generate_requested["run_generate_requested<br/>active.run.generate.requested<br/>emit request_generate"]
+    run_generate_in_flight["run_generate_in_flight<br/>active.run.generate.in_flight"]
+    run_directory["run_directory<br/>active.run.directory<br/>compound"]
+    run_directory_requested["run_directory_requested<br/>active.run.directory.requested<br/>emit request_directory"]
+    run_directory_in_flight["run_directory_in_flight<br/>active.run.directory.in_flight"]
+    run_native["run_native<br/>active.run.native<br/>compound"]
+    run_native_requested["run_native_requested<br/>active.run.native.requested<br/>emit request_native"]
+    run_native_in_flight["run_native_in_flight<br/>active.run.native.in_flight"]
+    run_terminal["run_terminal<br/>active.run.terminal<br/>compound"]
+    run_terminal_requested["run_terminal_requested<br/>active.run.terminal.requested<br/>emit request_terminal"]
+    run_terminal_in_flight["run_terminal_in_flight<br/>active.run.terminal.in_flight"]
     exported["exported<br/>final"]
+    completed["completed<br/>final"]
+    delegated["delegated<br/>final"]
     stopped["stopped<br/>final"]
     entry_attempt -.->|initial| active
     active -.->|initial| bind_target
@@ -134,13 +151,35 @@ flowchart TD
     defaults_read -->|observed| creation
     creation -->|prepared| planned
     planned -->|export| bind_action
+    planned -->|execute| bind_action
     bind_action -.->|initial| binding_read
     binding_read -->|binding_observed, 1: needs_binding_evidence| binding_evidence
     binding_read -->|binding_observed, 2: otherwise| binding_check
     binding_evidence -->|observed| binding_check
+    binding_evidence -->|observed_evidence, 1: needs_destination_evidence| binding_destination
+    binding_evidence -->|observed_evidence, 2: otherwise| binding_check
+    binding_destination -->|observed| binding_check
     binding_check -->|checked| binding_lower
-    binding_lower -->|bound| export_action
+    binding_lower -->|bound, 1: export_delivery| export_action
+    binding_lower -->|bound, 2: otherwise| run
     export_action -->|exported| exported
+    run -.->|initial| run_dispatch
+    run_dispatch -->|effect_terminal| run_terminal
+    run_dispatch -->|effect_generate| run_generate
+    run_dispatch -->|effect_directory| run_directory
+    run_generate -.->|initial| run_generate_requested
+    run_generate_requested -->|effect_started| run_generate_in_flight
+    run_generate_in_flight -->|effect_finished| run_directory
+    run_directory -.->|initial| run_directory_requested
+    run_directory_requested -->|effect_started| run_directory_in_flight
+    run_directory_in_flight -->|effect_finished| run_native
+    run_native -.->|initial| run_native_requested
+    run_native_requested -->|effect_started| run_native_in_flight
+    run_native_in_flight -->|effect_finished| run_terminal
+    run_terminal -.->|initial| run_terminal_requested
+    run_terminal_requested -->|effect_started| run_terminal_in_flight
+    run_terminal_requested -->|delegated| delegated
+    run_terminal_in_flight -->|effect_finished| completed
 ```
 
 <!-- entry-machine:end -->

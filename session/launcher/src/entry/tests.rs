@@ -261,6 +261,12 @@ fn export(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>) -> &action:
 fn export_new_work(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>, evidence: Observation) -> &action::ExportedAction {
     deliver(attempt);
     supply(attempt, sessions);
+    // Scaffolds first answer the fresh creation-root identity read; the root
+    // is verified unchanged before the destination lstat is requested.
+    let pending = request(attempt);
+    if let ReadKind::CreationRootIdentity { expected, .. } = &pending.kind {
+        supply_observation(attempt, Ok(Observation::ProjectIdentity(expected.clone())));
+    }
     supply_observation(attempt, Ok(evidence));
     match attempt.waiting() {
         Waiting::Finished(AttemptOutcome::Exported(exported)) => exported,
@@ -270,7 +276,7 @@ fn export_new_work(attempt: &mut EntryAttempt, sessions: Vec<crate::Session>, ev
 
 fn stopped(attempt: &EntryAttempt) -> (&str, &EntryError) {
     match attempt.waiting() {
-        Waiting::Finished(AttemptOutcome::Stopped { boundary, cause }) => (boundary, cause),
+        Waiting::Finished(AttemptOutcome::Stopped { boundary, cause, .. }) => (boundary, cause),
         _ => panic!("expected stopped: {:?}", attempt.snapshot()),
     }
 }
@@ -342,9 +348,11 @@ fn orphan_only_work_reaches_one_exported_queue_with_no_filesystem_request() {
             ControlEvent::ViewPolicy { independent: true },
             ControlEvent::Prepared,
             ControlEvent::Export,
-            ControlEvent::BindingObserved { evidence_needed: false },
+            ControlEvent::BindingObserved {
+                evidence: machine::BindingEvidence::None
+            },
             ControlEvent::Checked,
-            ControlEvent::Bound,
+            ControlEvent::Bound { exported: true },
             ControlEvent::Exported
         ]
     );
@@ -1527,6 +1535,11 @@ fn occupied_creation_destination_at_binding_requires_a_new_attempt() {
     supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
     deliver(&mut attempt);
     supply(&mut attempt, Vec::new());
+    // The creation root is verified unchanged first; only then does the
+    // binding destination lstat report the new occupant.
+    let pending = request(&attempt);
+    assert!(matches!(pending.kind, ReadKind::CreationRootIdentity { .. }));
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/only".into())));
     supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Present)));
     let (boundary, error) = stopped(&attempt);
     assert_eq!(boundary, "binding_check");
@@ -1671,4 +1684,467 @@ fn explicit_session_name_and_input_validation_for_new_work() {
     for input in [relative_root(), bad_session_name(), bad_window(), bad_startup()] {
         assert!(EntryAttempt::start(input).is_err());
     }
+}
+
+// --- Execute delivery, effect lifecycle and terminal delegation ---
+
+/// A local inside start with a live nonempty server and UTF-8 startup argv:
+/// execute with native capability chooses the native shape BEFORE any
+/// mutation, walking directory → native create → terminal tail. Delivery
+/// itself happens once the plan exists.
+fn executed_start(input: Invocation) -> EntryAttempt {
+    EntryAttempt::start(input).unwrap()
+}
+
+fn effect(attempt: &mut EntryAttempt) -> EffectRequest {
+    match attempt.waiting() {
+        Waiting::Effect(effect) => effect.clone(),
+        _ => panic!("expected a pending effect"),
+    }
+}
+
+fn start_effect(attempt: &mut EntryAttempt) -> EffectRequest {
+    let effect = effect(attempt);
+    attempt.advance(Event::EffectStarted(effect.id)).unwrap();
+    effect
+}
+
+fn finish_effect(attempt: &mut EntryAttempt, receipt: EffectReceipt) {
+    let Waiting::InFlight(id) = attempt.waiting() else {
+        panic!("expected an in-flight effect: {:?}", attempt.snapshot())
+    };
+    attempt.advance(Event::EffectFinished(EffectCompletion { id, result: Ok(receipt) })).unwrap();
+}
+
+fn native_start_input(startup: Vec<OsString>) -> Invocation {
+    let mut input = invocation_roots("@1/foo", vec!["/r1".into()]);
+    input.context.client = ClientEntry::SwitchWithinServer;
+    input.intent.startup = startup;
+    input
+}
+
+fn drive_native_start_to_bound(attempt: &mut EntryAttempt) {
+    supply(attempt, Vec::new());
+    supply_project(attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    attempt.advance(Event::Deliver(Delivery::Execute { native: true })).unwrap();
+    supply(attempt, vec![session(7, "other", None)]);
+    supply_observation(attempt, Ok(Observation::ProjectIdentity("/r1/foo".into())));
+}
+
+#[test]
+fn execute_of_existing_work_dispatches_one_terminal_block_and_completes() {
+    let mut attempt = invocation("project").into_attempt();
+    supply(&mut attempt, vec![orphan()]);
+    attempt.advance(Event::Deliver(Delivery::Execute { native: true })).unwrap();
+    supply(&mut attempt, vec![orphan()]);
+    let effect = effect(&mut attempt);
+    assert!(effect.is_terminal());
+    let EffectKind::Terminal { expression } = &effect.kind else {
+        panic!("terminal effect: {:?}", effect.kind)
+    };
+    assert_eq!(expression.steps().len(), 1);
+    let Expression::Command(command) = &expression.steps()[0] else {
+        panic!("queue command")
+    };
+    assert_eq!(command.program.as_os_str(), "tmux");
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Terminal { code: Some(0) });
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Completed { effects }) => {
+            assert_eq!(effects.finished.len(), 1);
+            assert!(matches!(effects.finished[0].1, EffectReceipt::Terminal { code: Some(0) }));
+            assert!(effects.in_flight.is_empty());
+        }
+        _ => panic!("completed outcome expected"),
+    }
+}
+
+trait IntoAttempt {
+    fn into_attempt(self) -> EntryAttempt;
+}
+impl IntoAttempt for Invocation {
+    fn into_attempt(self) -> EntryAttempt {
+        EntryAttempt::start(self).unwrap()
+    }
+}
+
+#[test]
+fn native_shape_requires_local_live_inside_representable_and_capable() {
+    // Eligible: native shape, and export still lowers the COMPLETE block.
+    let mut attempt = executed_start(native_start_input(vec!["editor".into()]));
+    drive_native_start_to_bound(&mut attempt);
+    let directory = effect(&mut attempt);
+    assert!(matches!(directory.kind, EffectKind::CheckCreatedDirectory { ref path } if path == Path::new("/r1/foo")));
+    assert_eq!(
+        attempt.snapshot().bound.as_ref().unwrap().shape(),
+        action::ExecutionShape::NativeCreateThenEnter
+    );
+    // Cold (absent) server, empty live server, outside client, raw argv and
+    // an explicit CLI-only host each keep the complete terminal block.
+    for (client, startup, sessions, native) in [
+        (ClientEntry::SwitchWithinServer, vec!["editor".into()], SessionInventory::Absent, true),
+        (
+            ClientEntry::SwitchWithinServer,
+            vec!["editor".into()],
+            SessionInventory::Present(Vec::new()),
+            true,
+        ),
+        (
+            ClientEntry::AttachTerminal,
+            vec!["editor".into()],
+            SessionInventory::Present(vec![session(7, "other", None)]),
+            true,
+        ),
+        (
+            ClientEntry::SwitchWithinServer,
+            vec![OsString::from_vec(b"raw-\xff".to_vec())],
+            SessionInventory::Present(vec![session(7, "other", None)]),
+            true,
+        ),
+        (
+            ClientEntry::SwitchWithinServer,
+            vec!["editor".into()],
+            SessionInventory::Present(vec![session(7, "other", None)]),
+            false,
+        ),
+    ] {
+        let mut input = native_start_input(startup);
+        input.context.client = client;
+        let mut attempt = EntryAttempt::start(input).unwrap();
+        supply(&mut attempt, Vec::new());
+        supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+        attempt.advance(Event::Deliver(Delivery::Execute { native })).unwrap();
+        supply(
+            &mut attempt,
+            match &sessions {
+                SessionInventory::Absent => Vec::new(),
+                SessionInventory::Present(list) => list.clone(),
+            },
+        );
+        supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/r1/foo".into())));
+        let effect = effect(&mut attempt);
+        assert!(
+            matches!(effect.kind, EffectKind::Terminal { .. }),
+            "terminal block by chosen policy: {:?}",
+            effect.kind
+        );
+        assert_eq!(attempt.snapshot().bound.as_ref().unwrap().shape(), action::ExecutionShape::TerminalBlock);
+    }
+}
+
+#[test]
+fn native_start_walks_directory_create_and_terminal_tail() {
+    let mut attempt = executed_start(native_start_input(vec!["editor".into(), "file;".into()]));
+    drive_native_start_to_bound(&mut attempt);
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Directory);
+    let create = effect(&mut attempt);
+    let EffectKind::CreateNative { invocation, directory } = create.kind else {
+        panic!("native create: {:?}", create.kind)
+    };
+    assert_eq!(directory, PathBuf::from("/r1/foo"));
+    let argv = invocation.argv().unwrap();
+    assert!(argv.contains(&"-d".to_owned()));
+    assert!(argv.windows(2).any(|w| w[0] == "--" && w[1] == "/bin/sh") || argv.contains(&"--".to_owned()));
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Created);
+    let tail = effect(&mut attempt);
+    assert!(tail.is_terminal());
+    let EffectKind::Terminal { expression } = tail.kind else {
+        panic!("tail: {:?}", tail.kind)
+    };
+    // The tail is cd + exact switch-client, never a second creation.
+    let Expression::And(and) = expression else {
+        panic!("tail sequence: {expression:?}")
+    };
+    assert_eq!(and.steps.len(), 2);
+    assert!(matches!(and.steps.first(), Some(Expression::ChangeDir(_))));
+    let Expression::Command(switch) = &and.steps[1] else { panic!("switch queue") };
+    let args: Vec<_> = switch.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect();
+    assert_eq!(&args[args.len() - 3..], &["switch-client", "-t", "=foo"]);
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Terminal { code: Some(0) });
+    assert!(matches!(attempt.waiting(), Waiting::Finished(AttemptOutcome::Completed { .. })));
+    // The export of the same eligible binding is the COMPLETE CLI snapshot.
+    let mut attempt = EntryAttempt::start(native_start_input(vec!["editor".into()])).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/r1", "/r1", &[("foo", "/r1/foo")]));
+    deliver(&mut attempt);
+    supply(&mut attempt, vec![session(7, "other", None)]);
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/r1/foo".into())));
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Exported(exported)) => {
+            assert!(matches!(exported.expression, Expression::And(_)), "complete short-circuit block");
+        }
+        _ => panic!("exported outcome expected"),
+    }
+}
+
+#[cfg(feature = "scaffold-rekon")]
+fn scaffold_execute_input() -> Invocation {
+    let mut input = invocation_roots("fresh", vec!["/only".into()]);
+    input.generator = crate::scaffold::Choice::Default;
+    input.registry = rekon_registry();
+    input.context.client = ClientEntry::SwitchWithinServer;
+    input
+}
+
+#[cfg(feature = "scaffold-rekon")]
+fn drive_scaffold_to_generate(attempt: &mut EntryAttempt) {
+    supply(attempt, Vec::new());
+    supply_project(attempt, inventory("/only", "/only", &[]));
+    supply_observation(attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    attempt.advance(Event::Deliver(Delivery::Execute { native: true })).unwrap();
+    supply(attempt, vec![session(7, "other", None)]);
+    supply_observation(attempt, Ok(Observation::ProjectIdentity("/only".into())));
+    supply_observation(attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn native_scaffold_generates_before_directory_creation_and_terminal() {
+    let mut attempt = executed_start(scaffold_execute_input());
+    drive_scaffold_to_generate(&mut attempt);
+    let generate = effect(&mut attempt);
+    assert!(matches!(generate.kind, EffectKind::Generate { .. }));
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Generated);
+    let check = effect(&mut attempt);
+    assert!(matches!(check.kind, EffectKind::CheckCreatedDirectory { ref path } if path == Path::new("/only/fresh")));
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Directory);
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Created);
+    assert!(effect(&mut attempt).is_terminal());
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn generation_failure_prevents_every_later_effect_with_no_cli_fallback() {
+    let mut attempt = executed_start(scaffold_execute_input());
+    drive_scaffold_to_generate(&mut attempt);
+    start_effect(&mut attempt);
+    let Waiting::InFlight(id) = attempt.waiting() else { panic!("in flight") };
+    attempt
+        .advance(Event::EffectFinished(EffectCompletion {
+            id,
+            result: Err(EffectFailure {
+                source: "generator exited 1".into(),
+                mutation: MutationKnowledge::MayHaveOccurred,
+            }),
+        }))
+        .unwrap();
+    let (boundary, cause) = stopped(&attempt);
+    assert_eq!(boundary, "run_generate_in_flight");
+    let EntryError::Effect { effect, failure } = cause else {
+        panic!("effect cause: {cause:?}")
+    };
+    assert!(matches!(effect.kind, EffectKind::Generate { .. }));
+    assert_eq!(failure.mutation, MutationKnowledge::MayHaveOccurred);
+    assert!(!attempt.journal.iter().any(|r| matches!(r, AttemptRecord::EffectIssued(e) if e.is_terminal())));
+}
+
+#[test]
+fn native_create_failure_keeps_earlier_receipts_and_never_falls_back() {
+    let mut attempt = executed_start(native_start_input(Vec::new()));
+    drive_native_start_to_bound(&mut attempt);
+    start_effect(&mut attempt);
+    finish_effect(&mut attempt, EffectReceipt::Directory);
+    start_effect(&mut attempt);
+    let Waiting::InFlight(id) = attempt.waiting() else { panic!("in flight") };
+    attempt
+        .advance(Event::EffectFinished(EffectCompletion {
+            id,
+            result: Err(EffectFailure {
+                source: "server rejected new-session".into(),
+                mutation: MutationKnowledge::MayHaveOccurred,
+            }),
+        }))
+        .unwrap();
+    let Waiting::Finished(AttemptOutcome::Stopped { effects, cause, .. }) = attempt.waiting() else {
+        panic!("stopped: {:?}", attempt.snapshot())
+    };
+    assert_eq!(effects.finished, vec![(id_predecessor(&attempt), EffectReceipt::Directory)]);
+    let EntryError::Effect { effect, failure } = &**cause else {
+        panic!("effect cause: {cause:?}")
+    };
+    assert!(matches!(effect.kind, EffectKind::CreateNative { .. }));
+    assert_eq!(failure.mutation, MutationKnowledge::MayHaveOccurred);
+    // No CLI terminal block is ever dispatched after the failed mutation.
+    assert!(!attempt.journal.iter().any(|r| matches!(r, AttemptRecord::EffectIssued(e) if e.is_terminal())));
+}
+
+fn id_predecessor(attempt: &EntryAttempt) -> EffectId {
+    attempt
+        .journal
+        .iter()
+        .find_map(|record| match record {
+            AttemptRecord::EffectFinished(id) => Some(*id),
+            _ => None,
+        })
+        .expect("one finished effect")
+}
+
+#[test]
+fn terminal_failure_status_is_an_honest_possible_mutation_stop() {
+    let mut attempt = invocation("project").into_attempt();
+    supply(&mut attempt, vec![orphan()]);
+    attempt.advance(Event::Deliver(Delivery::Execute { native: false })).unwrap();
+    supply(&mut attempt, vec![orphan()]);
+    start_effect(&mut attempt);
+    let Waiting::InFlight(id) = attempt.waiting() else { panic!("in flight") };
+    attempt
+        .advance(Event::EffectFinished(EffectCompletion {
+            id,
+            result: Err(EffectFailure {
+                source: "aggregate block exited 1".into(),
+                mutation: MutationKnowledge::MayHaveOccurred,
+            }),
+        }))
+        .unwrap();
+    let (_, cause) = stopped(&attempt);
+    assert!(matches!(cause, EntryError::Effect { .. }));
+}
+
+#[test]
+fn delegation_transfers_only_an_undispatched_terminal_request() {
+    let mut attempt = invocation("project").into_attempt();
+    supply(&mut attempt, vec![orphan()]);
+    attempt.advance(Event::Deliver(Delivery::Execute { native: false })).unwrap();
+    supply(&mut attempt, vec![orphan()]);
+    let effect = effect(&mut attempt);
+    // Wrong ID is rejected without state change.
+    let wrong = EffectId {
+        attempt: effect.id.attempt,
+        sequence: effect.id.sequence + 100,
+    };
+    assert!(matches!(
+        attempt.advance(Event::DelegateTerminal(wrong)),
+        Err(ProtocolError::EffectMismatch { .. })
+    ));
+    assert!(matches!(attempt.waiting(), Waiting::Effect(_)));
+    attempt.advance(Event::DelegateTerminal(effect.id)).unwrap();
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Delegated { terminal, effects }) => {
+            assert_eq!(*terminal, effect.id);
+            assert!(effects.finished.is_empty());
+        }
+        _ => panic!("delegated outcome expected"),
+    }
+    // After delegation the attempt is finished.
+    assert!(matches!(attempt.advance(Event::Cancel), Err(ProtocolError::Finished)));
+    // A started terminal cannot be delegated by the next attempt owner.
+    let mut attempt = invocation("project").into_attempt();
+    supply(&mut attempt, vec![orphan()]);
+    attempt.advance(Event::Deliver(Delivery::Execute { native: false })).unwrap();
+    supply(&mut attempt, vec![orphan()]);
+    let effect = start_effect(&mut attempt);
+    assert!(matches!(
+        attempt.advance(Event::DelegateTerminal(effect.id)),
+        Err(ProtocolError::NotDelegatable)
+    ));
+    assert!(matches!(attempt.waiting(), Waiting::InFlight(_)));
+}
+
+#[test]
+fn effect_correlation_rejects_duplicates_and_wrong_receipts_without_state_change() {
+    let mut attempt = executed_start(native_start_input(Vec::new()));
+    drive_native_start_to_bound(&mut attempt);
+    let effect = effect(&mut attempt);
+    // Finishing before starting, wrong ID, and duplicate start are rejected.
+    assert!(matches!(
+        attempt.advance(Event::EffectFinished(EffectCompletion {
+            id: effect.id,
+            result: Ok(EffectReceipt::Directory)
+        })),
+        Err(ProtocolError::NoPendingEffect)
+    ));
+    let wrong = EffectId {
+        attempt: effect.id.attempt,
+        sequence: effect.id.sequence + 1,
+    };
+    assert!(matches!(
+        attempt.advance(Event::EffectStarted(wrong)),
+        Err(ProtocolError::EffectMismatch { .. })
+    ));
+    attempt.advance(Event::EffectStarted(effect.id)).unwrap();
+    assert!(matches!(
+        attempt.advance(Event::EffectStarted(effect.id)),
+        Err(ProtocolError::AlreadyStarted(_))
+    ));
+    assert!(matches!(attempt.waiting(), Waiting::InFlight(_)));
+    // A receipt of the wrong shape is rejected before the effect is consumed.
+    assert!(matches!(
+        attempt.advance(Event::EffectFinished(EffectCompletion {
+            id: effect.id,
+            result: Ok(EffectReceipt::Created)
+        })),
+        Err(ProtocolError::ReceiptShape { .. })
+    ));
+    finish_effect(&mut attempt, EffectReceipt::Directory);
+    // And an unexpected finish after the transition is stale.
+    assert!(matches!(
+        attempt.advance(Event::EffectFinished(EffectCompletion {
+            id: effect.id,
+            result: Ok(EffectReceipt::Directory)
+        })),
+        Err(ProtocolError::NoPendingEffect)
+    ));
+}
+
+#[test]
+fn cancellation_preserves_prior_receipts_and_inflight_uncertainty() {
+    // Cancel before dispatch prevents it; no terminal effect is ever issued.
+    let mut attempt = executed_start(native_start_input(Vec::new()));
+    drive_native_start_to_bound(&mut attempt);
+    assert!(matches!(attempt.waiting(), Waiting::Effect(_)));
+    attempt.advance(Event::Cancel).unwrap();
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Cancelled { effects, .. }) => {
+            assert!(effects.in_flight.is_empty());
+            assert!(effects.finished.is_empty());
+        }
+        _ => panic!("cancelled outcome expected"),
+    }
+    // Cancel after dispatch keeps uncertainty and earlier receipts.
+    let mut attempt = executed_start(native_start_input(Vec::new()));
+    drive_native_start_to_bound(&mut attempt);
+    start_effect(&mut attempt);
+    let Waiting::InFlight(id) = attempt.waiting() else { panic!("in flight") };
+    attempt.advance(Event::Cancel).unwrap();
+    match attempt.waiting() {
+        Waiting::Finished(AttemptOutcome::Cancelled { effects, .. }) => {
+            assert_eq!(effects.in_flight, vec![id]);
+        }
+        _ => panic!("cancelled outcome expected"),
+    }
+}
+
+#[cfg(feature = "scaffold-rekon")]
+#[test]
+fn changed_creation_root_stops_before_the_destination_lstat_is_requested() {
+    let mut input = scaffold_execute_input();
+    input.generator = crate::scaffold::Choice::Default;
+    let mut attempt = EntryAttempt::start(input).unwrap();
+    supply(&mut attempt, Vec::new());
+    supply_project(&mut attempt, inventory("/only", "/only", &[]));
+    supply_observation(&mut attempt, Ok(Observation::Destination(DestinationEvidence::Absent)));
+    deliver(&mut attempt);
+    supply(&mut attempt, Vec::new());
+    let pending = request(&attempt);
+    let ReadKind::CreationRootIdentity { root, expected } = &pending.kind else {
+        panic!("root identity first: {pending:?}")
+    };
+    assert_eq!((root.as_path(), expected.as_path()), (Path::new("/only"), Path::new("/only")));
+    supply_observation(&mut attempt, Ok(Observation::ProjectIdentity("/moved".into())));
+    let (boundary, cause) = stopped(&attempt);
+    assert_eq!(boundary, "binding_evidence");
+    assert!(matches!(cause, EntryError::CreationRootChanged { expected, observed, .. } if expected == Path::new("/only") && observed == Path::new("/moved")));
+    // The destination lstat was never requested after the changed root.
+    assert!(
+        !attempt
+            .journal
+            .iter()
+            .any(|r| matches!(r, AttemptRecord::ReadIssued(r) if matches!(r.kind, ReadKind::Destination { purpose: DestinationPurpose::Binding, .. })))
+    );
 }

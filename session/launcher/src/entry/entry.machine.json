@@ -155,7 +155,10 @@
         },
         "planned": {
           "id": "planned",
-          "on": { "export": { "target": "#bind_action" } }
+          "on": {
+            "export": { "target": "#bind_action" },
+            "execute": { "target": "#bind_action" }
+          }
         },
         "bind_action": {
           "id": "bind_action",
@@ -174,6 +177,17 @@
             "binding_evidence": {
               "id": "binding_evidence",
               "entry": [{ "type": "@xstate.emit", "event": { "type": "read_binding_evidence" } }],
+              "on": {
+                "observed": { "target": "#binding_check" },
+                "observed_evidence": [
+                  { "guard": { "type": "needs_destination_evidence" }, "target": "#binding_destination" },
+                  { "target": "#binding_check" }
+                ]
+              }
+            },
+            "binding_destination": {
+              "id": "binding_destination",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "read_binding_destination" } }],
               "on": { "observed": { "target": "#binding_check" } }
             },
             "binding_check": {
@@ -184,7 +198,12 @@
             "binding_lower": {
               "id": "binding_lower",
               "entry": [{ "type": "@xstate.emit", "event": { "type": "bind_operation" } }],
-              "on": { "bound": { "target": "#export_action" } }
+              "on": {
+                "bound": [
+                  { "guard": { "type": "export_delivery" }, "target": "#export_action" },
+                  { "target": "#run" }
+                ]
+              }
             }
           }
         },
@@ -192,10 +211,90 @@
           "id": "export_action",
           "entry": [{ "type": "@xstate.emit", "event": { "type": "export_action" } }],
           "on": { "exported": { "target": "#exported" } }
+        },
+        "run": {
+          "id": "run",
+          "initial": "dispatch",
+          "states": {
+            "dispatch": {
+              "id": "run_dispatch",
+              "entry": [{ "type": "@xstate.emit", "event": { "type": "dispatch_execution" } }],
+              "on": {
+                "effect_terminal": { "target": "#run_terminal" },
+                "effect_generate": { "target": "#run_generate" },
+                "effect_directory": { "target": "#run_directory" }
+              }
+            },
+            "generate": {
+              "id": "run_generate",
+              "initial": "requested",
+              "states": {
+                "requested": {
+                  "id": "run_generate_requested",
+                  "entry": [{ "type": "@xstate.emit", "event": { "type": "request_generate" } }],
+                  "on": { "effect_started": { "target": "#run_generate_in_flight" } }
+                },
+                "in_flight": {
+                  "id": "run_generate_in_flight",
+                  "on": { "effect_finished": { "target": "#run_directory" } }
+                }
+              }
+            },
+            "directory": {
+              "id": "run_directory",
+              "initial": "requested",
+              "states": {
+                "requested": {
+                  "id": "run_directory_requested",
+                  "entry": [{ "type": "@xstate.emit", "event": { "type": "request_directory" } }],
+                  "on": { "effect_started": { "target": "#run_directory_in_flight" } }
+                },
+                "in_flight": {
+                  "id": "run_directory_in_flight",
+                  "on": { "effect_finished": { "target": "#run_native" } }
+                }
+              }
+            },
+            "native": {
+              "id": "run_native",
+              "initial": "requested",
+              "states": {
+                "requested": {
+                  "id": "run_native_requested",
+                  "entry": [{ "type": "@xstate.emit", "event": { "type": "request_native" } }],
+                  "on": { "effect_started": { "target": "#run_native_in_flight" } }
+                },
+                "in_flight": {
+                  "id": "run_native_in_flight",
+                  "on": { "effect_finished": { "target": "#run_terminal" } }
+                }
+              }
+            },
+            "terminal": {
+              "id": "run_terminal",
+              "initial": "requested",
+              "states": {
+                "requested": {
+                  "id": "run_terminal_requested",
+                  "entry": [{ "type": "@xstate.emit", "event": { "type": "request_terminal" } }],
+                  "on": {
+                    "effect_started": { "target": "#run_terminal_in_flight" },
+                    "delegated": { "target": "#delegated" }
+                  }
+                },
+                "in_flight": {
+                  "id": "run_terminal_in_flight",
+                  "on": { "effect_finished": { "target": "#completed" } }
+                }
+              }
+            }
+          }
         }
       }
     },
     "exported": { "id": "exported", "type": "final" },
+    "completed": { "id": "completed", "type": "final" },
+    "delegated": { "id": "delegated", "type": "final" },
     "stopped": { "id": "stopped", "type": "final" }
   }
 }

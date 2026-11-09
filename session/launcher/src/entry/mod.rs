@@ -22,8 +22,28 @@ pub struct EntryAttempt {
     control: Control,
     data: AttemptData,
     pending: Option<ReadRequest>,
+    effects: EffectState,
     journal: Vec<AttemptRecord>,
     sequence: u64,
+}
+
+/// Effect progression state: one requested or in-flight effect, plus finished
+/// receipts in dispatch order. `requested` cannot be reissued and `in_flight`
+/// cannot redispatch; waiting is inert.
+#[derive(Default)]
+struct EffectState {
+    requested: Option<EffectRequest>,
+    in_flight: Option<EffectRequest>,
+    finished: Vec<(EffectId, EffectReceipt)>,
+}
+
+impl EffectState {
+    fn knowledge(&self) -> EffectKnowledge {
+        EffectKnowledge {
+            finished: self.finished.clone(),
+            in_flight: self.in_flight.as_ref().map(|effect| vec![effect.id]).unwrap_or_default(),
+        }
+    }
 }
 
 struct AttemptData {
@@ -45,7 +65,8 @@ struct AttemptData {
     validated_generator: Option<crate::scaffold::Validated>,
     plan: Option<action::EntryPlan>,
     binding: Option<select::WorkspaceCatalog>,
-    binding_evidence: Option<(ReadRequest, bind::Evidence)>,
+    binding_evidence: bind::CollectedEvidence,
+    execution: Option<bind::ExecutionChoice>,
     bound: Option<action::BoundAction>,
     outcome: Option<AttemptOutcome>,
 }
@@ -103,11 +124,13 @@ impl EntryAttempt {
                 validated_generator: None,
                 plan: None,
                 binding: None,
-                binding_evidence: None,
+                binding_evidence: bind::CollectedEvidence::default(),
+                execution: None,
                 bound: None,
                 outcome: None,
             },
             pending: None,
+            effects: EffectState::default(),
             journal: Vec::new(),
             sequence: 0,
         };
@@ -141,11 +164,13 @@ impl EntryAttempt {
                 validated_generator: None,
                 plan: None,
                 binding: None,
-                binding_evidence: None,
+                binding_evidence: bind::CollectedEvidence::default(),
+                execution: None,
                 bound: None,
                 outcome: None,
             },
             pending: None,
+            effects: EffectState::default(),
             journal: Vec::new(),
             sequence: 0,
         };
@@ -159,10 +184,20 @@ impl EntryAttempt {
         if let Some(request) = &self.pending {
             return Waiting::Read(request);
         }
+        if let Some(effect) = &self.effects.requested {
+            return Waiting::Effect(effect);
+        }
+        if let Some(effect) = &self.effects.in_flight {
+            return Waiting::InFlight(effect.id);
+        }
         if let Some(outcome) = &self.data.outcome {
             return Waiting::Finished(outcome);
         }
-        assert_eq!(self.control.leaf(), "planned", "chart must suspend at an external boundary");
+        let leaf = self.control.leaf();
+        assert!(
+            leaf == "planned" || leaf == "exported" || leaf == "completed" || leaf == "delegated" || leaf == "stopped",
+            "chart must suspend at an external boundary, not {leaf}"
+        );
         Waiting::Planned(self.data.plan.as_ref().expect("planned artifact"))
     }
 
@@ -172,6 +207,7 @@ impl EntryAttempt {
             target: self.data.target.clone(),
             leaf: self.control.leaf().into(),
             pending: self.pending.clone(),
+            pending_effect: self.effects.requested.clone().or_else(|| self.effects.in_flight.clone()),
             plan: self.data.plan.clone(),
             bound: self.data.bound.clone(),
             outcome: self.data.outcome.clone(),
@@ -227,8 +263,8 @@ impl EntryAttempt {
                                 }
                                 SessionReadPurpose::BindAction => {
                                     self.data.binding = Some(catalog);
-                                    let evidence_needed = self.data.plan.as_ref().is_some_and(|plan| plan.decision().needs_binding_evidence());
-                                    self.send(ControlEvent::BindingObserved { evidence_needed });
+                                    let evidence = self.data.plan.as_ref().expect("plan").decision().binding_evidence();
+                                    self.send(ControlEvent::BindingObserved { evidence });
                                 }
                                 SessionReadPurpose::Catalog => unreachable!("entry never requests a catalog inventory"),
                             },
@@ -261,7 +297,7 @@ impl EntryAttempt {
                             }
                         }
                         DestinationPurpose::Binding => {
-                            self.data.binding_evidence = Some((request, bind::Evidence::Destination(evidence)));
+                            self.data.binding_evidence.push(request, bind::Evidence::Destination(evidence));
                             self.send(ControlEvent::Observed);
                         }
                     },
@@ -269,10 +305,27 @@ impl EntryAttempt {
                         self.data.creation.as_mut().expect("a defaults reply answers a validated generator").defaults = Some((request, defaults));
                         self.send(ControlEvent::Observed);
                     }
-                    Ok(Observation::ProjectIdentity(directory)) => {
-                        self.data.binding_evidence = Some((request, bind::Evidence::Route(directory)));
-                        self.send(ControlEvent::Observed);
-                    }
+                    Ok(Observation::ProjectIdentity(directory)) => match &request.kind {
+                        ReadKind::ProjectIdentity { .. } => {
+                            self.data.binding_evidence.push(request, bind::Evidence::Route(directory));
+                            self.send(ControlEvent::Observed);
+                        }
+                        ReadKind::CreationRootIdentity { root, expected } => {
+                            // The root witness is verified HERE, before the
+                            // binding destination lstat is even requested.
+                            if directory == *expected {
+                                self.data.binding_evidence.push(request, bind::Evidence::CreationRoot(directory));
+                                self.send(ControlEvent::ObservedEvidence { destination_needed: true });
+                            } else {
+                                self.stop(EntryError::CreationRootChanged {
+                                    root: root.clone(),
+                                    expected: expected.clone(),
+                                    observed: directory,
+                                });
+                            }
+                        }
+                        _ => unreachable!("project identity answers an identity request"),
+                    },
                     Err(source) => self.stop(EntryError::Observation {
                         request: Box::new(request),
                         source,
@@ -285,13 +338,95 @@ impl EntryAttempt {
                 }
                 self.send(ControlEvent::Export);
             }
+            Event::Deliver(Delivery::Execute { native }) => {
+                if self.control.leaf() != "planned" {
+                    return Err(ProtocolError::NotPlanned);
+                }
+                self.data.execution = Some(bind::ExecutionChoice { native });
+                self.send(ControlEvent::Execute);
+            }
+            Event::EffectStarted(id) => {
+                let Some(effect) = self.effects.requested.as_ref() else {
+                    // An already-started effect cannot be redispatched.
+                    if self.effects.in_flight.as_ref().is_some_and(|started| started.id == id) {
+                        return Err(ProtocolError::AlreadyStarted(id));
+                    }
+                    return Err(ProtocolError::NoPendingEffect);
+                };
+                if effect.id != id {
+                    return Err(ProtocolError::EffectMismatch {
+                        expected: effect.id,
+                        received: id,
+                    });
+                }
+                let effect = self.effects.requested.take().expect("checked");
+                self.journal.push(AttemptRecord::EffectStarted(id));
+                self.effects.in_flight = Some(effect);
+                self.send(ControlEvent::EffectStarted);
+            }
+            Event::EffectFinished(completion) => {
+                let Some(effect) = self.effects.in_flight.as_ref() else {
+                    return Err(ProtocolError::NoPendingEffect);
+                };
+                if effect.id != completion.id {
+                    return Err(ProtocolError::EffectMismatch {
+                        expected: effect.id,
+                        received: completion.id,
+                    });
+                }
+                // Shape gate BEFORE consuming the in-flight effect.
+                if let Ok(receipt) = &completion.result
+                    && !receipt_answers_effect(&effect.kind, receipt)
+                {
+                    return Err(ProtocolError::ReceiptShape {
+                        effect: effect.id,
+                        received: *receipt,
+                    });
+                }
+                let effect = self.effects.in_flight.take().expect("checked");
+                self.journal.push(AttemptRecord::EffectFinished(completion.id));
+                match completion.result {
+                    Ok(receipt) => {
+                        self.effects.finished.push((effect.id, receipt));
+                        self.send(ControlEvent::EffectFinished);
+                    }
+                    Err(failure) => self.stop(EntryError::Effect {
+                        effect: Box::new(effect),
+                        failure,
+                    }),
+                }
+            }
+            Event::DelegateTerminal(id) => {
+                let Some(effect) = self.effects.requested.as_ref() else {
+                    return Err(ProtocolError::NotDelegatable);
+                };
+                if !effect.is_terminal() {
+                    return Err(ProtocolError::NotDelegatable);
+                }
+                if effect.id != id {
+                    return Err(ProtocolError::EffectMismatch {
+                        expected: effect.id,
+                        received: id,
+                    });
+                }
+                let effect = self.effects.requested.take().expect("checked");
+                let effects = self.effects.knowledge();
+                self.journal.push(AttemptRecord::EffectDelegated(id));
+                self.data.outcome = Some(AttemptOutcome::Delegated { terminal: effect.id, effects });
+                self.send(ControlEvent::Delegated);
+            }
             Event::Cancel => {
                 if self.data.outcome.is_some() {
                     return Err(ProtocolError::Finished);
                 }
                 let boundary = self.control.leaf().into();
                 self.pending = None;
-                self.data.outcome = Some(AttemptOutcome::Cancelled { boundary });
+                // A requested-but-undispatched effect is simply not dispatched;
+                // an in-flight one keeps its uncertainty in the knowledge snapshot.
+                let effects = self.effects.knowledge();
+                self.effects.requested = None;
+                self.effects.in_flight = None;
+                self.data.outcome = Some(AttemptOutcome::Cancelled { boundary, effects });
                 self.send(ControlEvent::Cancel);
             }
         }
@@ -305,9 +440,13 @@ impl EntryAttempt {
     }
 
     fn stop(&mut self, error: EntryError) {
+        let boundary = self.control.leaf().into();
+        let effects = self.effects.knowledge();
         self.pending = None;
+        self.effects.requested = None;
         self.data.outcome = Some(AttemptOutcome::Stopped {
-            boundary: self.control.leaf().into(),
+            boundary,
+            effects,
             cause: Arc::new(error),
         });
         self.send(ControlEvent::Stop);
@@ -317,12 +456,26 @@ impl EntryAttempt {
         loop {
             let directives = self.control.take_directives();
             if directives.is_empty() {
+                // `completed` has no entry directive; materialize its outcome
+                // from the recorded receipts.
+                if self.data.outcome.is_none()
+                    && self.pending.is_none()
+                    && self.effects.requested.is_none()
+                    && self.effects.in_flight.is_none()
+                    && self.control.leaf() == "completed"
+                {
+                    let effects = self.effects.knowledge();
+                    self.data.outcome = Some(AttemptOutcome::Completed { effects });
+                }
                 // Also checks the actor/artifact suspension invariant.
                 let _ = self.waiting();
                 return;
             }
             for directive in directives {
-                assert!(self.pending.is_none() && self.data.outcome.is_none(), "directive after an external boundary");
+                assert!(
+                    self.pending.is_none() && self.effects.requested.is_none() && self.effects.in_flight.is_none() && self.data.outcome.is_none(),
+                    "directive after an external boundary"
+                );
                 self.journal.push(AttemptRecord::Directive(directive));
                 match self.handle(directive) {
                     Ok(Some(event)) => self.send(event),
@@ -511,26 +664,40 @@ impl EntryAttempt {
                 None
             }
             ReadBindingEvidence => {
-                enum EvidenceTarget {
-                    Route(action::ProjectRoute),
-                    Destination(std::path::PathBuf),
-                }
-                let target = match &data.plan.as_ref().expect("entry plan").decision() {
-                    action::EntryDecision::StartProject { project, .. } => EvidenceTarget::Route(project.route.clone()),
-                    action::EntryDecision::ScaffoldAndStart { destination, .. } => EvidenceTarget::Destination(destination.path.clone()),
-                    _ => unreachable!("the chart reads binding evidence only for new work"),
+                let evidence = {
+                    let plan = data.plan.as_ref().expect("entry plan");
+                    match plan.decision() {
+                        action::EntryDecision::StartProject { project, .. } => ReadKind::ProjectIdentity {
+                            route: Box::new(project.route.clone()),
+                        },
+                        action::EntryDecision::ScaffoldAndStart { destination, .. } => {
+                            // The fresh creation-root canonical identity precedes
+                            // the destination lstat; the ingress verifies it
+                            // before the chart requests the destination read.
+                            ReadKind::CreationRootIdentity {
+                                root: destination.requested_root.clone(),
+                                expected: destination.root.clone(),
+                            }
+                        }
+                        _ => unreachable!("the chart reads binding evidence only for new work"),
+                    }
                 };
-                match target {
-                    EvidenceTarget::Route(route) => self.issue_project_identity(route),
-                    EvidenceTarget::Destination(path) => self.issue_destination(path, DestinationPurpose::Binding),
-                }
+                self.issue(evidence);
+                None
+            }
+            ReadBindingDestination => {
+                let path = match data.plan.as_ref().expect("entry plan").decision() {
+                    action::EntryDecision::ScaffoldAndStart { destination, .. } => destination.path.clone(),
+                    _ => unreachable!("only scaffold bindings recheck destination absence"),
+                };
+                self.issue_destination(path, DestinationPurpose::Binding);
                 None
             }
             CheckBinding => {
                 bind::check(
                     data.plan.as_ref().expect("entry plan"),
                     data.binding.as_ref().expect("binding inventory"),
-                    data.binding_evidence.as_ref(),
+                    &data.binding_evidence,
                 )?;
                 Some(ControlEvent::Checked)
             }
@@ -538,9 +705,12 @@ impl EntryAttempt {
                 data.bound = Some(bind::operation(
                     data.plan.as_ref().expect("entry plan"),
                     data.binding.as_ref().expect("checked binding inventory"),
-                    data.binding_evidence.as_ref(),
+                    &data.binding_evidence,
+                    data.execution,
                 )?);
-                Some(ControlEvent::Bound)
+                Some(ControlEvent::Bound {
+                    exported: data.execution.is_none(),
+                })
             }
             ExportAction => {
                 let action = data.bound.as_ref().expect("bound action");
@@ -552,6 +722,51 @@ impl EntryAttempt {
                     shell,
                 })));
                 Some(ControlEvent::Exported)
+            }
+            DispatchExecution => {
+                let bound = data.bound.as_ref().expect("bound action");
+                Some(match bound.shape() {
+                    action::ExecutionShape::TerminalBlock => ControlEvent::EffectTerminal,
+                    action::ExecutionShape::NativeCreateThenEnter => match bound.operation() {
+                        action::BoundOperation::ScaffoldAndStart { .. } => ControlEvent::EffectGenerate,
+                        action::BoundOperation::StartProject { .. } => ControlEvent::EffectDirectory,
+                        _ => unreachable!("native shape is chosen only for new work"),
+                    },
+                })
+            }
+            RequestGenerate => {
+                let program = match &data.bound.as_ref().expect("bound action").operation {
+                    action::BoundOperation::ScaffoldAndStart { generator, .. } => generator.clone(),
+                    _ => unreachable!("generation precedes native creation only for scaffolds"),
+                };
+                self.issue_effect(EffectKind::Generate { program });
+                None
+            }
+            RequestDirectory => {
+                let path = Self::bound_session(data).directory.path().to_owned();
+                self.issue_effect(EffectKind::CheckCreatedDirectory { path });
+                None
+            }
+            RequestNative => {
+                let session = Self::bound_session(data);
+                let (invocation, directory) = action::native_creation(&session)?;
+                self.issue_effect(EffectKind::CreateNative { invocation, directory });
+                None
+            }
+            RequestTerminal => {
+                let (target, shape) = {
+                    let bound = data.bound.as_ref().expect("bound action");
+                    (bound.bound_target().clone(), bound.shape())
+                };
+                let expression = match shape {
+                    action::ExecutionShape::TerminalBlock => action::lower(data.bound.as_ref().expect("bound action"))?,
+                    // The native tail enters the pane directory and moves this
+                    // client onto the acknowledged creation. It is not a CLI
+                    // fallback and carries no generation/creation steps.
+                    action::ExecutionShape::NativeCreateThenEnter => action::native_tail(&target, &Self::bound_session(data))?,
+                };
+                self.issue_effect(EffectKind::Terminal { expression });
+                None
             }
         })
     }
@@ -570,6 +785,34 @@ impl EntryAttempt {
         };
         self.journal.push(AttemptRecord::ReadIssued(request.clone()));
         self.pending = Some(request);
+    }
+
+    /// One outstanding effect per attempt; a requested effect is issued once
+    /// and waiting never reissues it.
+    fn issue_effect(&mut self, kind: EffectKind) {
+        assert!(
+            self.pending.is_none() && self.effects.requested.is_none() && self.effects.in_flight.is_none(),
+            "one outstanding effect per attempt"
+        );
+        self.sequence = self.sequence.checked_add(1).expect("effect sequence exhausted");
+        let effect = EffectRequest {
+            id: EffectId {
+                attempt: self.data.id,
+                sequence: self.sequence,
+            },
+            target: TargetBindingId(self.data.id),
+            kind,
+        };
+        self.journal.push(AttemptRecord::EffectIssued(effect.clone()));
+        self.effects.requested = Some(effect);
+    }
+
+    /// The bound new-work session of a native creation path.
+    fn bound_session(data: &AttemptData) -> action::BoundSession {
+        match &data.bound.as_ref().expect("bound action").operation {
+            action::BoundOperation::StartProject { session, .. } | action::BoundOperation::ScaffoldAndStart { session, .. } => session.clone(),
+            _ => unreachable!("native effects are issued only for new work"),
+        }
     }
 
     fn issue_sessions(&mut self, purpose: SessionReadPurpose) {
@@ -594,10 +837,6 @@ impl EntryAttempt {
         let cwd = self.data.target.as_ref().expect("bound context").cwd.clone();
         self.issue(ReadKind::GeneratorDefaults { cwd, needs });
     }
-
-    fn issue_project_identity(&mut self, route: action::ProjectRoute) {
-        self.issue(ReadKind::ProjectIdentity { route: Box::new(route) });
-    }
 }
 
 /// Exhaustive request-kind ↔ observation-kind compatibility. The request
@@ -615,6 +854,19 @@ fn observation_answers_request(kind: &ReadKind, observation: &Observation) -> bo
             | (ReadKind::Destination { .. }, Observation::Destination(_))
             | (ReadKind::GeneratorDefaults { .. }, Observation::Defaults(_))
             | (ReadKind::ProjectIdentity { .. }, Observation::ProjectIdentity(_))
+            | (ReadKind::CreationRootIdentity { .. }, Observation::ProjectIdentity(_))
+    )
+}
+
+/// Exhaustive effect-kind ↔ receipt-kind compatibility, checked before the
+/// in-flight effect is consumed.
+fn receipt_answers_effect(kind: &EffectKind, receipt: &EffectReceipt) -> bool {
+    matches!(
+        (kind, receipt),
+        (EffectKind::Generate { .. }, EffectReceipt::Generated)
+            | (EffectKind::CheckCreatedDirectory { .. }, EffectReceipt::Directory)
+            | (EffectKind::CreateNative { .. }, EffectReceipt::Created)
+            | (EffectKind::Terminal { .. }, EffectReceipt::Terminal { .. })
     )
 }
 

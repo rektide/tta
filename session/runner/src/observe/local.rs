@@ -158,6 +158,14 @@ impl Observer for Local<'_> {
                 ensure!(path.metadata()?.is_dir(), "chosen project route is not a directory: {entry:?}");
                 Observation::ProjectIdentity(path)
             }
+            ReadKind::CreationRootIdentity { root, .. } => {
+                // Fresh canonical identity of the configured creation-root
+                // spelling; comparison with the expected physical root is the
+                // ingress's fail-closed check.
+                let path = root.canonicalize().with_context(|| format!("canonicalize chosen creation root {root:?}"))?;
+                ensure!(path.is_dir(), "chosen creation root is not a directory: {root:?}");
+                Observation::ProjectIdentity(path)
+            }
         };
         self.guard.accept(&observation)?;
         Ok(observation)
