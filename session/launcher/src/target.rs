@@ -123,6 +123,7 @@ pub const VARIABLES: &[&str] = &[
     "XDG_CONFIG_HOME",
     "TTA_CONFIG",
     "TTA_ROOT",
+    "TTA_ROOTS",
     "PROJECTS_DIR",
     "TTA_SOCKET_NAME",
     "TTA_SOCKET_PATH",
@@ -140,7 +141,7 @@ pub const VARIABLES: &[&str] = &[
 #[derive(Clone, Debug, Builder)]
 pub struct Options {
     pub argument: String,
-    pub root: Option<PathBuf>,
+    pub roots: Option<Vec<PathBuf>>,
     pub socket: Option<socket::Selection>,
     pub program: Option<OsString>,
     pub registry_path: Option<PathBuf>,
@@ -180,19 +181,14 @@ impl Facts {
 
     pub fn input(&self, options: &Options, registry: scaffold::Config) -> Result<workflow::Input> {
         ensure!(self.cwd.is_absolute(), "target cwd is not absolute: {:?}", self.cwd);
-        let root = options
-            .root
-            .clone()
-            .or_else(|| self.value("TTA_ROOT").map(PathBuf::from))
-            .or_else(|| {
-                let projects = PathBuf::from(self.value("PROJECTS_DIR").unwrap_or("src"));
-                if projects.is_absolute() {
-                    Some(projects)
-                } else {
-                    self.value("HOME").map(|home| Path::new(home).join(projects))
-                }
-            })
-            .map(|path| self.cwd.join(path));
+        let roots = crate::projects::configured_roots(
+            options.roots.as_deref(),
+            self.value("TTA_ROOTS"),
+            self.value("TTA_ROOT"),
+            self.value("PROJECTS_DIR"),
+            self.value("HOME").map(Path::new),
+            &self.cwd,
+        )?;
         let selection = match &options.socket {
             Some(selection) => selection.clone(),
             None => match (self.value("TTA_SOCKET_NAME"), self.value("TTA_SOCKET_PATH")) {
@@ -226,7 +222,7 @@ impl Facts {
                     .or_else(|| self.value("TTA_SCAFFOLD").map(str::to_owned))
                     .unwrap_or_else(|| options.default_scaffold.clone()),
             )
-            .maybe_root(root)
+            .roots(roots)
             .maybe_session_name(options.session_name.clone())
             .maybe_config(
                 options
@@ -436,21 +432,42 @@ mod tests {
         let options = Options::builder().argument("work".into()).build();
         let registry = scaffold::Config::parse(None, None).unwrap();
         let input = facts.input(&options, registry.clone()).unwrap();
-        assert_eq!(input.root, Some("/target/invocation/target-projects".into()));
+        assert_eq!(input.roots, vec![PathBuf::from("/target/invocation/target-projects")]);
         assert_eq!(input.socket.path, Path::new("/target/invocation/target.sock"));
         assert_eq!(input.program, "/target/invocation/./bin/tmux");
         assert_eq!(input.client_mode, ClientMode::Attach);
         let options = Options::builder()
             .argument("work".into())
-            .root("explicit".into())
+            .roots(vec!["explicit".into()])
             .socket(socket::Selection::Name("chosen".into()))
             .program("chosen-tmux".into())
             .scaffold("false".into())
             .build();
         let input = facts.input(&options, registry).unwrap();
-        assert_eq!(input.root, Some("/target/invocation/explicit".into()));
+        assert_eq!(input.roots, vec![PathBuf::from("/target/invocation/explicit")]);
         assert_eq!(input.socket.path, Path::new("/tmp/tmux-4321/chosen"));
         assert_eq!(input.program, "chosen-tmux");
+    }
+
+    #[test]
+    fn plural_roots_use_only_target_facts_and_explicit_layer_replaces_the_list() {
+        let mut facts = facts();
+        facts.environment.insert("TTA_ROOTS".into(), r#"["second", "/target/first"]"#.into());
+        let registry = scaffold::Config::parse(None, None).unwrap();
+        let options = Options::builder().argument("work".into()).build();
+        assert_eq!(
+            facts.input(&options, registry.clone()).unwrap().roots,
+            vec![PathBuf::from("/target/invocation/second"), "/target/first".into()]
+        );
+        facts.environment.insert("TTA_ROOTS".into(), "invalid".into());
+        assert!(facts.input(&options, registry.clone()).is_err());
+        let explicit = Options::builder().argument("work".into()).roots(vec!["chosen".into()]).build();
+        assert_eq!(
+            facts.input(&explicit, registry.clone()).unwrap().roots,
+            vec![PathBuf::from("/target/invocation/chosen")]
+        );
+        facts.environment.clear();
+        assert!(facts.input(&options, registry).unwrap().roots.is_empty());
     }
 
     #[test]

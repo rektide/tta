@@ -78,7 +78,11 @@ fn complete_enumeration_supports_hostile_names_and_dangling_link_collision() {
     let probe::Reply::Workflow(workflow::ObservationReply::Projects(projects)) = decoded.reply else {
         panic!()
     };
-    assert_eq!(projects.names, vec![name.to_owned(), "alias".into()]);
+    assert_eq!(
+        projects.entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(),
+        vec![name, "alias"]
+    );
+    assert!(projects.entries.iter().all(|entry| entry.directory == dir.path().join(name)));
     let (probe, out) = execute(
         probe::Request::Workflow(workflow::ObservationRequest::Destination {
             path: dir.path().join("not-a-parent/absent"),

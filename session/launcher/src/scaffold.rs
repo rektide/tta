@@ -78,11 +78,11 @@ pub fn resolve(
     sessions: &[Session],
     argument: &str,
     #[builder(default = "_")] satellite_prefix: &str,
-    root: Option<&Path>,
+    #[builder(default = &[])] roots: &[PathBuf],
     session_name: Option<&str>,
     choice: &str,
     config: &Config,
-    projects: Option<&ProjectInventory>,
+    #[builder(default = &[])] projects: &[ProjectInventory],
     destination: Option<DestinationState>,
     defaults: &Defaults,
 ) -> std::result::Result<Progress, Error> {
@@ -91,7 +91,7 @@ pub fn resolve(
         sessions,
         argument,
         satellite_prefix,
-        root,
+        roots,
         session_name,
         choice,
         projects,
@@ -107,10 +107,10 @@ fn resolve_with_config(
     sessions: &[Session],
     argument: &str,
     satellite_prefix: &str,
-    root: Option<&Path>,
+    roots: &[PathBuf],
     session_name: Option<&str>,
     choice: &str,
-    projects: Option<&ProjectInventory>,
+    projects: &[ProjectInventory],
     destination: Option<DestinationState>,
     defaults: &Defaults,
 ) -> Result<Progress> {
@@ -124,10 +124,10 @@ fn resolve_with_config(
         .sessions(sessions)
         .argument(argument)
         .satellite_prefix(satellite_prefix)
-        .maybe_root(root)
+        .roots(roots)
         .maybe_session_name(session_name)
         .create(generator.is_some())
-        .maybe_projects(projects)
+        .projects(projects)
         .maybe_destination(destination)
         .call()
     {

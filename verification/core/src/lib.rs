@@ -58,7 +58,7 @@ pub fn fixture(scenario: Scenario) -> Result<(Input, Vec<Exchange>)> {
         .program("/target/bin/tmux".into())
         .registry(registry)
         .scaffold("default".into())
-        .root("/target/projects".into())
+        .roots(vec!["/target/projects".into()])
         .grouped(matches!(scenario, Scenario::Grouped))
         .build();
     let sessions = || ObservationRequest::Sessions {
@@ -90,8 +90,16 @@ pub fn fixture(scenario: Scenario) -> Result<(Input, Vec<Exchange>)> {
                     argument: name.into(),
                 },
                 reply: ObservationReply::Projects(ProjectInventory {
+                    requested_root: "/target/projects".into(),
                     root: "/target/physical/projects".into(),
-                    names: if matches!(scenario, Scenario::Project) { vec![name.into()] } else { vec![] },
+                    entries: if matches!(scenario, Scenario::Project) {
+                        vec![tta_launcher::ProjectEntry {
+                            name: name.into(),
+                            directory: std::path::Path::new("/target/physical/projects").join(name),
+                        }]
+                    } else {
+                        vec![]
+                    },
                 }),
             });
             if matches!(scenario, Scenario::Create) {
@@ -301,7 +309,7 @@ mod tests {
     #[test]
     fn session_hit_needs_no_root_but_invalid_registry_choice_stops_first() {
         let (mut input, exchanges) = fixture(Scenario::Existing).unwrap();
-        input.root = None;
+        input.roots.clear();
         assert!(replay(input.clone(), &exchanges).is_ok());
         input.scaffold = "unknown-generator".into();
         assert!(Workflow::new(input).is_err());

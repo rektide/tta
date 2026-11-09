@@ -36,6 +36,7 @@ fn existing_attach_options_select_independence_and_startup_is_ignored() {
 #[test]
 fn non_utf8_startup_is_supported_directly_but_not_in_shell_output() {
     let selection = Selection::Project {
+        sources: vec![],
         directory: "/project".into(),
         session_name: "project".into(),
     };
@@ -61,6 +62,7 @@ fn non_utf8_startup_is_supported_directly_but_not_in_shell_output() {
 #[test]
 fn relative_directory_overrides_fail_before_execution() {
     let selection = Selection::Project {
+        sources: vec![],
         directory: "/project".into(),
         session_name: "project".into(),
     };

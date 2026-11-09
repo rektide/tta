@@ -20,7 +20,8 @@ pub struct Input {
     pub program: OsString,
     pub registry: scaffold::Config,
     pub scaffold: String,
-    pub root: Option<PathBuf>,
+    #[builder(default)]
+    pub roots: Vec<PathBuf>,
     pub session_name: Option<String>,
     pub config: Option<PathBuf>,
     /// Omitted: independent outside entry; retain ordinary inside switching.
@@ -101,7 +102,7 @@ pub enum Error {
 pub struct Workflow {
     input: Input,
     sessions: Option<SessionInventory>,
-    projects: Option<ProjectInventory>,
+    projects: Vec<ProjectInventory>,
     destination: Option<DestinationState>,
     defaults: Option<scaffold::Defaults>,
     satellite_sessions: Option<SessionInventory>,
@@ -126,10 +127,13 @@ impl Workflow {
         if !input.cwd.is_absolute() {
             return Err(Error::RelativeCwd(input.cwd.clone()));
         }
+        if input.roots.iter().any(|root| !root.is_absolute()) {
+            return Err(crate::ResolveError::RootConfiguration("freeze roots against the target cwd before constructing the workflow".into()).into());
+        }
         Ok(Self {
             input,
             sessions: None,
-            projects: None,
+            projects: Vec::new(),
             destination: None,
             defaults: None,
             satellite_sessions: None,
@@ -152,7 +156,7 @@ impl Workflow {
         let mut control = Control::new();
         // Replay observations only when the graph asks for them, keeping native
         // data out of the actor. Nothing is observed or executed in this loop.
-        let mut projects = None;
+        let mut project_count = 0;
         let mut destination = None;
         let mut defaults = scaffold::Defaults::default();
         let mut defaults_supplied = false;
@@ -174,11 +178,11 @@ impl Workflow {
                         .sessions(sessions.sessions())
                         .argument(&input.argument)
                         .satellite_prefix(&input.satellite_prefix)
-                        .maybe_root(input.root.as_deref())
+                        .roots(&input.roots)
                         .maybe_session_name(input.session_name.as_deref())
                         .choice(&input.scaffold)
                         .config(&input.registry)
-                        .maybe_projects(projects)
+                        .projects(&self.projects[..project_count])
                         .maybe_destination(destination)
                         .defaults(&defaults)
                         .call()?;
@@ -186,7 +190,7 @@ impl Workflow {
                         scaffold::Progress::Observe(crate::Resolution::NeedProjects(root)) => {
                             pending = Some(ObservationRequest::Projects {
                                 root,
-                                argument: input.argument.clone(),
+                                argument: crate::projects::observation_fragment(&input.argument).into(),
                             });
                             control.send(Event::ProjectsNeeded);
                         }
@@ -210,10 +214,10 @@ impl Workflow {
                     }
                 }
                 Stage::Projects => {
-                    let Some(facts) = &self.projects else {
+                    let Some(_) = self.projects.get(project_count) else {
                         return Ok(Progress::Observe(pending.expect("resolver requested projects")));
                     };
-                    projects = Some(facts);
+                    project_count += 1;
                     control.send(Event::Observed);
                 }
                 Stage::Destination => {
@@ -296,7 +300,9 @@ impl Workflow {
                     self.satellite_sessions = Some(sessions);
                 }
             }
-            (ObservationRequest::Projects { .. }, ObservationReply::Projects(projects)) => self.projects = Some(projects),
+            (ObservationRequest::Projects { root, .. }, ObservationReply::Projects(projects)) if projects.requested_root == *root => {
+                self.projects.push(projects);
+            }
             (ObservationRequest::Destination { .. }, ObservationReply::Destination(state)) => self.destination = Some(state),
             (ObservationRequest::GeneratorDefaults { .. }, ObservationReply::GeneratorDefaults(defaults)) => self.defaults = Some(defaults),
             _ => return Err(Error::UnexpectedReply(request)),

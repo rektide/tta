@@ -146,6 +146,7 @@ fn planned_creation_preserves_literal_directory_and_name_and_refuses_races() {
     fs::create_dir(&directory).unwrap();
     let name = "new#[x] #{session_name} %;";
     let selection = Selection::Project {
+        sources: vec![],
         directory: directory.clone(),
         session_name: name.to_owned(),
     };
@@ -268,6 +269,7 @@ fn label_policy_is_frozen_in_direct_and_shell_modes_with_an_explicit_socket_carr
         let directory = server.directory.path().join("project");
         fs::create_dir(&directory).unwrap();
         let selection = Selection::Project {
+            sources: vec![],
             directory,
             session_name: "project".to_owned(),
         };

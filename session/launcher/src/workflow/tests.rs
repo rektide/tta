@@ -11,7 +11,7 @@ fn input() -> Input {
         .program("/target/tmux".into())
         .registry(scaffold::Config::parse(None, None).unwrap())
         .scaffold("false".into())
-        .root("/target/projects".into())
+        .roots(vec!["/target/projects".into()])
         .grouped(false)
         .build()
 }
@@ -64,8 +64,12 @@ fn pull_and_clone_remain_immutable_send_sync_with_independent_native_facts() {
     assert!(matches!(observe(&workflow), ObservationRequest::Projects { .. }));
     for (copy, name) in [(&mut workflow, "work-a"), (&mut other, "work-b")] {
         copy.supply(ObservationReply::Projects(ProjectInventory {
+            requested_root: "/target/projects".into(),
             root: "/physical".into(),
-            names: vec![name.into()],
+            entries: vec![crate::ProjectEntry {
+                name: name.into(),
+                directory: std::path::Path::new("/physical").join(name),
+            }],
         }))
         .unwrap();
     }
@@ -81,7 +85,7 @@ fn pull_and_clone_remain_immutable_send_sync_with_independent_native_facts() {
 #[test]
 fn typed_session_ambiguity_guards_before_missing_root_or_project_continuation() {
     let mut invocation = input();
-    invocation.root = None;
+    invocation.roots.clear();
     let mut workflow = Workflow::new(invocation).unwrap();
     // Supplying facts does not eagerly resolve them; the error still belongs to next().
     workflow
@@ -96,8 +100,9 @@ fn typed_session_ambiguity_guards_before_missing_root_or_project_continuation() 
     }
     let error = workflow
         .supply(ObservationReply::Projects(ProjectInventory {
+            requested_root: "/wrong".into(),
             root: "/wrong".into(),
-            names: vec![],
+            entries: vec![],
         }))
         .unwrap_err();
     assert!(matches!(resolve_error(&error), ResolveError::Sessions { .. }));
@@ -112,11 +117,51 @@ fn project_ambiguity_guards_before_scaffold_destination_and_mismatches_do_not_ad
     assert_eq!(observe(&workflow), pending);
     workflow
         .supply(ObservationReply::Projects(ProjectInventory {
+            requested_root: "/target/projects".into(),
             root: "/physical".into(),
-            names: vec!["work-a".into(), "work-b".into()],
+            entries: ["work-a", "work-b"]
+                .into_iter()
+                .map(|name| crate::ProjectEntry {
+                    name: name.into(),
+                    directory: std::path::Path::new("/physical").join(name),
+                })
+                .collect(),
         }))
         .unwrap();
     assert!(matches!(resolve_error(&workflow.next().unwrap_err()), ResolveError::Projects { .. }));
+}
+
+#[test]
+fn multiple_root_visits_replay_through_one_projects_stage_and_bind_replies() {
+    let mut invocation = input();
+    invocation.roots.push("/target/second".into());
+    let mut workflow = Workflow::new(invocation).unwrap();
+    workflow.supply(ObservationReply::Sessions(SessionInventory::Absent)).unwrap();
+    let first = ProjectInventory {
+        requested_root: "/target/projects".into(),
+        root: "/first".into(),
+        entries: vec![],
+    };
+    let second = ProjectInventory {
+        requested_root: "/target/second".into(),
+        root: "/second".into(),
+        entries: vec![crate::ProjectEntry {
+            name: "work".into(),
+            directory: "/second/work".into(),
+        }],
+    };
+    let pending = observe(&workflow);
+    assert!(matches!(
+        workflow.supply(ObservationReply::Projects(second.clone())),
+        Err(Error::UnexpectedReply(_))
+    ));
+    assert_eq!(observe(&workflow), pending);
+    workflow.supply(ObservationReply::Projects(first)).unwrap();
+    let pending = observe(&workflow);
+    assert!(matches!(&pending, ObservationRequest::Projects { root, .. } if root == std::path::Path::new("/target/second")));
+    assert_eq!(observe(&workflow.clone()), pending);
+    workflow.supply(ObservationReply::Projects(second)).unwrap();
+    assert!(shell(&workflow).contains("/second/work"));
 }
 
 #[test]
@@ -128,7 +173,7 @@ fn exact_literal_shortest_and_actual_group_resolution_remain_a_guarded_native_st
     ];
     for (sessions, expected) in cases {
         let mut invocation = input();
-        invocation.root = None;
+        invocation.roots.clear();
         let mut workflow = Workflow::new(invocation).unwrap();
         workflow.supply(ObservationReply::Sessions(SessionInventory::Present(sessions))).unwrap();
         let Progress::Ready(prepared) = workflow.next().unwrap() else {
@@ -150,7 +195,7 @@ fn omitted_grouping_and_custom_orphan_alias_replay_preserve_fresh_inventory_boun
         invocation.client_mode = mode;
         invocation.grouped = explicit;
         invocation.satellite_prefix = "view-".into();
-        invocation.root = None;
+        invocation.roots.clear();
         let selected = session(7, "view-work-42", Some("actual"));
         let mut workflow = Workflow::new(invocation).unwrap();
         workflow
@@ -189,8 +234,12 @@ fn native_non_utf8_domain_data_never_crosses_the_control_json_boundary() {
     workflow.supply(ObservationReply::Sessions(SessionInventory::Absent)).unwrap();
     workflow
         .supply(ObservationReply::Projects(ProjectInventory {
+            requested_root: "/target/projects".into(),
             root: "/physical".into(),
-            names: vec!["work".into()],
+            entries: vec![crate::ProjectEntry {
+                name: "work".into(),
+                directory: "/physical/work".into(),
+            }],
         }))
         .unwrap();
     let Progress::Ready(prepared) = workflow.next().unwrap() else {
@@ -230,8 +279,9 @@ fn supply_creation_destination(workflow: &mut Workflow) {
     workflow.supply(ObservationReply::Sessions(SessionInventory::Absent)).unwrap();
     workflow
         .supply(ObservationReply::Projects(ProjectInventory {
+            requested_root: "/target/projects".into(),
             root: "/physical".into(),
-            names: vec![],
+            entries: vec![],
         }))
         .unwrap();
     workflow.supply(ObservationReply::Destination(DestinationState::Absent)).unwrap();

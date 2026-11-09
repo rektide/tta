@@ -263,7 +263,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
         .socket(&socket)
         .client_mode(mode)
         .program(&tmux)
-        .maybe_root(args.root.as_deref())
+        .roots(&args.root.iter().cloned().collect::<Vec<_>>())
         .maybe_session_name(args.session_name.as_deref())
         .choice(choice)
         .config(&config)
@@ -281,10 +281,10 @@ fn run(mut args: Args) -> Result<ExitCode> {
         tta_launcher::Selection::Existing(session) => {
             tracing::info!(event = "resolution", decision = "existing", session_id = %session.id, session_name = %session.name)
         }
-        tta_launcher::Selection::Project { directory, session_name } => {
+        tta_launcher::Selection::Project { directory, session_name, .. } => {
             tracing::info!(event = "resolution", decision = "new", directory = ?directory, session_name = %session_name)
         }
-        tta_launcher::Selection::Create { directory, session_name } => {
+        tta_launcher::Selection::Create { directory, session_name, .. } => {
             let entry = generator.as_ref().expect("create selections require a chosen generator");
             tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
         }
@@ -370,7 +370,7 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
     };
     let options = target::Options::builder()
         .argument(args.argument.expect("fragment required"))
-        .maybe_root(args.root)
+        .maybe_roots(args.root.map(|root| vec![root]))
         .maybe_socket(socket)
         .maybe_program(args.tmux)
         .maybe_registry_path(args.scaffold_config)

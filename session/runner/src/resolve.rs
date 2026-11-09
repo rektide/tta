@@ -1,16 +1,17 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bon::builder;
 
 use crate::backend::SessionLookup;
-use tta_launcher::{DestinationState, ProjectInventory, Resolution};
+use tta_launcher::{DestinationState, ProjectEntry, ProjectInventory, Resolution};
 pub use tta_launcher::{ResolveError, Selection};
 
 #[derive(Debug)]
 struct Project {
     name: String,
+    directory: PathBuf,
 }
 
 /// Inspect once, prefer existing sessions, and only then enumerate the project
@@ -22,7 +23,7 @@ pub fn resolve(
     lookup: &dyn SessionLookup,
     argument: &str,
     #[builder(default = "_")] satellite_prefix: &str,
-    root: Option<&Path>,
+    #[builder(default = &[])] roots: &[PathBuf],
     session_name: Option<&str>,
     #[builder(default)] create: bool,
 ) -> Result<Selection, ResolveError> {
@@ -30,22 +31,34 @@ pub fn resolve(
         return Err(ResolveError::Empty);
     }
     let sessions = lookup.sessions().map_err(|source| ResolveError::Observation(Box::new(source)))?;
-    let mut inventory = None;
+    let roots: Vec<_> = roots
+        .iter()
+        .map(|root| {
+            if root.is_absolute() {
+                Ok(root.clone())
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(root))
+                    .map_err(|source| ResolveError::Directory { path: root.clone(), source })
+            }
+        })
+        .collect::<Result<_, _>>()?;
+    let mut inventories = Vec::new();
     let mut destination = None;
     loop {
         match tta_launcher::resolve()
             .sessions(&sessions)
             .argument(argument)
             .satellite_prefix(satellite_prefix)
-            .maybe_root(root)
+            .roots(&roots)
             .maybe_session_name(session_name)
             .create(create)
-            .maybe_projects(inventory.as_ref())
+            .projects(&inventories)
             .maybe_destination(destination)
             .call()?
         {
             Resolution::Selected(selection) => return Ok(selection),
-            Resolution::NeedProjects(root) => inventory = Some(project_inventory(&root, argument)?),
+            Resolution::NeedProjects(root) => inventories.push(project_inventory(&root, tta_launcher::projects::observation_fragment(argument))?),
             Resolution::NeedDestination(path) => destination = Some(destination_state(&path)?),
         }
     }
@@ -66,8 +79,15 @@ pub fn project_inventory(root: &Path, argument: &str) -> Result<ProjectInventory
         .canonicalize()
         .map_err(|source| ResolveError::Directory { path: root.to_owned(), source })?;
     Ok(ProjectInventory {
+        requested_root: root.to_owned(),
         root: canonical.clone(),
-        names: projects(&canonical, argument)?.into_iter().map(|project| project.name).collect(),
+        entries: projects(&canonical, argument)?
+            .into_iter()
+            .map(|project| ProjectEntry {
+                name: project.name,
+                directory: project.directory,
+            })
+            .collect(),
     })
 }
 
@@ -103,7 +123,8 @@ fn projects(root: &Path, argument: &str) -> Result<Vec<Project>, ResolveError> {
             kind.is_dir()
         };
         if is_directory {
-            projects.push(Project { name });
+            let directory = path.canonicalize().map_err(|source| ResolveError::Directory { path, source })?;
+            projects.push(Project { name, directory });
         }
     }
     Ok(projects)

@@ -1,20 +1,20 @@
-use crate::{Session, matching};
+use crate::{ProjectInventory, ProjectSource, Session, projects};
 use bon::builder;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Selection {
     Existing(Session),
-    Project { directory: PathBuf, session_name: String },
-    Create { directory: PathBuf, session_name: String },
-}
-
-/// Observed canonical root and immediate directory/symlink basenames. The
-/// observer must fail on inspection errors, not manufacture an empty inventory.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProjectInventory {
-    pub root: PathBuf,
-    pub names: Vec<String>,
+    Project {
+        directory: PathBuf,
+        session_name: String,
+        sources: Vec<ProjectSource>,
+    },
+    Create {
+        directory: PathBuf,
+        session_name: String,
+        sources: Vec<ProjectSource>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,10 +41,16 @@ pub enum ResolveError {
     Observation(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("ambiguous session fragment {argument:?}: {candidates:?}; provide a more specific name")]
     Sessions { argument: String, candidates: Vec<String> },
-    #[error("ambiguous project fragment {argument:?} under {root:?}: {candidates:?}; provide a more specific name")]
-    Projects { argument: String, root: PathBuf, candidates: Vec<String> },
-    #[error("no session or immediate project directory matches {argument:?} under {root:?}")]
-    Missing { argument: String, root: PathBuf },
+    #[error("ambiguous project fragment {argument:?}: {candidates:?}; use a qualified @N/name selector")]
+    Projects { argument: String, candidates: Vec<String> },
+    #[error("no session or immediate project directory matches {argument:?} under {roots:?}")]
+    Missing { argument: String, roots: Vec<PathBuf> },
+    #[error("cannot choose a scaffold destination for {argument:?}; use one of {candidates:?}")]
+    Destinations { argument: String, candidates: Vec<String> },
+    #[error("invalid project selector {argument:?}; use @N/name with N in 1..={roots}")]
+    Selector { argument: String, roots: usize },
+    #[error("invalid project roots: {0}")]
+    RootConfiguration(String),
     #[error("cannot scaffold {argument:?}: a new project name must be a single path component, not '.', '..', or a path containing '/'")]
     UnsafeName { argument: String },
     #[error("refusing to scaffold {path:?}: something already exists there")]
@@ -55,7 +61,7 @@ pub enum ResolveError {
         #[source]
         source: std::io::Error,
     },
-    #[error("project inventory requires an absolute canonical root and immediate basenames")]
+    #[error("project inventory must answer the requested root with absolute physical paths and unique immediate basenames")]
     InvalidInventory,
     #[error("session name {0:?} is empty or contains '.', ':', or control characters; pass --session-name with a distinct tmux-safe name")]
     InvalidName(String),
@@ -72,10 +78,10 @@ pub fn resolve(
     sessions: &[Session],
     argument: &str,
     #[builder(default = "_")] satellite_prefix: &str,
-    root: Option<&Path>,
+    #[builder(default = &[])] roots: &[PathBuf],
     session_name: Option<&str>,
     #[builder(default)] create: bool,
-    projects: Option<&ProjectInventory>,
+    #[builder(default = &[])] projects: &[ProjectInventory],
     destination: Option<DestinationState>,
 ) -> Result<Resolution, ResolveError> {
     let _span = tracing::info_span!("resolve", argument).entered();
@@ -87,60 +93,75 @@ pub fn resolve(
     if let Some(selection) = resolve_unique(sessions, argument, satellite_prefix)? {
         return Ok(Resolution::Selected(selection));
     }
-    let Some(projects) = projects else {
-        return Ok(Resolution::NeedProjects(root.ok_or(ResolveError::MissingRoot)?.to_owned()));
-    };
-    if !projects.root.is_absolute() || projects.names.iter().any(|name| !component(name)) {
-        return Err(ResolveError::InvalidInventory);
+    let scope = projects::scope(argument, roots)?;
+    if roots.iter().any(|root| !root.is_absolute()) {
+        return Err(ResolveError::RootConfiguration("project roots must be absolute target-local paths".into()));
     }
-    let root = &projects.root;
-    let (project_name, created) = match matching::select(projects.names.clone(), argument, |name| name).map_err(|candidates| {
-        tracing::warn!(event = "match.ambiguous", domain = "project", count = candidates.len());
-        ResolveError::Projects {
-            argument: argument.to_owned(),
-            root: root.clone(),
-            candidates,
-        }
-    })? {
-        Some(name) => (name, false),
+    let sources = projects::sources(roots, &scope.indices, projects)?;
+    if let Some(&index) = scope.indices.get(projects.len()) {
+        return Ok(Resolution::NeedProjects(roots[index].clone()));
+    }
+    let (directory, project_name, created, sources) = match projects::select(&sources, argument, scope.fragment)? {
+        Some(source) => (
+            source.entry_path(),
+            source.name.clone(),
+            false,
+            sources.iter().filter(|route| route.directory == source.directory).cloned().collect(),
+        ),
         None if create => {
-            if !component(argument) {
+            if !projects::component(scope.fragment) {
                 return Err(ResolveError::UnsafeName { argument: argument.to_owned() });
             }
-            let path = root.join(argument);
+            let physical: std::collections::BTreeSet<_> = projects.iter().map(|inventory| &inventory.root).collect();
+            if !scope.qualified && physical.len() > 1 {
+                return Err(ResolveError::Destinations {
+                    argument: argument.into(),
+                    candidates: scope.indices.iter().map(|index| format!("@{}/{}", index + 1, scope.fragment)).collect(),
+                });
+            }
+            let inventory = &projects[0];
+            let path = inventory.root.join(scope.fragment);
+            let name = session_name.unwrap_or(scope.fragment);
+            validate_creation_name(sessions, name)?;
             match destination {
                 None => return Ok(Resolution::NeedDestination(path)),
                 Some(DestinationState::Present) => return Err(ResolveError::Exists { path }),
-                Some(DestinationState::Absent) => (argument.to_owned(), true),
+                Some(DestinationState::Absent) => (
+                    path.clone(),
+                    scope.fragment.to_owned(),
+                    true,
+                    vec![ProjectSource {
+                        root_index: scope.indices[0] + 1,
+                        requested_root: inventory.requested_root.clone(),
+                        root: inventory.root.clone(),
+                        name: scope.fragment.into(),
+                        directory: path,
+                    }],
+                ),
             }
         }
         None => {
             return Err(ResolveError::Missing {
                 argument: argument.to_owned(),
-                root: root.clone(),
+                roots: scope.indices.iter().map(|index| roots[*index].clone()).collect(),
             });
         }
     };
     let name = session_name.unwrap_or(&project_name);
-    validate_name(name)?;
-    if let Some(session) = sessions.iter().find(|session| session.name == name) {
-        return Err(ResolveError::Collision {
-            name: name.to_owned(),
-            id: session.id,
-        });
-    }
-    let directory = root.join(&project_name);
+    validate_creation_name(sessions, name)?;
     let selection = if created {
         tracing::info!(event = "match.create", ?directory, session_name = name);
         Selection::Create {
             directory,
             session_name: name.to_owned(),
+            sources,
         }
     } else {
         tracing::info!(event = "match.project", ?directory, session_name = name);
         Selection::Project {
             directory,
             session_name: name.to_owned(),
+            sources,
         }
     };
     Ok(Resolution::Selected(selection))
@@ -166,8 +187,15 @@ pub fn resolve_unique(sessions: &[Session], argument: &str, satellite_prefix: &s
     }))
 }
 
-fn component(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
+fn validate_creation_name(sessions: &[Session], name: &str) -> Result<(), ResolveError> {
+    validate_name(name)?;
+    if let Some(session) = sessions.iter().find(|session| session.name == name) {
+        return Err(ResolveError::Collision {
+            name: name.into(),
+            id: session.id,
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), ResolveError> {

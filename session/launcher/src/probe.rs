@@ -10,7 +10,7 @@ use anyhow::{Result, bail, ensure};
 use tmax::operation::{ReplyDecoder, TypedOperation};
 use tta_command::{Command, Expression, Handoff, Word};
 
-use crate::{DestinationState, ProjectInventory, Session, target, workflow};
+use crate::{DestinationState, ProjectEntry, ProjectInventory, Session, target, workflow};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
@@ -119,7 +119,11 @@ impl Probe {
                 Expression::from(command).shell(Handoff::Run)?
             }
             Request::Workflow(workflow::ObservationRequest::Projects { root, .. }) => {
-                format!("cd -P {}\npwd -P\nprintf '\\000'\n{}", quote(root.as_os_str())?, listing(Path::new("."))?)
+                format!(
+                    "cd -P {}\npwd -P\nprintf '\\000'\n{}",
+                    quote(root.as_os_str())?,
+                    project_listing(Path::new("."))?
+                )
             }
             Request::Workflow(workflow::ObservationRequest::Destination { path }) => {
                 listing(path.parent().ok_or_else(|| anyhow::anyhow!("destination has no parent"))?)?
@@ -220,24 +224,34 @@ impl Probe {
                 ensure!(!payload.contains(&0), "NUL in registry text");
                 Reply::Setup(target::Reply::Registry(std::str::from_utf8(payload)?.into()))
             }
-            Request::Workflow(workflow::ObservationRequest::Projects { argument, .. }) => {
+            Request::Workflow(workflow::ObservationRequest::Projects {
+                root: requested_root,
+                argument,
+            }) => {
                 let (root, listing) = field(payload)?;
                 let root = PathBuf::from(std::str::from_utf8(strip_newline(root)?)?);
                 ensure!(root.is_absolute(), "nonabsolute canonical root");
-                let mut names = Vec::new();
-                for found in entries(listing)? {
+                let mut projects = Vec::new();
+                for found in entries(listing, true)? {
                     let Ok(name) = std::str::from_utf8(found.name) else {
                         continue;
                     };
-                    if name.contains(argument) {
-                        found.check()?;
-                        if found.kind.checked()?.directory() {
-                            names.push(name.into());
-                        }
+                    if !name.contains(argument) {
+                        continue;
+                    }
+                    found.check()?;
+                    if found.kind.checked()?.directory() {
+                        let directory = PathBuf::from(std::str::from_utf8(strip_newline(found.physical)?)?);
+                        ensure!(directory.is_absolute(), "missing/nonabsolute physical project directory");
+                        projects.push(ProjectEntry { name: name.into(), directory });
                     }
                 }
-                names.sort();
-                Reply::Workflow(workflow::ObservationReply::Projects(ProjectInventory { root, names }))
+                projects.sort_by(|left, right| left.name.cmp(&right.name));
+                Reply::Workflow(workflow::ObservationReply::Projects(ProjectInventory {
+                    requested_root: requested_root.clone(),
+                    root,
+                    entries: projects,
+                }))
             }
             Request::Workflow(workflow::ObservationRequest::Destination { path }) => {
                 let name = path.file_name().ok_or_else(|| anyhow::anyhow!("destination has no basename"))?;
@@ -271,6 +285,14 @@ fn listing(path: &Path) -> Result<String> {
     ))
 }
 
+fn project_listing(path: &Path) -> Result<String> {
+    // A physical path is a separate NUL field, not an unquoted shell operand.
+    // The decoder requires it for every directory in the type/stat inventory:
+    // failed/racing cd or pwd can never silently erase a project candidate.
+    let physical = "if [ -d \"$1\" ]; then (cd -P \"$1\" && pwd -P); fi\nprintf '\\000'";
+    Ok(format!("{} -exec /bin/sh -c {} tta-physical {{}} \\;", listing(path)?, quote(physical)?))
+}
+
 fn strip_newline(bytes: &[u8]) -> Result<&[u8]> {
     bytes.strip_suffix(b"\n").ok_or_else(|| anyhow::anyhow!("missing pwd/id newline"))
 }
@@ -287,6 +309,7 @@ struct Found<'a> {
     name: &'a [u8],
     kind: target::Entry,
     failure: Option<String>,
+    physical: &'a [u8],
 }
 
 impl Found<'_> {
@@ -298,7 +321,7 @@ impl Found<'_> {
     }
 }
 
-fn entries(mut bytes: &[u8]) -> Result<Vec<Found<'_>>> {
+fn entries(mut bytes: &[u8], physical: bool) -> Result<Vec<Found<'_>>> {
     let mut result = Vec::new();
     while !bytes.is_empty() {
         let (name, rest) = field(bytes)?;
@@ -306,6 +329,7 @@ fn entries(mut bytes: &[u8]) -> Result<Vec<Found<'_>>> {
         let (referent, rest) = field(rest)?;
         let (mode, rest) = field(rest)?;
         let (meta, rest) = field(rest)?;
+        let (physical, rest) = if physical { field(rest)? } else { (&[][..], rest) };
         ensure!(
             kind.len() == 1 && referent.len() == 1 && b"bcdpflsD".contains(&kind[0]) && b"bcdpflsDNL?".contains(&referent[0]),
             "invalid find type fields"
@@ -318,6 +342,7 @@ fn entries(mut bytes: &[u8]) -> Result<Vec<Found<'_>>> {
                 referent: referent[0],
             },
             failure: None,
+            physical,
         };
         if kind == b"l" {
             let (stderr, status) = metadata(meta)?;
@@ -348,7 +373,7 @@ fn entries(mut bytes: &[u8]) -> Result<Vec<Found<'_>>> {
 }
 
 fn entry(payload: &[u8], name: &[u8], follow: bool) -> Result<Option<target::Entry>> {
-    let Some(found) = entries(payload)?.into_iter().find(|found| found.name == name) else {
+    let Some(found) = entries(payload, false)?.into_iter().find(|found| found.name == name) else {
         return Ok(None);
     };
     if follow {

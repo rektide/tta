@@ -221,6 +221,7 @@ fn startup_preserves_raw_arguments_and_explicit_cwd() {
         OsString::from_vec(b"raw\xff\\;".to_vec()),
     ];
     let selection = Selection::Project {
+        sources: vec![],
         directory: server.directory.path().join("not-used"),
         session_name: "created".into(),
     };
@@ -242,6 +243,7 @@ fn lone_startup_executable_with_spaces_is_not_shell_source() {
     fs::write(&executable, "#!/bin/sh\nprintf done > marker\nexec sleep 120\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let selection = Selection::Project {
+        sources: vec![],
         directory: server.directory.path().to_owned(),
         session_name: "created".into(),
     };

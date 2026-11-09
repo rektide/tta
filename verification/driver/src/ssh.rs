@@ -565,7 +565,10 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     report.checks.push(json!({"check": "cold/project; target defaults; literal startup argv and relative target cwd", "selection": format!("{:?}", prepared.launch.selection), "argv": argv}));
 
     let grouped = fixture.prepare(
-        target::Options::builder().argument(name.into()).root("/unusable/project/root".into()).build(),
+        target::Options::builder()
+            .argument(name.into())
+            .roots(vec!["/unusable/project/root".into()])
+            .build(),
         report,
     )?;
     let leaves = grouped.launch.plan.expression().steps();

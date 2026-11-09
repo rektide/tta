@@ -301,6 +301,7 @@ fn failed_native_create_never_hands_off_and_failed_handoff_leaves_creation() {
     let before = fixture.clients();
     let directory = fixture.temp.path().join("generated");
     let selection = Selection::Create {
+        sources: vec![],
         directory: directory.clone(),
         session_name: "fresh".into(),
     };

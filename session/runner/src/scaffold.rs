@@ -80,7 +80,7 @@ pub fn resolve(
     lookup: &dyn SessionLookup,
     argument: &str,
     #[builder(default = "_")] satellite_prefix: &str,
-    root: Option<&Path>,
+    #[builder(default = &[])] roots: &[PathBuf],
     session_name: Option<&str>,
     choice: &str,
     config: Option<&Config>,
@@ -108,7 +108,17 @@ pub fn resolve(
             return Err(tta_launcher::ResolveError::Empty.into());
         }
         let sessions = lookup.sessions()?;
-        let mut projects = None;
+        let roots = roots
+            .iter()
+            .map(|root| {
+                if root.is_absolute() {
+                    Ok(root.clone())
+                } else {
+                    std::env::current_dir().map(|cwd| cwd.join(root))
+                }
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let mut projects = Vec::new();
         let mut destination = None;
         // Defaults are needed only for a clean create, never for existing work.
         let mut defaults = Defaults::default();
@@ -118,11 +128,11 @@ pub fn resolve(
                 .sessions(&sessions)
                 .argument(argument)
                 .satellite_prefix(satellite_prefix)
-                .maybe_root(root)
+                .roots(&roots)
                 .maybe_session_name(session_name)
                 .choice(choice)
                 .config(config)
-                .maybe_projects(projects.as_ref())
+                .projects(&projects)
                 .maybe_destination(destination)
                 .defaults(&defaults)
                 .call()?
@@ -137,7 +147,10 @@ pub fn resolve(
                     }
                 }
                 tta_launcher::scaffold::Progress::Observe(tta_launcher::Resolution::NeedProjects(root)) => {
-                    projects = Some(crate::resolve::project_inventory(&root, argument)?)
+                    projects.push(crate::resolve::project_inventory(
+                        &root,
+                        tta_launcher::projects::observation_fragment(argument),
+                    )?);
                 }
                 tta_launcher::scaffold::Progress::Observe(tta_launcher::Resolution::NeedDestination(path)) => {
                     destination = Some(crate::resolve::destination_state(&path)?);

@@ -233,6 +233,7 @@ pub fn prepare_launch(
         Selection::Project {
             directory: project_directory,
             session_name,
+            ..
         } => Ok(And::builder()
             .steps(new_project_steps(directory, project_directory, session_name, startup)?)
             .build()
@@ -240,6 +241,7 @@ pub fn prepare_launch(
         Selection::Create {
             directory: project_directory,
             session_name,
+            ..
         } => {
             let prefix = prefix.ok_or(PlanError::MissingPrefix)?;
             let mut steps = Vec::with_capacity(4);
@@ -329,6 +331,7 @@ mod tests {
     #[test]
     fn inside_creation_is_detached_then_exact_switch_and_values_are_tmux_encoded() {
         let selection = Selection::Project {
+            sources: vec![],
             directory: "/src/#[a]' ;".into(),
             session_name: "#[a];".into(),
         };
@@ -439,6 +442,7 @@ mod tests {
     #[test]
     fn create_plans_run_the_generator_before_entering_its_directory() {
         let selection = Selection::Create {
+            sources: vec![],
             directory: "/src/fresh".into(),
             session_name: "fresh".into(),
         };
@@ -475,6 +479,7 @@ mod tests {
     #[test]
     fn window_names_customize_disable_and_survive_format_characters() {
         let selection = Selection::Project {
+            sources: vec![],
             directory: "/src/project".into(),
             session_name: "project".into(),
         };

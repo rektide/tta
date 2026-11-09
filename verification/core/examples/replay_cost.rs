@@ -64,9 +64,13 @@ fn main() -> anyhow::Result<()> {
                     *inventory = SessionInventory::Present(sessions);
                 }
                 ObservationReply::Projects(inventory) => {
-                    inventory
-                        .names
-                        .extend((0..options.extra_projects).map(|index| format!("unrelated-project-{index}")));
+                    inventory.entries.extend((0..options.extra_projects).map(|index| {
+                        let name = format!("unrelated-project-{index}");
+                        tta_launcher::ProjectEntry {
+                            directory: inventory.root.join(&name),
+                            name,
+                        }
+                    }));
                 }
                 _ => {}
             }

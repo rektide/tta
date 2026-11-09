@@ -4,7 +4,7 @@ use crate::backend::SessionLookup;
 use anyhow::Result;
 use bon::builder;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tta_launcher::workflow::{Input, ObservationReply, ObservationRequest, PreparedLaunch, Progress, Workflow};
 use tta_launcher::{ClientMode, WindowName, scaffold, socket};
 
@@ -57,7 +57,7 @@ pub fn prepare(
     socket: &socket::Resolved,
     client_mode: ClientMode,
     program: &OsStr,
-    root: Option<&Path>,
+    #[builder(default = &[])] roots: &[PathBuf],
     session_name: Option<&str>,
     choice: &str,
     config: Option<&scaffold::Config>,
@@ -77,15 +77,16 @@ pub fn prepare(
                 &loaded
             }
         };
+        let cwd = std::env::current_dir()?;
         let input = Input::builder()
             .argument(argument.to_owned())
-            .cwd(std::env::current_dir()?)
+            .cwd(cwd.clone())
             .socket(socket.clone())
             .client_mode(client_mode)
             .program(program.to_owned())
             .registry(registry.clone())
             .scaffold(choice.to_owned())
-            .maybe_root(root.map(Path::to_owned))
+            .roots(roots.iter().map(|root| cwd.join(root)).collect())
             .maybe_session_name(session_name.map(str::to_owned))
             .maybe_config(tmux_config.map(Path::to_owned))
             .maybe_grouped(grouped)
