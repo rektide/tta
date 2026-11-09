@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 updated: {by: "model:openai/gpt-6.1-sol#high", at: "2026-11-09"}
 sources:
+  - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
+    title: Connect internal shared host/catalog implementation without claiming production caller cutover
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Distinguish the approved internal rewrite and retained kernel from this still-public replay contract
   - resource: opencode://ses_e3db9cabaffeSpjYjLIjvqdbPO
@@ -296,7 +298,11 @@ responds to the human's clarified request for a substantial state-machine-powere
 rewrite. The human approved its new orchestration owner, domain model, stronger
 binding and effect lifecycle. The [first retained kernel](/design/entry/kernel0.gpt61sol.md)
 is implemented internally through existing-work export, with a
-[generated structural graph](attempt-graph.md). Public CLI/consumer entry still
+[generated structural graph](attempt-graph.md). The subsequent
+[discovery stage](/design/entry/discovery0.glm53m.md) adds project/creation decisions;
+the [hosts stage](/design/entry/hosts0.gpt61sol.md) adds shared raw context/registry
+acquisition, local/SSH read interpreters and a separate
+[read-only catalog](catalog-graph.md). Public CLI/consumer entry still
 uses the contract above until coherent cutover; this is not a public facade over
 the new actor. The
 [inquiry index](/design/entry/README.md) connects the previous stages and current

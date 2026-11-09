@@ -8,7 +8,7 @@ author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
 sources:
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
-    title: Add machine-owned context policy and registry acquisition before selection; regenerate the structural graph
+    title: Add machine-owned context and registry acquisition, shared host interpretation and catalog binding-subchart composition; regenerate and connect both structural graphs
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Implement the approved first-stage retained actor, verify emission and guards, and generate this structural projection
   - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
@@ -26,7 +26,8 @@ sources:
 This is the **internal replacement**, not the public `Workflow` contract in
 [the current entry account](README.md). The [approved redesign](/design/entry/redesign0.gpt6a.md),
 [first-stage report](/design/entry/kernel0.gpt61sol.md) and [discovery-stage
-report](/design/entry/discovery0.glm53m.md) explain scope, evidence and
+report](/design/entry/discovery0.glm53m.md), plus the
+[hosts-stage report](/design/entry/hosts0.gpt61sol.md), explain scope, evidence and
 remaining work. The complete existing-work journey ends in an exported
 snapshot after fresh binding; the discovery branches extend the same retained
 actor through machine-owned project scope, a per-root read loop with explicit
@@ -39,6 +40,9 @@ The initial `bind_target` compound now requests raw host context, applies shared
 whole-layer policy, optionally compares physical endpoint identities, and requests
 one semantic registry acquisition before validating the choice. Supplied frozen
 context skips acquisition through an explicit chart edge, not a separate driver.
+The separate [catalog graph](catalog-graph.md) reuses this actual binding
+subchart, then follows a collect/report course incapable of producing an entry
+plan or mutation. Local/SSH interpreters answer the same native requests.
 
 Generated from the actual JSON, not copied from the design sketch. Node labels
 show IDs, hierarchical paths and state-entry directives. Dotted initial edges

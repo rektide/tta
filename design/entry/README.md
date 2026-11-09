@@ -8,6 +8,8 @@ author: model:openai/gpt-6-astra#high
 date: 2026-11-09
 updated: {by: "model:openai/gpt-6.1-sol#high", at: "2026-11-09"}
 sources:
+  - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
+    title: Index the shared host/catalog stage, its internal API standing and exact execution/cutover handoff
   - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
     title: Index the machine-owned discovery stage and its deletion-delta witness
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
@@ -41,8 +43,15 @@ sources:
   short-circuit lowering. Includes the deletion-delta witness and the next
   hosts-stage handoff. Still internal; the old production path awaits cutover.
 - [Generated attempt graph](/doc/entry/attempt-graph.md) and
+  [catalog graph](/doc/entry/catalog-graph.md), plus
   [focused kernel verification](/verification/entry/README.md): executable structure
   and supplied-facts evidence for the internal replacement, not the old replay graph.
+- [Shared target observation and read-only catalogs](hosts0.gpt61sol.md): third
+  stage — machine-owned raw context/registry acquisition, shared pure policy,
+  local and frozen worker-free SSH interpreters, one read driver, typed partial
+  catalogs and completion projections. Includes runner-free poison/local-probe
+  evidence and the exact G execution/cutover handoff. Opt-in internal integration,
+  not production CLI/consumer adoption or completed rewrite acceptance.
 
 ## Earlier engine and architecture stages
 
