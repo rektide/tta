@@ -63,7 +63,10 @@ fn roots_are_not_priority_and_all_required_facts_precede_matching() {
     let a = inventory("/a", "/a", &[("long-work", "/a/long-work")]);
     let b = inventory("/b", "/b", &[("work", "/b/work")]);
     assert_eq!(resolve(&roots, &[], "work", false).unwrap(), Resolution::NeedProjects("/a".into()));
-    assert_eq!(resolve(&roots, std::slice::from_ref(&a), "work", false).unwrap(), Resolution::NeedProjects("/b".into()));
+    assert_eq!(
+        resolve(&roots, std::slice::from_ref(&a), "work", false).unwrap(),
+        Resolution::NeedProjects("/b".into())
+    );
     let Resolution::Selected(Selection::Project { directory, sources, .. }) = resolve(&roots, &[a, b], "work", false).unwrap() else {
         panic!()
     };

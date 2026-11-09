@@ -7,6 +7,8 @@ status: implemented-partial
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
 sources:
+  - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
+    title: Port actual local/SSH call sites to 0.7.0 ordered-root APIs and refresh the receiving lock; distinguish the existing one-root consumer UI from pending multi-root integration
   - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
     title: Check the 0.6.0 independent-view API against the receiving consumer, preserve explicit grouping policy and refresh its lock
   - resource: opencode://ses_e80ce13ddffeiWXfWVMBW9qXv5
@@ -58,6 +60,26 @@ authenticated master; a separate interactive password/passphrase bootstrap is
 not implemented in this bounded, closed-stdin acquisition path.
 
 # Evidence and remaining choices
+
+## Ordered-root API checkpoint (0.7.0)
+
+The consumer's two actual call sites now pass ordered lists: its explicit
+`session_root` becomes a one-element SSH override, and its existing local
+`project_root()` result becomes the runner's `roots` input. The receiving lock
+adopts the coordinated 0.7.0 packages. Explicit grouping, terminal transport and
+retry ownership are unchanged. This is an API adoption checkpoint, **not** a new
+consumer multi-root UI or local `TTA_ROOTS`/completion implementation. Target-local
+SSH defaults do use the shared new roots policy when no explicit root is supplied.
+
+`cargo check --all-targets --all-features --offline` passed. Of nine selected
+`launcher::` tests, eight passed; the existing remote-classic fixture failed to
+create its directory because `/tmp/opencode` was owned mode 0700 by `zimtest2`.
+That test did not exercise the changed API. The tta
+[establishing checkpoint](/design/entry/project-roots0.gpt61sol.md) gives the next
+integration handoff: review consumer local configuration/completion deliberately,
+and rerun that fixture after the scratch-access problem is resolved.
+
+## Earlier SSH acceptance and remaining mosh choice
 
 The [actual loopback SSH toolkit](/verification/ssh/README.md) can run the real
 consumer proxy and its nested PTYs against a target PATH where `command -v tta`

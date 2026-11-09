@@ -3,7 +3,7 @@ type: ArchitectureContract
 title: Ordered project roots — identity, selection and safe creation
 description: Multi-root input and observation contract, declared before implementation, with explicit root selectors and physical-directory provenance
 resource: /doc/entry/project-roots.md
-status: declared
+status: implemented-partial
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
 sources:
@@ -22,7 +22,8 @@ sources:
 # Ordered roots, not implicit priority
 
 Work anchor: `tta-project-roots`. This declaration precedes implementation.
-The establishing slice implements core policy and the observer/API changes needed
+Declared in commit `3247ce5e` before code; the establishing slice now implements
+core policy and the observer/API changes needed
 to keep the workspace coherent. CLI/environment/completion adoption and complete
 end-to-end acceptance belong to the next integration slice; this document does
 not claim those surfaces are already delivered.
@@ -125,6 +126,12 @@ selector needs only one visit. The repeated existing `projects → resolve →
 projects` route needs no additional state or event. Native paths, inventory and
 provenance never enter machine serialization.
 
+The existing argument-filtered observation policy is preserved: launch inventories
+inspect matching basenames, while completion requests an empty filter. Physical
+provenance covers every supplied route to a selected project, not undiscovered
+aliases elsewhere on the filesystem. Failure inspecting a required matching entry
+stops; unrelated broken symlinks do not poison fragment-specific discovery.
+
 ```mermaid
 flowchart TD
     sessionGuard["Session resolution ? on original argument"] --> sessionHit{"Existing selection?"}
@@ -153,3 +160,11 @@ must agree about canonical identity, symlinks, empty roots and failures. Final
 integration adds repeated CLI roots, environment precedence, target-local SSH,
 Zsh completion and actual embedded-consumer review/receiving locks. Keep the ticket
 open until these surfaces are implemented and meaningfully checked.
+
+The [establishing checkpoint](/design/entry/project-roots0.gpt61sol.md) records
+implemented interfaces, verification, the consumer port and the next G turn.
+The legacy external `rekon` adapter remains a consequential integration review
+point: its script ignores the chosen root. Safe multi-root **generation** must
+not be claimed for it merely because core destination selection is unambiguous;
+prefer a fail-closed multi-root guard or change that adapter's real destination
+contract before acceptance. `rekon-native` already receives and honors the root.

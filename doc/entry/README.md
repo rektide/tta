@@ -56,7 +56,7 @@ flowchart TD
     input["Parse target-local input<br/>CLI overrides environment, then defaults"] --> common["Validate active option/environment values<br/>and satellite prefix"]
     common --> mode{"Read-only completion?"}
     mode -->|Yes| completionFacts["Observe sessions and projects independently"]
-    completionFacts --> completion["Expose literal names + satellite aliases<br/>No winner selection, machine, creation or attach"]
+    completionFacts --> completion["Expose session aliases and project selectors<br/>No launch selection, machine, creation or attach"]
     mode -->|No| validate["Validate endpoint/client policy<br/>Workflow::new: registry/choice, fragment, prefix, absolute cwd"]
     validate --> sessions
 
@@ -182,6 +182,9 @@ precedence, qualified selectors, physical-directory provenance and safe scaffold
 destinations. The graph remains eight stages: resolve may request another root
 through its existing projects route before selecting a winner. Surface integration
 and final acceptance remain tracked by `tta-project-roots`.
+The [establishing checkpoint](/design/entry/project-roots0.gpt61sol.md) records
+the implemented core, local/remote observation agreement and bounded integration
+handoff. The executable graph itself is unchanged.
 
 ## Names, aliases and workspace winners
 

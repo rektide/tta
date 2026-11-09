@@ -8,6 +8,8 @@ author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
 updated: { at: 2026-11-09, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
+    title: Establish ordered-root core/API and physical provenance at 0.7.0; document the still-pending CLI/completion integration
   - resource: opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt
     title: Adopt the accepted ticket-surface pitch — capability work map in the guide, same-ID ticket summaries and lifecycle reconciliation
   - resource: opencode://ses_e4dca921dffexww2JZDdY3Zyne
@@ -128,6 +130,12 @@ Historical delivery anchors — `tta-zsh-completion`,
 `tta-launch-backends-independent-views`, `tta-scaffold`,
 `tta-launch-backends-remote-target`, `tta-state-machine` and
 `tta-window-name` — are closed on the board with their evidence.
+
+Multi-root work is staged, not yet complete: the pure core and optional runner
+now accept ordered roots with physical provenance and qualified selectors; the
+CLI's repeated-root/environment/completion surface is the next integration turn.
+See the [contract](doc/entry/project-roots.md) and
+[establishing checkpoint](design/entry/project-roots0.gpt61sol.md).
 
 ## How we use tmux
 
@@ -707,7 +715,7 @@ let prepared = tta_runner::prepare()
     .socket(&socket)
     .client_mode(mode)
     .program(tmux_program)
-    .maybe_root(root)                  // Option<&Path>
+    .roots(&roots)                    // &[PathBuf], empty for rootless input
     .choice("default")                // or "false" or a registry name
     .grouped(grouped)
     .startup(&startup_argv)
@@ -802,6 +810,12 @@ probe policy. Coordinated workspace dependencies remain exact-pinned.
 configurable satellite prefix and group-aware alias resolution (`resolve_unique`).
 `satellite_name` now takes the selected `Session`, inventory and prefix rather
 than decorating a raw base string.
+**0.7.0** replaces singular core/runner roots with ordered lists. `workflow::Input`
+has `roots: Vec<PathBuf>`, target options accept an optional explicit list, and
+project inventories supply requested/physical roots plus physical entry paths.
+Project/Create selections retain `sources` provenance. CLI list input/completion
+integration is still pending; see the checkpoint above rather than assuming the
+whole multi-root ticket is delivered.
 The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
 [launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
 implemented adoption and the separate mosh observation-channel choice.
