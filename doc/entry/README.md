@@ -7,6 +7,8 @@ status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
 sources:
+  - resource: opencode://ses_e3db9cabaffeSpjYjLIjvqdbPO
+    title: Link the newly commissioned architectural redesign while preserving this implemented contract
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Declare multi-root selection and safe creation before implementation; retain the eight-stage observation graph
   - resource: opencode://ses_e4dbbb07bffeqm6Khh2fp29jNR
@@ -285,6 +287,13 @@ preserves the defect evidence this contract must not erase. Current acceptance:
 [two-real-terminal verification](/verification/views/README.md).
 
 ## Related work organization
+
+The later [entry-attempt redesign proposal](/design/entry/redesign0.gpt6a.md)
+responds to the human's clarified request for a substantial state-machine-powered
+rewrite. It proposes a new orchestration owner, domain model and effect lifecycle;
+it is under review and does not change the implemented contract above. The
+[inquiry index](/design/entry/README.md) connects the previous stages and current
+destination proposal.
 
 The [capability-oriented ticket pitch](/design/entry/ticket-surface0.gpt6a.md)
 proposes navigation from user-visible entry, discovery, creation and remote work
