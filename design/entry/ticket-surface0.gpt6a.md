@@ -3,10 +3,13 @@ type: Proposal
 title: Ticketing tta by the work people enter
 description: A small capability-oriented navigation and ticket proposal preserving shipped outcomes, historical identities and separately commissioned future work
 resource: /design/entry/ticket-surface0.gpt6a.md
-status: proposed
+status: accepted
 author: model:openai/gpt-6-astra#medium
 date: 2026-11-06
+updated: { at: 2026-11-09, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt
+    title: Record human acceptance; promote the compact surface map into the guide and reconcile ticket lifecycle with same-ID summaries
   - resource: opencode://ses_e4dbbb07bffeqm6Khh2fp29jNR
     title: Inspect all sixteen tickets and current capability contracts; propose surface navigation and lifecycle decisions without ticket mutations
   - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
@@ -37,6 +40,14 @@ decoding the history of `tta-launch-backends` or an actor-runtime migration.
 
 This is a proposal, not an adopted hierarchy. No tickets were created, renamed,
 closed, reparented or otherwise edited for this pitch.
+
+> **Accepted 2026-11-09.** The human approved the pitch ("fine go ahead").
+> The compact surface map moved into [the guide](/README.md#what-tta-can-do),
+> same-ID title/summary refreshes and lifecycle closures were recorded on the
+> board by session `opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt` (parent
+> `opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj`), and `tta-project-roots` was
+> marked as the commissioned next feature. This document remains the proposal
+> evidence; the sentences above describe only what the pitching session did.
 
 ## Two things to keep distinct
 
