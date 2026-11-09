@@ -112,7 +112,10 @@ fn project_completion_is_identity_aware_across_configured_roots() {
     // only through qualified selectors; physically unique names stay bare and
     // their redundant qualified forms are dropped from the menu.
     let inventory = |command: &mut Command| {
-        command.env_remove("HOME").env("TTA_SOCKET_PATH", temp.path().join("unused-socket")).env("TTA_TMUX", "/not/a/tmux");
+        command
+            .env_remove("HOME")
+            .env("TTA_SOCKET_PATH", temp.path().join("unused-socket"))
+            .env("TTA_TMUX", "/not/a/tmux");
         names(command)
     };
     assert_eq!(
@@ -146,11 +149,7 @@ fn project_completion_is_identity_aware_across_configured_roots() {
     // The environment layer drives completion identically to repeated --root.
     let json = format!(r#"["{}","{}"]"#, first.display(), second.display());
     assert_eq!(
-        inventory(
-            tta()
-                .env("TTA_ROOTS", &json)
-                .args(["--completion-candidates", "projects"])
-        ),
+        inventory(tta().env("TTA_ROOTS", &json).args(["--completion-candidates", "projects"])),
         "@1/shared\n@2/shared\nsolo-first\nsolo-second\n"
     );
     // One configured root preserves the established single-root shape.

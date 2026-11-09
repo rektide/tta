@@ -204,7 +204,10 @@ fn external_rekon_refuses_multi_root_creation_without_mutating_any_root() {
             .unwrap_err();
         let text = error.to_string();
         assert!(text.contains("external rekon adapter") && text.contains("rekon-native"), "{text}");
-        assert!(!first.join("fresh").exists() && !second.join("fresh").exists(), "refusal must precede generation");
+        assert!(
+            !first.join("fresh").exists() && !second.join("fresh").exists(),
+            "refusal must precede generation"
+        );
     }
     // An unqualified miss across two distinct roots is stopped earlier by the
     // destination guard; across one physical root (symlinked alias) the
@@ -229,7 +232,10 @@ fn external_rekon_refuses_multi_root_creation_without_mutating_any_root() {
         .unwrap_err();
     let text = error.to_string();
     assert!(text.contains("external rekon adapter") && text.contains("rekon-native"), "{text}");
-    assert!(!first.join("fresh").exists() && !second.join("fresh").exists(), "refusal must precede generation");
+    assert!(
+        !first.join("fresh").exists() && !second.join("fresh").exists(),
+        "refusal must precede generation"
+    );
 }
 
 #[cfg(feature = "scaffold-rekon")]

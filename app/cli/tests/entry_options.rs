@@ -104,31 +104,26 @@ fn repeated_roots_rank_globally_and_qualify_by_configured_slot() {
     fs::create_dir_all(temp.path().join("personal/long-work")).unwrap();
     fs::create_dir_all(temp.path().join("team/work")).unwrap();
     // The shortest basename wins globally; the first root has no priority.
-    let output = raw_tta(&temp)
-        .args(["--root", "personal", "--root", "team", "work"])
-        .output()
-        .unwrap();
+    let output = raw_tta(&temp).args(["--root", "personal", "--root", "team", "work"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let source = String::from_utf8(output.stdout).unwrap();
     assert!(source.contains(&format!("'-c' '{}'", temp.path().join("team/work").display())), "{source}");
     assert!(source.contains("'-s' 'work'"), "{source}");
     // A duplicate basename in two physical directories is actionable, not guessed.
     fs::create_dir(temp.path().join("personal/work")).unwrap();
-    let output = raw_tta(&temp)
-        .args(["--root", "personal", "--root", "team", "work"])
-        .output()
-        .unwrap();
+    let output = raw_tta(&temp).args(["--root", "personal", "--root", "team", "work"]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("ambiguous project fragment"), "{stderr}");
     assert!(stderr.contains("@1/work") && stderr.contains("@2/work"), "{stderr}");
     // The qualified selector observes only its configured root slot.
-    let output = raw_tta(&temp)
-        .args(["--root", "personal", "--root", "team", "@2/work"])
-        .output()
-        .unwrap();
+    let output = raw_tta(&temp).args(["--root", "personal", "--root", "team", "@2/work"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(String::from_utf8(output.stdout).unwrap().contains(&format!("'-c' '{}'", temp.path().join("team/work").display())));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(&format!("'-c' '{}'", temp.path().join("team/work").display()))
+    );
 }
 
 #[test]
@@ -147,7 +142,11 @@ fn root_environment_layers_replace_the_whole_list() {
             command.arg(arg);
         }
         let output = command.arg(argument).output().unwrap();
-        (output.status.success(), String::from_utf8_lossy(&output.stdout).into_owned(), String::from_utf8_lossy(&output.stderr).into_owned())
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
     };
     let json = r#"["json-a","json-b"]"#;
     // TTA_ROOTS replaces TTA_ROOT and PROJECTS_DIR as one active layer.

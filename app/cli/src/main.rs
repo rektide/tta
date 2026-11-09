@@ -200,11 +200,7 @@ fn run(mut args: Args) -> Result<ExitCode> {
             .map(|root| tta_runner::resolve::project_inventory(root, ""))
             .collect::<Result<Vec<_>, tta_launcher::ResolveError>>()?;
         let candidates = tta_launcher::projects::completion_candidates(&args.root, &inventories)?;
-        let bare: std::collections::BTreeSet<String> = candidates
-            .iter()
-            .filter(|candidate| !candidate.starts_with('@'))
-            .cloned()
-            .collect();
+        let bare: std::collections::BTreeSet<String> = candidates.iter().filter(|candidate| !candidate.starts_with('@')).cloned().collect();
         print_candidates(
             candidates
                 .into_iter()
