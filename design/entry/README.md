@@ -8,6 +8,8 @@ author: model:openai/gpt-6-astra#high
 date: 2026-11-09
 updated: {by: "model:openai/gpt-6.1-sol#high", at: "2026-11-09"}
 sources:
+  - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
+    title: Index the machine-owned discovery stage and its deletion-delta witness
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Record parent-conveyed human approval and connect the implemented internal kernel and discovery handoff
   - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
@@ -27,11 +29,17 @@ sources:
   concrete journeys and staged landing. Commissioned after the human clarified
   that the intended architecture pass was a substantial redesign. Its independent
   proposal remains a historical argument; approval and actual delivery standing
-  are recorded in the implementation report below.
+  are recorded in the implementation reports below.
 - [Retained existing-work kernel](kernel0.gpt61sol.md): first implementation stage,
   exact request correlation, semantic OpenView/EnterView, fresh binding and coherent
   export. Includes engine-fit evidence, source-inspected deletion obligations and
   the next G discovery-stage handoff. Not yet the public CLI/consumer path.
+- [Machine-owned discovery and creation](discovery0.glm53m.md): second stage —
+  chart-owned root scope/read loop, guarded physical ranking, creation ladder
+  with validated-generator requirements and one materialization, semantic
+  StartProject/ScaffoldAndStart with fresh route/destination binding and
+  short-circuit lowering. Includes the deletion-delta witness and the next
+  hosts-stage handoff. Still internal; the old production path awaits cutover.
 - [Generated attempt graph](/doc/entry/attempt-graph.md) and
   [focused kernel verification](/verification/entry/README.md): executable structure
   and supplied-facts evidence for the internal replacement, not the old replay graph.
