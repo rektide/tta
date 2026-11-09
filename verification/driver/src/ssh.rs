@@ -92,7 +92,7 @@ struct Fixture {
 impl Fixture {
     fn new(timeout: Duration) -> Result<Self> {
         ensure!(!timeout.is_zero(), "positive timeout required");
-        let directory = tempfile::Builder::new().prefix("tta-ssh-").tempdir_in("/tmp/opencode")?;
+        let directory = tempfile::Builder::new().prefix("tta-ssh-").tempdir_in(super::isolation::scratch_root())?;
         let base = directory.path();
         let socket = base.join("tmux.sock");
         let root = base.join("target projects ' #;");

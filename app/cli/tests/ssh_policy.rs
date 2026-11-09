@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn tta() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tta"));
     for (key, _) in std::env::vars_os() {
@@ -39,7 +41,7 @@ fn ssh_probe_limits_are_positive_and_require_ssh() {
 
 #[test]
 fn ssh_probe_cli_over_env_limits_reach_capture_without_handoff() {
-    let dir = tempfile::Builder::new().prefix("tta-ssh-policy-").tempdir_in("/tmp/opencode").unwrap();
+    let dir = common::scratch_dir("tta-ssh-policy-");
     let carrier = dir.path().join("ssh");
     std::fs::write(&carrier, "#!/bin/sh\n[ \"$1\" = -T ] || { touch \"$MUTATION\"; exit 91; }\nprintf 'transport evidence\\n' >&2\ncase \"$MODE\" in\n slow) sleep 0.15; printf 'completed malformed probe';;\n flood) head -c 2048 /dev/zero;;\nesac\n").unwrap();
     std::fs::set_permissions(&carrier, std::fs::Permissions::from_mode(0o700)).unwrap();

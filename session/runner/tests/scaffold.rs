@@ -2,6 +2,11 @@ use std::error::Error as _;
 #[cfg(feature = "scaffold-rekon")]
 use std::{fs, path::Path};
 
+// Only the generator-prefix fixture below needs the scratch directory, and it
+// is feature-gated; keep the module linkable in every feature combination.
+#[allow(dead_code)]
+mod common;
+
 #[cfg(feature = "scaffold-rekon")]
 use tta_launcher::Selection;
 use tta_launcher::{ResolveError, Session};
@@ -194,7 +199,7 @@ fn generator_prefix_runs_before_creation_and_failure_blocks_the_client() {
 
     for shell in [false, true] {
         for fail in [false, true] {
-            let temp = tempfile::Builder::new().prefix("tta-scaffold-").tempdir_in("/tmp/opencode").unwrap();
+            let temp = common::scratch_dir("tta-scaffold-");
             let root = temp.path().join("projects");
             let bin = temp.path().join("bin");
             fs::create_dir(&root).unwrap();

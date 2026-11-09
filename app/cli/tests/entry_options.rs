@@ -3,6 +3,8 @@
 use std::fs;
 use std::process::Command;
 
+mod common;
+
 fn tta(temp: &tempfile::TempDir) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tta"));
     for (key, _) in std::env::vars_os() {
@@ -22,7 +24,7 @@ fn tta(temp: &tempfile::TempDir) -> Command {
 
 #[test]
 fn explicit_dir_is_frozen_and_startup_flags_are_not_launcher_flags() {
-    let temp = tempfile::Builder::new().prefix("tta-cli-entry-").tempdir_in("/tmp/opencode").unwrap();
+    let temp = common::scratch_dir("tta-cli-entry-");
     fs::create_dir(temp.path().join("project")).unwrap();
     let output = tta(&temp)
         .args(["--group", "--dir", "initial", "project", "--", "program", "--dir", "literal", "a;", ""])
@@ -39,7 +41,7 @@ fn explicit_dir_is_frozen_and_startup_flags_are_not_launcher_flags() {
 
 #[test]
 fn window_name_defaults_to_the_session_and_overrides_or_disables() {
-    let temp = tempfile::Builder::new().prefix("tta-cli-window-").tempdir_in("/tmp/opencode").unwrap();
+    let temp = common::scratch_dir("tta-cli-window-");
     fs::create_dir(temp.path().join("project")).unwrap();
     let plan = |extra: &[&str]| {
         let mut command = tta(&temp);
@@ -70,7 +72,7 @@ fn window_name_defaults_to_the_session_and_overrides_or_disables() {
 
 #[test]
 fn double_dash_still_allows_a_fragment_starting_with_hyphen() {
-    let temp = tempfile::Builder::new().prefix("tta-cli-entry-").tempdir_in("/tmp/opencode").unwrap();
+    let temp = common::scratch_dir("tta-cli-entry-");
     fs::create_dir(temp.path().join("-project")).unwrap();
     let output = tta(&temp).args(["--", "-project", "program", "--flag", "space ;"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -81,7 +83,7 @@ fn double_dash_still_allows_a_fragment_starting_with_hyphen() {
 
 #[test]
 fn existing_grouped_plan_ignores_startup_and_preserves_session_first_matching() {
-    let temp = tempfile::Builder::new().prefix("tta-cli-entry-").tempdir_in("/tmp/opencode").unwrap();
+    let temp = common::scratch_dir("tta-cli-entry-");
     let socket = temp.path().join("sock");
     let tmux = || {
         let mut command = Command::new("tmux");

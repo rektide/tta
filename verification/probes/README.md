@@ -59,7 +59,9 @@ owned fixtures. There is still no runner-backed execution.
   adversarial quoted/newline decoy names; invalid UTF-8 registry text fails inside
   Registry decoding. Neither becomes a clean miss or a ready action.
 
-Prerequisites: writable `/tmp/opencode`, POSIX `/bin/sh`, GNU find/stat and Git
+Prerequisites: a usable fixture scratch root — `TTA_TEST_TMPDIR` overrides,
+then writable `/tmp/opencode`, then the system temp directory — plus POSIX
+`/bin/sh`, GNU find/stat and Git
 at the installed Linux tool paths. Missing tools are failures, not successful
 skips. The fake tmux returns exact owned-endpoint absence; no real server is
 addressed. Fixture files are private temporary directories removed on return.

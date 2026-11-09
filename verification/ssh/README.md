@@ -28,8 +28,10 @@ sources:
 This is **actual `/usr/bin/ssh` → private `/usr/sbin/sshd`**, not a shell standing
 in for SSH. It contacts only its exclusively owned high loopback port. Private
 host/client keys, authorized keys, known_hosts and both configs live beneath a
-unique `/tmp/opencode/tta-ssh-*` directory. It does not change system SSH config,
-use user host connections, or address the user's default tmux server.
+unique fixture directory in the owned scratch root (`TTA_TEST_TMPDIR`, then
+`/tmp/opencode` when writable, then the system temp directory). It does not
+change system SSH config, use user host connections, or address the user's
+default tmux server.
 
 ```sh
 cargo build -p tta --all-features

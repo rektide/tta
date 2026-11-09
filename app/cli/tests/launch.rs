@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 struct Fixture {
     temp: tempfile::TempDir,
     socket: PathBuf,
@@ -21,7 +23,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::Builder::new().prefix("tta-launch-").tempdir_in("/tmp/opencode").unwrap();
+        let temp = common::scratch_dir("tta-launch-");
         let socket = temp.path().join("sock");
         assert!(!socket.exists());
         fs::create_dir(temp.path().join("records")).unwrap();

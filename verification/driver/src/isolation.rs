@@ -1,17 +1,33 @@
 //! Reusable read-only preflight for exclusively owned local/loopback fixtures.
 //! Validate the result before *any* mutation, and retain it in the report.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, ensure};
 
+/// Owned scratch root for exclusively isolated fixtures: `TTA_TEST_TMPDIR`
+/// overrides; `/tmp/opencode` when the current user can create directories
+/// there; the system temp directory otherwise. Fixtures stay private through
+/// uniquely named subdirectories below this root.
+pub fn scratch_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("TTA_TEST_TMPDIR").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if tempfile::Builder::new().prefix("tta-scratch-probe-").tempdir_in("/tmp/opencode").is_ok() {
+        return PathBuf::from("/tmp/opencode");
+    }
+    std::env::temp_dir()
+}
+
 pub fn verify_absence(socket: &Path, output: &crate::ProcessOutput) -> Result<()> {
+    let root = scratch_root();
     ensure!(
         !socket.components().any(|part| part == std::path::Component::ParentDir),
         "owned fixture socket cannot contain '..'"
     );
     ensure!(
-        socket.is_absolute() && socket.starts_with("/tmp/opencode") && socket.parent() != Some(Path::new("/tmp/opencode")),
-        "fixture requires a private absolute socket below /tmp/opencode: {socket:?}"
+        socket.is_absolute() && socket.starts_with(&root) && socket.parent() != Some(root.as_path()),
+        "fixture requires a private absolute socket below {}: {socket:?}",
+        root.display()
     );
     ensure!(
         output.complete && output.status == Some(1) && output.stdout.is_empty(),
@@ -32,21 +48,21 @@ mod tests {
     use super::*;
     #[test]
     fn wrong_endpoint_live_empty_server_or_incomplete_output_is_not_proof() {
-        let socket = Path::new("/tmp/opencode/owned-fixture/socket");
+        let socket = scratch_root().join("owned-fixture/socket");
         let mut output = crate::ProcessOutput {
             complete: true,
             status: Some(1),
             stderr: format!("no server running on {}\n", socket.display()),
             ..Default::default()
         };
-        verify_absence(socket, &output).unwrap();
+        verify_absence(&socket, &output).unwrap();
         output.stderr = "no server running on /other\n".into();
-        assert!(verify_absence(socket, &output).is_err());
+        assert!(verify_absence(&socket, &output).is_err());
         output.stderr = "no sessions\n".into();
-        assert!(verify_absence(socket, &output).is_err());
+        assert!(verify_absence(&socket, &output).is_err());
         output.stderr = format!("no server running on {}\n", socket.display());
         output.complete = false;
-        assert!(verify_absence(socket, &output).is_err());
-        assert!(verify_absence(Path::new("/tmp/user/socket"), &output).is_err());
+        assert!(verify_absence(&socket, &output).is_err());
+        assert!(verify_absence(Path::new("/home/user/socket"), &output).is_err());
     }
 }

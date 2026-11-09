@@ -2,6 +2,8 @@
 //! Cleanup kills individual sessions only. No default endpoint is ever used.
 #![cfg(unix)]
 
+mod common;
+
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
@@ -22,7 +24,7 @@ struct Server {
 
 impl Server {
     fn new() -> Self {
-        let directory = tempfile::Builder::new().prefix("tta-satellites-").tempdir_in("/tmp/opencode").unwrap();
+        let directory = common::scratch_dir("tta-satellites-");
         let socket = directory.path().join("sock");
         let server = Self { directory, socket };
         let missing = server.command().arg("ls").output().unwrap();

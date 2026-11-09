@@ -542,7 +542,7 @@ struct Fixture {
 impl Fixture {
     fn new(timeout: Duration) -> Result<Self> {
         ensure!(!timeout.is_zero(), "timeout must be positive");
-        let directory = tempfile::Builder::new().prefix("tta-accept-").tempdir_in("/tmp/opencode")?;
+        let directory = tempfile::Builder::new().prefix("tta-accept-").tempdir_in(isolation::scratch_root())?;
         let socket = directory.path().join("socket");
         let root = directory.path().join("projects ' #[literal];");
         let project = root.join("verify-project");

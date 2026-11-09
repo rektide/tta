@@ -141,9 +141,23 @@ fn shell_source(log: &Path, home: &Path, root: &Path, socket: &Path, registry: &
     ))
 }
 
+/// Owned scratch root for runner-free fixtures: `TTA_TEST_TMPDIR` overrides;
+/// `/tmp/opencode` when the current user can create directories there; the
+/// system temp directory otherwise. Each fixture makes its own private
+/// uniquely named directory below this root.
+fn scratch_root() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("TTA_TEST_TMPDIR").filter(|value| !value.is_empty()) {
+        return path.into();
+    }
+    if tempfile::Builder::new().prefix("tta-scratch-probe-").tempdir_in("/tmp/opencode").is_ok() {
+        return "/tmp/opencode".into();
+    }
+    std::env::temp_dir()
+}
+
 impl Fixture {
     fn new(shell_name: &str, registry_name: &str, registry_bytes: &[u8]) -> Result<Self> {
-        let directory = tempfile::Builder::new().prefix("tta-ssh-regress-").tempdir_in("/tmp/opencode")?;
+        let directory = tempfile::Builder::new().prefix("tta-ssh-regress-").tempdir_in(scratch_root())?;
         let base = directory.path();
         let root = base.join("target projects ' #;");
         let invocation = base.join("invocation dir");
@@ -234,8 +248,9 @@ pub struct Report {
 }
 
 /// Execute the controlled local fixtures and return evidence even on failure.
-/// Requires /tmp/opencode, POSIX sh, GNU find/stat and Git. No SSH or real tmux
-/// is contacted; only the emitted observations run, never the launch action.
+/// Requires a usable fixture scratch root (`TTA_TEST_TMPDIR`, `/tmp/opencode`,
+/// or the system temp directory), POSIX sh, GNU find/stat and Git. No SSH or
+/// real tmux is contacted; only the emitted observations run, never the launch action.
 pub fn exercise() -> Report {
     let mut report = Report {
         kind: "runner-free public-API probe round-trip (stdlib process carrier, not SSH)",

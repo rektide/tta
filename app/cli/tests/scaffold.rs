@@ -3,6 +3,8 @@
 use std::fs;
 use std::process::{Command, Output};
 
+mod common;
+
 fn binary() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tta"));
     for (key, _) in std::env::vars_os() {
@@ -30,7 +32,7 @@ fn tta(temp: &tempfile::TempDir) -> Command {
 }
 
 fn fixture() -> tempfile::TempDir {
-    let temp = tempfile::Builder::new().prefix("tta-scaffold-cli-").tempdir_in("/tmp/opencode").unwrap();
+    let temp = common::scratch_dir("tta-scaffold-cli-");
     fs::create_dir(temp.path().join("projects")).unwrap();
     fs::create_dir_all(temp.path().join("config/tta")).unwrap();
     fs::write(temp.path().join("config/tta/config.toml"), "[scaffold.generators.rk]\nadapter = 'rekon'\n").unwrap();

@@ -7,6 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
+mod common;
+
 use tta_command::{Expression, Handoff, Word};
 use tta_launcher::{ClientMode, Selection, Session, launch};
 use tta_runner::backend::{self, SessionLookup};
@@ -20,7 +22,7 @@ struct Server {
 
 impl Server {
     fn cold() -> Self {
-        let directory = tempfile::Builder::new().prefix("tta-server-").tempdir_in("/tmp/opencode").unwrap();
+        let directory = common::scratch_dir("tta-server-");
         let socket = directory.path().join("s");
         Self {
             directory,
