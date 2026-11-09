@@ -6,7 +6,10 @@ resource: /doc/entry/README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
+updated: {by: "model:openai/gpt-6.1-sol#high", at: "2026-11-09"}
 sources:
+  - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
+    title: Distinguish the approved internal rewrite and retained kernel from this still-public replay contract
   - resource: opencode://ses_e3db9cabaffeSpjYjLIjvqdbPO
     title: Link the newly commissioned architectural redesign while preserving this implemented contract
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
@@ -288,12 +291,16 @@ preserves the defect evidence this contract must not erase. Current acceptance:
 
 ## Related work organization
 
-The later [entry-attempt redesign proposal](/design/entry/redesign0.gpt6a.md)
+The later [entry-attempt redesign](/design/entry/redesign0.gpt6a.md)
 responds to the human's clarified request for a substantial state-machine-powered
-rewrite. It proposes a new orchestration owner, domain model and effect lifecycle;
-it is under review and does not change the implemented contract above. The
+rewrite. The human approved its new orchestration owner, domain model, stronger
+binding and effect lifecycle. The [first retained kernel](/design/entry/kernel0.gpt61sol.md)
+is implemented internally through existing-work export, with a
+[generated structural graph](attempt-graph.md). Public CLI/consumer entry still
+uses the contract above until coherent cutover; this is not a public facade over
+the new actor. The
 [inquiry index](/design/entry/README.md) connects the previous stages and current
-destination proposal.
+implementation standing.
 
 The [capability-oriented ticket pitch](/design/entry/ticket-surface0.gpt6a.md)
 proposes navigation from user-visible entry, discovery, creation and remote work
