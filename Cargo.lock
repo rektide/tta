@@ -941,6 +941,7 @@ name = "tta-scaffold-rekon"
 version = "0.7.0"
 dependencies = [
  "thiserror 2.0.21",
+ "toml",
  "tta-command",
 ]
 

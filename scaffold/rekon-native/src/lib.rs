@@ -107,6 +107,45 @@ pub struct Defaults {
     pub license: Option<String>,
 }
 
+/// Which observed target defaults materialization still needs after option
+/// validation. Author falls back to observed identity only when the entry
+/// does not set a nonempty one; license when the entry does not set one.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DefaultsNeeds {
+    pub author: bool,
+    pub license: bool,
+}
+
+/// Destination contract declared by this adapter: creation happens exactly at
+/// the selected root/name destination (`mkdir` under the supplied root).
+pub const SELECTS_OWN_DESTINATION: bool = false;
+
+/// Validate this generator's options — unknown fields, branch, remote names,
+/// templates — without materializing anything, and report the observed target
+/// defaults its single later materialization will need.
+pub fn validate(options: &Table) -> Result<DefaultsNeeds, Error> {
+    let options = Options::deserialize(toml::Value::Table(options.clone())).map_err(|error| Error::Options(error.to_string()))?;
+    validate_branch(&options.branch)?;
+    for (name, template) in options.remotes.as_ref().map(std::collections::BTreeMap::iter).into_iter().flatten() {
+        if name.is_empty() || name.chars().any(|character| character.is_control() || character.is_whitespace()) {
+            return Err(Error::Remote(name.clone()));
+        }
+        if !template.is_empty() {
+            validate_template(template)?;
+        }
+    }
+    for file in &options.starter_files {
+        validate_template(file)?;
+    }
+    if !options.package_json {
+        return Ok(DefaultsNeeds::default());
+    }
+    Ok(DefaultsNeeds {
+        author: !options.author.as_deref().is_some_and(|value| !value.is_empty()),
+        license: options.license.is_none(),
+    })
+}
+
 pub fn scaffold(project: &str, root: &Path, options: &Table, defaults: &Defaults) -> Result<Expression, Error> {
     let options = Options::deserialize(toml::Value::Table(options.clone())).map_err(|error| Error::Options(error.to_string()))?;
     validate_branch(&options.branch)?;
@@ -384,6 +423,33 @@ dl = "github.com:rektide/dl-{name}"
         assert_eq!(resolve_license(Some("Apache-2.0"), Some("MIT")), "Apache-2.0");
         assert_eq!(resolve_license(None, Some("BSD-2-Clause")), "BSD-2-Clause");
         assert_eq!(resolve_license(Some(""), None), "MIT");
+    }
+
+    #[test]
+    fn validation_splits_from_materialization_and_reports_default_needs() {
+        assert!(!SELECTS_OWN_DESTINATION);
+        // A bare entry needs both observed defaults.
+        assert_eq!(validate(&Table::new()).unwrap(), DefaultsNeeds { author: true, license: true });
+        // Entry parameters satisfy them; empty author still falls back.
+        assert_eq!(
+            validate(&options("author = \"Someone\"\nlicense = \"Apache-2.0\"\n")).unwrap(),
+            DefaultsNeeds::default()
+        );
+        // An empty entry author still falls back to observation; a present
+        // license key, even empty, means unset-by-observation.
+        assert_eq!(validate(&options("author = \"\"\nlicense = \"\"\n")).unwrap(), DefaultsNeeds { author: true, license: false });
+        // package.json disabled means neither is needed.
+        assert_eq!(validate(&options("package-json = false\n")).unwrap(), DefaultsNeeds::default());
+        // Option mistakes fail validation before any materialization.
+        for table in [
+            "unknown-key = 1",
+            "branch = \"release.1\"",
+            "[remotes]\n\"bad name\" = \"https://x/{name}\"",
+            "[remotes]\norigin = \"https://x/{project}\"",
+            "starter-files = [\"{name}.{ext}\"]",
+        ] {
+            assert!(validate(&options(table)).is_err(), "{table}");
+        }
     }
 
     #[test]

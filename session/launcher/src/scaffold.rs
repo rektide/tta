@@ -183,6 +183,30 @@ pub struct Entry {
     /// Per-entry adapter options, validated by the adapter itself.
     pub options: Table,
     scaffold: Adapter,
+    validate: AdapterValidate,
+    destination: DestinationContract,
+}
+
+/// Where a generator's adapter puts the new project, declared by the adapter
+/// implementation and carried on the validated generator. Creation policy
+/// refuses destinations the contract cannot hold authoritative.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DestinationContract {
+    /// The adapter creates exactly the selected root/name destination.
+    SelectedRoot,
+    /// The adapter's own program decides where the project lands; tta's
+    /// selected root does not govern it (declared by the external rekon
+    /// adapter, whose script uses a hardcoded location).
+    AdapterDecided,
+}
+
+/// A validated generator specification: adapter options already checked, with
+/// the observed-default requirements and destination contract it declares.
+/// Materialization happens once, later, with actual observed facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Validated {
+    pub needs_defaults: (bool, bool),
+    pub destination: DestinationContract,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -220,31 +244,52 @@ fn compiled_adapters() -> &'static [&'static str] {
 }
 
 type Adapter = fn(&str, &Path, &Table, &Defaults) -> Result<Expression>;
+type AdapterValidate = fn(&Table) -> Result<(bool, bool)>;
 
 // Keep feature-dependent dispatch out of the insertion loop so a build with no
 // adapters still typechecks without unreachable-code/unused-mut warnings.
-fn adapter(name: &str) -> Option<Adapter> {
+fn adapter(name: &str) -> Option<(Adapter, AdapterValidate, DestinationContract)> {
     match name {
         #[cfg(feature = "scaffold-rekon")]
-        "rekon" => Some(|project, root, options, _defaults| {
-            if !options.is_empty() {
-                bail!("generator uses adapter \"rekon\", which takes no options; found {options:?}");
-            }
-            tta_scaffold_rekon::scaffold(project, root).map_err(anyhow::Error::from)
-        }),
+        "rekon" => Some((
+            |project, root, options, _defaults| {
+                tta_scaffold_rekon::validate(options).map_err(anyhow::Error::from)?;
+                tta_scaffold_rekon::scaffold(project, root).map_err(anyhow::Error::from)
+            },
+            |options| {
+                let needs = tta_scaffold_rekon::validate(options)?;
+                Ok((needs.author, needs.license))
+            },
+            if tta_scaffold_rekon::SELECTS_OWN_DESTINATION {
+                DestinationContract::AdapterDecided
+            } else {
+                DestinationContract::SelectedRoot
+            },
+        )),
         #[cfg(feature = "scaffold-rekon-native")]
-        "rekon-native" => Some(|project, root, options, defaults| {
-            tta_scaffold_rekon_native::scaffold(
-                project,
-                root,
-                options,
-                &tta_scaffold_rekon_native::Defaults {
-                    author: defaults.author.clone(),
-                    license: defaults.license.clone(),
-                },
-            )
-            .map_err(anyhow::Error::from)
-        }),
+        "rekon-native" => Some((
+            |project, root, options, defaults| {
+                tta_scaffold_rekon_native::scaffold(
+                    project,
+                    root,
+                    options,
+                    &tta_scaffold_rekon_native::Defaults {
+                        author: defaults.author.clone(),
+                        license: defaults.license.clone(),
+                    },
+                )
+                .map_err(anyhow::Error::from)
+            },
+            |options| {
+                let needs = tta_scaffold_rekon_native::validate(options)?;
+                Ok((needs.author, needs.license))
+            },
+            if tta_scaffold_rekon_native::SELECTS_OWN_DESTINATION {
+                DestinationContract::AdapterDecided
+            } else {
+                DestinationContract::SelectedRoot
+            },
+        )),
         _ => None,
     }
 }
@@ -261,8 +306,24 @@ impl Entry {
         (author, license)
     }
 
+    /// Validate this generator's adapter options and report its declared
+    /// default requirements and destination contract, without materializing
+    /// its program. The single later materialization receives actual facts.
+    pub fn validated(&self) -> Result<Validated> {
+        let needs_defaults = (self.validate)(&self.options)?;
+        Ok(Validated {
+            needs_defaults,
+            destination: self.destination,
+        })
+    }
+
     pub fn scaffold(&self, project: &str, root: &Path, defaults: &Defaults) -> Result<Expression> {
         (self.scaffold)(project, root, &self.options, defaults)
+    }
+
+    /// The destination contract this generator's adapter declared.
+    pub fn destination_contract(&self) -> DestinationContract {
+        self.destination
     }
 }
 
@@ -286,7 +347,7 @@ impl Config {
                 bail!("scaffold configuration {description}: generator names and adapters cannot be empty");
             }
             let adapter_name = generator.adapter;
-            let scaffold = adapter(&adapter_name).ok_or_else(|| anyhow!(
+            let (scaffold, validate, destination) = adapter(&adapter_name).ok_or_else(|| anyhow!(
                     "scaffold configuration {}: generator {name:?} uses adapter {other:?}, which this tta build does not include; compiled adapters: {compiled:?}",
                     description,
                     other = adapter_name,
@@ -299,6 +360,8 @@ impl Config {
                     adapter: adapter_name,
                     options: generator.options,
                     scaffold,
+                    validate,
+                    destination,
                 },
             );
         }
