@@ -669,6 +669,23 @@ fn read_text(path: &Path) -> std::io::Result<String> {
     String::from_utf8(bytes).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
+/// Bounded tail read for artifacts whose legitimate size grows with the probe
+/// count, such as the VERBOSE sshd log: the retained report stays capped, and
+/// dropped earlier content is announced instead of failing the whole cleanup.
+pub(crate) fn read_text_tail(path: &Path) -> std::io::Result<String> {
+    let size = std::fs::metadata(path)?.len();
+    if size <= OUTPUT_LIMIT as u64 {
+        return read_text(path);
+    }
+    use std::io::Seek;
+    let mut file = std::fs::File::open(path)?;
+    file.seek(std::io::SeekFrom::Start(size - OUTPUT_LIMIT as u64))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(format!("[retained the final {OUTPUT_LIMIT} bytes of {size}]\n{text}"))
+}
+
 impl Buffer {
     fn push(&mut self, bytes: &[u8]) {
         for byte in bytes {

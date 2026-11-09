@@ -232,6 +232,34 @@ fn native_lone_executable_with_spaces_and_semicolon_is_not_shell_source() {
 
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
 #[test]
+fn repeated_roots_select_globally_and_launch_the_second_root_over_real_tmux() {
+    let mut fixture = Fixture::new();
+    fixture.attach();
+    let second = fixture.temp.path().join("second root");
+    fs::create_dir_all(second.join("work")).unwrap();
+    fs::create_dir(fixture.temp.path().join("projects/long-work")).unwrap();
+    // The shortest basename wins across both configured roots; the repeated
+    // second root is not lower priority than the fixture's first root.
+    let output = fixture
+        .tta()
+        .arg("--root")
+        .arg(&second)
+        .args(["work", "--", "/bin/sh", "-c", "pwd > cwd-marker; exec sleep 120"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(fixture.has_recorded("switch-client"));
+    wait(|| second.join("work/cwd-marker").exists());
+    assert_eq!(
+        fs::read_to_string(second.join("work/cwd-marker")).unwrap().trim_end(),
+        second.join("work").to_str().unwrap()
+    );
+    assert_eq!(fixture.run(&["list-sessions", "-F", "#{session_name}"]), "origin\nwork");
+    assert!(!fixture.temp.path().join("projects/work").exists());
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
+#[test]
 fn print_shell_stays_observation_only_for_a_native_eligible_launch() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.temp.path().join("projects/project")).unwrap();

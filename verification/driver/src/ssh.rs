@@ -305,6 +305,7 @@ impl Fixture {
         builder.env("XDG_CONFIG_HOME", self.directory.path().join("local-wrong-config"));
         builder.env("XDG_RUNTIME_DIR", self.directory.path().join("runtime"));
         builder.env("TTA_ROOT", "/local/wrong/projects");
+        builder.env("TTA_ROOTS", r#"["/local/wrong/one","/local/wrong/two"]"#);
         builder.env("TTA_CONFIG", "/local/wrong/config.toml");
         builder.env("TTA_TMUX", "/local/wrong/tmux");
         builder.env("TTA_SOCKET_PATH", "/local/wrong/socket");
@@ -422,7 +423,7 @@ impl Fixture {
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
-        match super::read_text(&self.log) {
+        match super::read_text_tail(&self.log) {
             Ok(log) => report.sshd_log = log,
             Err(error) => {
                 report.cleanup.push(json!({"operation": "read bounded sshd log", "failure": error.to_string()}));
@@ -609,6 +610,80 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     }
     fixture.setup.environment.pop();
 
+    // Multi-root entry: target-local TTA_ROOTS layering, explicit list
+    // override, qualified selection and safe destination, all over real SSH.
+    let second_root = fixture.directory.path().join("second 'root;");
+    std::fs::create_dir_all(second_root.join("shared-work"))?;
+    std::fs::create_dir_all(second_root.join("elsewhere"))?;
+    std::fs::create_dir(fixture.root.join("shared-work"))?;
+    fixture.setup.environment.push(target::Environment {
+        name: "TTA_ROOTS".into(),
+        value: Some(serde_json::to_string(&vec![fixture.root.clone(), second_root.clone()])?),
+    });
+    // A basename duplicated across distinct physical roots stays actionable.
+    let ambiguous = fixture.prepare(target::Options::builder().argument("shared-work".into()).build(), report);
+    let error = format!("{:#}", ambiguous.unwrap_err());
+    ensure!(
+        error.contains("ambiguous project fragment") && error.contains("@1/shared-work") && error.contains("@2/shared-work"),
+        "duplicate basename across roots was guessed: {error}"
+    );
+    // Target-local TTA_ROOTS drives discovery: the second root's unique
+    // project is found while contradictory caller values stay local.
+    let only_second = fixture.prepare(target::Options::builder().argument("elsewhere".into()).build(), report)?;
+    ensure!(
+        matches!(only_second.launch.selection, Selection::Project { directory, .. } if directory == second_root.join("elsewhere")),
+        "target TTA_ROOTS did not supply both roots"
+    );
+    // An explicit root list replaces the whole target TTA_ROOTS layer: with
+    // only the second root configured, the duplicate basename resolves there.
+    let explicit = fixture.prepare(
+        target::Options::builder()
+            .argument("shared-work".into())
+            .roots(vec![second_root.clone()])
+            .build(),
+        report,
+    )?;
+    ensure!(
+        matches!(&explicit.launch.selection, Selection::Project { directory, .. } if directory == &second_root.join("shared-work")),
+        "explicit root list did not replace target TTA_ROOTS"
+    );
+    fixture.terminal(fixture.command_builder(&explicit.command()?), "shared-work", report, false, false)?;
+    // An unqualified clean miss across two distinct physical roots never
+    // chooses a destination; a qualified selector creates in its own root.
+    let ambiguous_destination = fixture.prepare(
+        target::Options::builder()
+            .argument("multi-created".into())
+            .default_scaffold("default".into())
+            .build(),
+        report,
+    );
+    let error = format!("{:#}", ambiguous_destination.unwrap_err());
+    ensure!(
+        error.contains("cannot choose a scaffold destination") && error.contains("@1/multi-created") && error.contains("@2/multi-created"),
+        "destination ambiguity was resolved silently: {error}"
+    );
+    ensure!(
+        !fixture.root.join("multi-created").exists() && !second_root.join("multi-created").exists(),
+        "ambiguous destination request mutated a root"
+    );
+    let qualified_create = fixture.prepare(
+        target::Options::builder()
+            .argument("@2/multi-created".into())
+            .default_scaffold("default".into())
+            .startup(vec!["/usr/bin/sleep".into(), "180".into()])
+            .build(),
+        report,
+    )?;
+    ensure!(
+        matches!(&qualified_create.launch.selection, Selection::Create { directory, .. } if directory == &second_root.join("multi-created")),
+        "qualified selector did not select the second root"
+    );
+    fixture.terminal(fixture.command_builder(&qualified_create.command()?), "multi-created", report, false, false)?;
+    let package = fixture.remote(&format!("cat -- {}", quote(second_root.join("multi-created/package.json").into_os_string())?))?;
+    ensure!(package.success, "qualified creation missing in the selected root: {package:?}");
+    report.checks.push(json!({"check": "real SSH multi-root: target TTA_ROOTS layering, explicit override, duplicate ambiguity, qualified selection and root-honoring creation", "second_root": second_root}));
+    fixture.setup.environment.pop();
+
     let generated = fixture.prepare(
         target::Options::builder()
             .argument("generated".into())
@@ -791,7 +866,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     }
     let calls = std::fs::read(fixture.directory.path().join("tmux-argv"))?;
     let new_sessions = calls.split(|b| *b == 0).filter(|word| *word == b"new-session").count();
-    let expected = if config.consumer.is_some() { 10 } else { 8 };
+    let expected = if config.consumer.is_some() { 12 } else { 10 };
     ensure!(new_sessions == expected, "unexpected tmux creation replay: {new_sessions}, expected {expected}");
     report.checks.push(json!({"check": "recorded target tmux argv: exactly one mutation invocation per authorized attempt", "new_session_invocations": new_sessions, "argv_bytes": calls}));
     Ok(())
