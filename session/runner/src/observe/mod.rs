@@ -1,4 +1,4 @@
-//! Internal host integration for the owned protocol. Interpreters acquire one
+//! Host integration for the owned protocol. Interpreters acquire one
 //! requested fact; the one read driver never chooses work or entry policy.
 pub mod filesystem;
 pub mod local;

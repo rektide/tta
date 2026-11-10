@@ -1,4 +1,5 @@
-//! Runner-free observation contracts, matching, registry parsing and launch planning.
+//! Runner-free retained entry and catalog protocols, semantic actions and pure
+//! matching, context policy, registry parsing and worker-free probe codecs.
 #![forbid(unsafe_code)]
 
 pub mod entry;

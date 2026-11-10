@@ -8,7 +8,6 @@ use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};

@@ -1,5 +1,5 @@
 //! Pure project algorithms used by the actor; scheduling is witnessed by entry
-//! tests, not a second resolve/NeedProjects API.
+//! tests, not a second discovery scheduler.
 use crate::{ProjectEntry, ProjectInventory, ResolveError, projects};
 use std::path::{Path, PathBuf};
 fn inventory(request: &str, physical: &str, entries: &[(&str, &str)]) -> ProjectInventory {

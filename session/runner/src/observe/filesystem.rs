@@ -11,7 +11,7 @@ struct Project {
 }
 
 /// A dangling symlink is present. Only NotFound authorizes fresh creation;
-/// inaccessible paths and every other inspection failure stop the workflow.
+/// inaccessible paths and every other inspection failure stop the attempt.
 pub fn destination_state(path: &Path) -> Result<DestinationEvidence, ResolveError> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(DestinationEvidence::Present),

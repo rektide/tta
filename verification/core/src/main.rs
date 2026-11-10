@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tta_core_witness::{Scenario, exercise};
 
 #[derive(Parser)]
-#[command(about = "Replay supplied facts and check a launch without a runner or tmux")]
+#[command(about = "Drive fresh entry attempts with supplied facts, without a runner or tmux")]
 struct Args {
     #[arg(long, value_enum)]
     scenario: Option<Scenario>,

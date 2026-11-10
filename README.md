@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-10, by: "model:zai-coding-plan/glm-5.3#max" }
+updated: { at: 2026-11-10, by: "model:openai/gpt-6.1-sol#high" }
 sources:
+  - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
+    title: Complete 0.8.0 runtime deletion and actual SSH/consumer acceptance; mark retired API examples pending the separately commissioned documentation consolidation
   - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
     title: Complete multi-root CLI/environment/completion integration, external-rekon boundary, SSH acceptance and configurable fixture scratch for tta-project-roots
   - resource: opencode://ses_e3d4bcd7dfferOAqdJlG648aqj
@@ -40,8 +42,8 @@ sources:
     title: Parent commissions native tmax launch improvement and then clarifies independent per-terminal window selection as the primary outcome
   - resource: opencode://ses_e9a607209ffeABss72x2fVkW70
     title: Rebuild the README around project-entry workflows and tmux session groups; inspect current planner, satellite tests, scaffold adapters, command expressions and completion to correct stale contracts
-  - resource: /session/launcher/src/plan.rs
-    title: Current attach/switch plans, explicit satellite naming, startup argv and initial-directory behavior
+  - resource: /session/launcher/src/entry/action.rs
+    title: Current semantic operations and literal action lowering after the 0.8.0 cutover
   - resource: /session/runner/tests/satellites.rs
     title: Read runtime assertions for shared windows, independent selection, same-client switching and keep-last lifecycle
   - resource: /scaffold/rekon-native/src/lib.rs
@@ -124,7 +126,7 @@ board; closed tickets remain the delivery history behind each row.
 | **Open another view; switch work** | Outside entry gives [independent window selection](#how-we-use-tmux) over shared processes; explicit shared selection; orphan aliases, custom prefix and last-view survival | Guarded inside switching (`tta-launch-backends-switching`) and input-origin research (`tta-launch-backends-input-origin`) are separate open work |
 | **Create and start a project** | Configured [scaffold-on-miss](#scaffolding-missing-projects) with named adapters and native generator options; literal startup argv/cwd; [initial window naming](#grouped-satellites-startup-argv-and-initial-directory) | Delivered; a future generator need is a new bounded ticket |
 | **Enter work on another host** | [SSH target-local observation](#ssh-targets) and real terminal handoff — the target needs tmux, not installed tta | Remote-carrier and socket-tunnel siblings are optional directions pending a consumer-grounded relevance decision, not requirements of shipped SSH |
-| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — the owned entry attempt from context binding through effects, driven by the CLI, SSH and term-preserver's embedded call sites with explicit caller grouping | Old preparation loops behind those call sites are retired by the open cutover ticket's deletion landing; the entry protocol is the production owner as of the cutover checkpoint |
+| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — the owned entry attempt from context binding through effects, driven by the CLI, SSH and term-preserver's embedded call sites with explicit caller grouping | [0.8.0 cutover receipt](design/entry/cutover1.gpt61sol.md): superseded runtime removed; real local/SSH consumer retries verified; architecture-document consolidation remains separate |
 | **Inspect and execute a launch plan** | [POSIX shell snapshots](#shell-output); literal command expressions; native/CLI [execution boundaries](#which-operations-use-tmax); [tracing](#endpoint-and-client-options) | Deferred workflow compilation remains a possible later commission, not a promise of `--print-shell` |
 
 Grouping, configuration, naming and matching are features within these
@@ -529,9 +531,10 @@ override, without changing the Rust process's cwd. The
 [operation matrix](#which-operations-use-tmax) states the deliberate CLI boundaries.
 
 Implementation: [matcher](session/launcher/src/matching.rs),
-[resolver](session/launcher/src/resolve.rs), [backends](session/runner/src/backend.rs),
-and [launch planner](session/launcher/src/plan.rs) /
-[execution policy](session/runner/src/execution.rs).
+[guarded workspace selection](session/launcher/src/entry/select.rs),
+[observers](session/runner/src/observe/local.rs),
+[semantic action lowering](session/launcher/src/entry/action.rs) and
+[effect interpretation](session/runner/src/execute/local.rs).
 
 ## Environment configuration
 
@@ -711,6 +714,13 @@ lookup when evaluated. Evaluate it in the same terminal/context.
 
 ## Reusable pieces
 
+> **0.8.0 API cutover:** use `tta_launcher::entry::{EntryAttempt, catalog}` and
+> `tta_runner::{observe, execute}`. The preparation/workflow API examples in this
+> section describe the retired 0.7 surface, not supported compatibility APIs.
+> Their replacement and the maintained architecture/consumer accounts belong to
+> `tta-entry-attempt-consolidate`. The [cutover receipt](design/entry/cutover1.gpt61sol.md)
+> maps the current code, deleted owners and verification evidence.
+
 The CLI and library share the workflow. Discovery supplies facts, resolution
 chooses work, adapters prepare new projects, and the planner turns that choice
 into executable operations.
@@ -762,7 +772,7 @@ prepared.plan.execute(tta_runner::execution::LaunchBackend::default(),
 already selected workspace. `workflow::Input` and `Workflow` add pure progression:
 the caller supplies target context and a parsed registry, then answers session,
 project, destination and generator-default observations until a plan is ready.
-The [executable entry graph](session/launcher/src/workflow/entry.machine.json)
+The [historical entry-graph account](design/entry/xmachines-port0.gpt61sol.md)
 runs on **`xmachines-runtime =1.1.0`** (independent Rust XState
 `6.0.0-alpha.71` semantics), not a JavaScript process. Immutable `next(&self)`
 replays supplied facts through that graph; `Clone + Send + Sync`, native paths,

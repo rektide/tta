@@ -1,4 +1,5 @@
-//! Shared scaffold registry and session-first resolution for CLI and embedded callers.
+//! Scaffold registry parsing and validated generator adapter mechanics. Entry
+//! selection and observation scheduling belong exclusively to `entry`.
 //!
 //! The file maps user-chosen generator names to compiled-in adapters and may
 //! pick a default generator for bare scaffold mode. An absent file means an

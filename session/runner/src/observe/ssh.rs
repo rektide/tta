@@ -100,7 +100,7 @@ impl Ssh {
             }
         }
     }
-    /// Next stage's terminal owner must use this same frozen connection/setup.
+    /// Terminal owners must use this same frozen connection/setup.
     /// Constructing the command is read-only and does not claim dispatch success.
     pub fn terminal_command(&self, target: &BoundTarget, expression: &Expression) -> Result<Command> {
         self.guard.check_target(target)?;

@@ -1,12 +1,14 @@
 ---
 type: VerificationGuide
-title: Entry attempt kernel and host verification
-description: Focused retained-actor, native data, target correlation, runner-free poison, local/probe agreement and complete/partial catalog witnesses plus structural chart generation
+title: Entry attempt and cutover verification
+description: Retained-actor, effect, native-data, target-correlation, runner-free, catalog, real-terminal and authenticated SSH/consumer checks for the 0.8.0 public surface
 resource: /verification/entry/README.md
 status: maintained
 author: model:openai/gpt-6.1-sol#high
-date: 2026-11-09
+date: 2026-11-10
 sources:
+  - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
+    title: Retire legacy runtime and verification callers, verify the 0.8.0 surface and actual local/SSH consumer retries, and correct stale internal-gate recipes
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
     title: Extend verification through machine-owned context, shared local/SSH interpreters, poison isolation and read-only catalogs
   - resource: opencode://ses_e3d4bcd7dfferOAqdJlG648aqj
@@ -75,9 +77,10 @@ raw paths and nested I/O causes.
 
 ## Host and catalog checks
 
-`entry-internal` exposes the real staged core across the existing crate boundary,
-without a production compatibility facade or release-version bump. For the full
-focused host suite, choose a writable scratch root (the preferred
+`entry`, `observe` and `execute` are the public 0.8.0 surface; the old workflow,
+bootstrap, resolver-loop and sidecar APIs are removed, with no compatibility
+facade or `entry-internal` gate. For the focused host suite, choose a writable
+scratch root (the preferred
 `/tmp/opencode` is not writable in the implementation environment):
 
 ```sh
@@ -87,7 +90,6 @@ TTA_TEST_TMPDIR="$PWD/.test-agent/entry-hosts" cargo nextest run \
   -E 'test(entry::) | binary(entry_purity) | binary(entry_hosts)'
 TTA_TEST_TMPDIR="$PWD/.test-agent/entry-hosts" cargo nextest run \
   -p tta-launcher -p tta-runner --no-default-features \
-  --features tta-launcher/entry-internal,tta-runner/entry-internal \
   -E 'test(entry::) | binary(entry_purity) | binary(entry_hosts)'
 ```
 
@@ -108,9 +110,24 @@ decode error types. The SSH interpreter is exercised through a literal-argv shel
 carrier with startup noise; no target tta is needed. Existing `runner --test probes`
 witnesses also pass after factoring shared framing mechanics.
 
-These are **not** production CLI, real-terminal, authenticated loopback SSH, or consumer cutover tests.
-Those hosts still use the old public path; their earlier evidence is not claimed
-as a run of this new protocol. See the [kernel](../../design/entry/kernel0.gpt61sol.md),
-[discovery](../../design/entry/discovery0.glm53m.md) and
-[hosts](../../design/entry/hosts0.gpt61sol.md) reports for exact outcomes and the
-next G execution/cutover commission.
+The focused tests above are **not** authenticated SSH or real-terminal evidence.
+The [cutover completion receipt](../../design/entry/cutover1.gpt61sol.md) records
+the separately executed CLI and consumer acceptance, deletion mapping and feature
+matrix. Reproduce its owned SSH/consumer exercise with:
+
+```sh
+cargo build -p tta -p tta-verify --all-features
+cargo build --manifest-path ../term-preserver/Cargo.toml --all-features --bin tper
+TTA_TEST_TMPDIR="$PWD/.test-agent/entry-cutover" target/debug/tta-verify-ssh \
+  --tta target/debug/tta --term-preserver ../term-preserver/target/debug/tper \
+  --report .test-agent/entry-cutover/ssh-final.json
+```
+
+This uses a private authenticated loopback sshd and exclusively owned tmux socket.
+The library planning cases drive the actor through fresh-bound observation-only
+export and deliberately evaluate that frozen artifact in the harness. Direct CLI
+and real consumer cases drive machine-owned effects/exec. Local embedded consumer
+cases cover native/CLI observers and explicit fresh user retries; the SSH consumer
+also checks target-relative overrides. All three retries independently prove a
+shared window and `keep-last` on the newly selected independent view. Managed
+ControlMaster recovery and Fish/Nu execution are not claimed by this fixture.
