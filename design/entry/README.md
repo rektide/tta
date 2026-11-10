@@ -1,13 +1,15 @@
 ---
 type: Index
 title: Entry architecture inquiry
-description: Navigation through the approved staged redesign, retained attempt kernel, prior architecture stages and delivered project-root work
+description: Navigation through the approved and delivered redesign - owned entry attempts from the staged kernel through the 0.8.0 cutover - plus prior architecture stages and delivered project-root work
 resource: /design/entry/README.md
 status: maintained
 author: model:openai/gpt-6-astra#high
 date: 2026-11-09
-updated: {by: "model:openai/gpt-6.1-sol#high", at: "2026-11-09"}
+updated: {by: "model:zai-coding-plan/glm-5.3#max", at: "2026-11-10"}
 sources:
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Record the delivered 0.8.0 architecture and cutover standing across the staged reports
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
     title: Index the shared host/catalog stage, its internal API standing and exact execution/cutover handoff
   - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
@@ -24,34 +26,39 @@ sources:
 
 # Entry architecture inquiry
 
-## Approved destination and staged implementation
+## Delivered destination (0.8.0)
 
-- [Entry attempts — state-machine-powered redesign](redesign0.gpt6a.md): approved
-  replacement backbone, domain model, diagrams, Rust interfaces, engine fit,
-  concrete journeys and staged landing. Commissioned after the human clarified
-  that the intended architecture pass was a substantial redesign. Its independent
-  proposal remains a historical argument; approval and actual delivery standing
-  are recorded in the implementation reports below.
-- [Retained existing-work kernel](kernel0.gpt61sol.md): first implementation stage,
-  exact request correlation, semantic OpenView/EnterView, fresh binding and coherent
-  export. Includes engine-fit evidence, source-inspected deletion obligations and
-  the next G discovery-stage handoff. Not yet the public CLI/consumer path.
+The approved redesign is **implemented, cut over and accepted**: the old
+orchestration is deleted, and the maintained accounts describe the delivered
+surface.
+
+- [Entry attempts — state-machine-powered redesign](redesign0.gpt6a.md): the
+  human-approved destination — owned entry protocol, domain model, diagrams,
+  Rust interfaces, engine fit, concrete journeys and staged landing. Its
+  independent proposal remains a historical argument; delivery standing is
+  recorded in the implementation reports below.
+- [Retained existing-work kernel](kernel0.gpt61sol.md): first implementation
+  stage — exact request correlation, semantic OpenView/EnterView, fresh
+  binding and coherent export, engine-fit evidence and the deletion
+  obligations the cutover later executed.
 - [Machine-owned discovery and creation](discovery0.glm53m.md): second stage —
   chart-owned root scope/read loop, guarded physical ranking, creation ladder
   with validated-generator requirements and one materialization, semantic
-  StartProject/ScaffoldAndStart with fresh route/destination binding and
-  short-circuit lowering. Includes the deletion-delta witness and the next
-  hosts-stage handoff. Still internal; the old production path awaits cutover.
-- [Generated attempt graph](/doc/entry/attempt-graph.md) and
-  [catalog graph](/doc/entry/catalog-graph.md), plus
-  [focused kernel verification](/verification/entry/README.md): executable structure
-  and supplied-facts evidence for the internal replacement, not the old replay graph.
-- [Shared target observation and read-only catalogs](hosts0.gpt61sol.md): third
-  stage — machine-owned raw context/registry acquisition, shared pure policy,
-  local and frozen worker-free SSH interpreters, one read driver, typed partial
-  catalogs and completion projections. Includes runner-free poison/local-probe
-  evidence and the exact G execution/cutover handoff. Opt-in internal integration,
-  not production CLI/consumer adoption or completed rewrite acceptance.
+  StartProject/ScaffoldAndStart with fresh route/destination binding.
+- [Shared target observation and read-only catalogs](hosts0.gpt61sol.md):
+  third stage — machine-owned raw context/registry acquisition, shared pure
+  policy, local and frozen worker-free SSH interpreters, one read driver,
+  typed partial catalogs and completion projections.
+- [Cutover completion receipt](cutover1.gpt61sol.md): coordinated 0.8.0
+  deletion of the replay/sidecar APIs, semantic/runner-free witness migration,
+  exact pins and receiving lock, and the authenticated SSH plus actual
+  local/SSH consumer retry evidence.
+- [Maintained accounts](/doc/entry/README.md): the
+  [entry contract](/doc/entry/README.md), its generated
+  [attempt](/doc/entry/attempt-graph.md) and
+  [catalog](/doc/entry/catalog-graph.md) structural graphs, and
+  [entry verification guide](/verification/entry/README.md) describe the
+  delivered 0.8.0 architecture.
 
 ## Earlier engine and architecture stages
 
@@ -70,5 +77,6 @@ sources:
   [maintained root contract](/doc/entry/project-roots.md) owns current behavior.
 - [Capability-oriented ticket pitch](ticket-surface0.gpt6a.md): accepted work-map
   proposal and historical delivery organization.
-- [Maintained entry contract](/doc/entry/README.md): current public architecture
-  and independent-view semantics; the approved replacement remains staged internally.
+- [Maintained entry contract](/doc/entry/README.md): the delivered 0.8.0
+  owned-attempt architecture and independent-view semantics; the earlier 0.7
+  replay contract remains historical evidence at its recorded revision.

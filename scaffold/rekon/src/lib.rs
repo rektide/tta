@@ -68,6 +68,6 @@ mod tests {
         let options: Table = "anything = 1".parse().unwrap();
         assert!(validate(&options).is_err());
         assert_eq!(validate(&Table::new()).unwrap(), DefaultsNeeds::default());
-        assert!(SELECTS_OWN_DESTINATION);
+        const { assert!(SELECTS_OWN_DESTINATION) };
     }
 }

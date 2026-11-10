@@ -427,7 +427,7 @@ dl = "github.com:rektide/dl-{name}"
 
     #[test]
     fn validation_splits_from_materialization_and_reports_default_needs() {
-        assert!(!SELECTS_OWN_DESTINATION);
+        const { assert!(!SELECTS_OWN_DESTINATION) };
         // A bare entry needs both observed defaults.
         assert_eq!(validate(&Table::new()).unwrap(), DefaultsNeeds { author: true, license: true });
         // Entry parameters satisfy them; empty author still falls back.
@@ -437,7 +437,10 @@ dl = "github.com:rektide/dl-{name}"
         );
         // An empty entry author still falls back to observation; a present
         // license key, even empty, means unset-by-observation.
-        assert_eq!(validate(&options("author = \"\"\nlicense = \"\"\n")).unwrap(), DefaultsNeeds { author: true, license: false });
+        assert_eq!(
+            validate(&options("author = \"\"\nlicense = \"\"\n")).unwrap(),
+            DefaultsNeeds { author: true, license: false }
+        );
         // package.json disabled means neither is needed.
         assert_eq!(validate(&options("package-json = false\n")).unwrap(), DefaultsNeeds::default());
         // Option mistakes fail validation before any materialization.
