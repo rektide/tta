@@ -6,8 +6,11 @@ resource: /verification/ssh/README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-27
+updated: { at: 2026-11-10, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
-  - resource: opencode://ses_e4e2b4bcbffePwraSmunm9Lmav
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Update the SSH guide to the 0.8.0 package APIs, observation-only export evaluation and the three-case consumer matrix
+  - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
     title: Verify the independent SSH default, target-prefix environment and explicit override, and update expected mutation counts
   - resource: opencode://ses_e804f36ddffepWs5FSeXN6VDBv
     title: Correct the POSIX absence-status assertion and document encoded capture budgets and uncertified Fish/Nu execution
@@ -73,9 +76,13 @@ SSH; this is not evidence for a different operating system or network topology.
   Fish and Nu are not installed: their carrier construction, **not execution**,
   is covered. The historical actual SSH run returned **127** on dash; accepting
   Bash's **1** does not revise that recorded observation.
-- **Cold/project:** embedded runner preparation, target HOME/root/config/cwd versus
-  contradictory local values, literal quoted/empty startup arguments and relative
-  `--dir`, observed independently through target artifacts and tmux queries.
+- **Cold/project:** library planning acquires an `EntryAttempt` and drives
+  `execute::ssh::drive` with print delivery through observation-only export
+  and fresh binding; the harness then explicitly evaluates that frozen local
+  SSH artifact in a real PTY — never misreporting an export as an effect
+  receipt. Target HOME/root/config/cwd versus contradictory local values,
+  literal quoted/empty startup arguments and relative `--dir` are observed
+  independently through target artifacts and tmux queries.
 - **Multi-root:** target-local `TTA_ROOTS` layering versus contradictory caller
   values, an explicit repeated root list replacing the whole target layer,
   duplicate-basename ambiguity reporting, a qualified `@2` selection attaching
@@ -94,13 +101,29 @@ SSH; this is not evidence for a different operating system or network topology.
   scaffolding: GNU find's ambiguous `%Y=N` cannot manufacture a clean miss.
 - **CLI:** read-only `--ssh --print-shell` emits an evaluable **local SSH invocation**
   with no stdout startup chatter; direct CLI cold creation uses target defaults.
+  Direct CLI and embedded-consumer cases drive machine-owned terminal
+  effects/exec rather than frozen exports.
 - **Transport loss:** stop an owned SSH carrier after independently observing its
   created session. The session persists; no automatic replay/rollback occurs.
-- **Consumer (optional):** real term-preserver proxy/PTY → local embedded attempt
-  worker → SSH, detach, explicit user retry with fresh grouped discovery, detach
-  and quit. Its managed master is explicitly disabled for this fixture's private
-  lifecycle; shared option identity and default ControlMaster construction have
-  separate unit coverage. This does not certify master expiry/reconnection.
+- **Consumer (optional):** three real cases through term-preserver's own proxy,
+  worker and PTYs — local native observer, local CLI observer, and embedded SSH.
+  Each creates work, detaches, accepts an **explicit user retry**, observes the
+  newly selected independent view sharing the primary window with `keep-last`,
+  detaches and quits. Reusing the first action would fail or recreate rather
+  than yield that fresh view. The embedded SSH case passes explicit relative
+  target root and directory under a different local cwd. Its managed master is
+  explicitly disabled for this fixture's private lifecycle; shared option
+  identity and default ControlMaster construction have separate unit coverage.
+  This does not certify master expiry/reconnection.
+
+The final authenticated 0.8.0 cutover run returned **19 checks, 204 retained
+probe records and 13 terminal runs** (twelve exiting 0; one deliberately killed
+SSH carrier exiting 255 after its target mutation was independently observed),
+with exactly **16** logged `new-session` invocations matching the authorized
+attempts. The exclusively owned endpoint's initial absence, final absence and
+sshd termination are verified. See the
+[cutover receipt](../../design/entry/cutover1.gpt61sol.md) for the full matrix
+and its raw logs.
 
 Reports retain versions, fixture/endpoint, observations with framing/status and
 diagnostics, PTY transcripts, actual inventories/artifacts, target tmux argv counts,
