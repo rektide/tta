@@ -1,12 +1,15 @@
 ---
 type: ArchitectureDiagram
-title: Retained entry attempt — executable structural graph
-description: Generated states, directives, initial edges and ordered transitions of the staged internal replacement, not the still-public legacy workflow
+title: Entry attempt — executable structural graph
+description: Generated states, directives, initial edges and ordered transitions of the production 0.8.0 entry attempt chart
 resource: /doc/entry/attempt-graph.md
-status: implemented-internal
+status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
+updated: {by: "model:zai-coding-plan/glm-5.3#max", at: 2026-11-10}
 sources:
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Promote this generated structural graph to the production architecture account after the 0.8.0 cutover
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
     title: Add machine-owned context and registry acquisition, shared host interpretation and catalog binding-subchart composition; regenerate and connect both structural graphs
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
@@ -21,25 +24,23 @@ sources:
     title: Structural renderer preserving event-array guard order
 ---
 
-# Retained entry attempt: structural graph
+# Entry attempt: structural graph
 
-This is the **internal replacement**, not the public `Workflow` contract in
-[the current entry account](README.md). The [approved redesign](/design/entry/redesign0.gpt6a.md),
-[first-stage report](/design/entry/kernel0.gpt61sol.md) and [discovery-stage
-report](/design/entry/discovery0.glm53m.md), plus the
-[hosts-stage report](/design/entry/hosts0.gpt61sol.md), explain scope, evidence and
-remaining work. The complete existing-work journey ends in an exported
-snapshot after fresh binding; the discovery branches extend the same retained
-actor through machine-owned project scope, a per-root read loop with explicit
-self-reentry, guarded physical ranking, and the creation-preparation ladder
-(policy → destination absence → adapter validation → required defaults →
-one materialization). New-work bindings add a second evidence read — chosen
-route identity or destination absence — before the shared check/lower states.
-There are still no effect requests: export remains the only delivery.
-The initial `bind_target` compound now requests raw host context, applies shared
-whole-layer policy, optionally compares physical endpoint identities, and requests
-one semantic registry acquisition before validating the choice. Supplied frozen
-context skips acquisition through an explicit chart edge, not a separate driver.
+This is the **production 0.8.0 entry architecture**, generated from the same
+executable definition the CLI, SSH path and embedded consumers drive. The
+[entry contract](README.md) explains the protocol around it; the
+[approved redesign](/design/entry/redesign0.gpt6a.md) and the staged
+[kernel](/design/entry/kernel0.gpt61sol.md),
+[discovery](/design/entry/discovery0.glm53m.md) and
+[hosts](/design/entry/hosts0.gpt61sol.md) reports plus the
+[cutover receipt](/design/entry/cutover1.gpt61sol.md) record how it was
+delivered and accepted. The chart runs from target binding through machine-owned
+project scope, a per-root read loop with explicit self-reentry, guarded physical
+ranking, the creation-preparation ladder (policy → destination absence →
+adapter validation → required defaults → one materialization), fresh binding
+with operation-specific evidence reads, and delivery into export or the effect
+run states — each with requested/in-flight substates, honest partial knowledge
+and delegated/completed/stopped finals.
 The separate [catalog graph](catalog-graph.md) reuses this actual binding
 subchart, then follows a collect/report course incapable of producing an entry
 plan or mutation. Local/SSH interpreters answer the same native requests.

@@ -3,10 +3,13 @@ type: ArchitectureDiagram
 title: Read-only catalog — executable structural graph
 description: A separate bind-collect-report actor sharing the entry binding subchart and native discovery identities, with no entry decisions or mutation events
 resource: /doc/entry/catalog-graph.md
-status: implemented-internal
+status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
+updated: {by: "model:zai-coding-plan/glm-5.3#max", at: 2026-11-10}
 sources:
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Promote the read-only catalog graph alongside the production entry architecture after the 0.8.0 cutover
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
     title: Implement separate typed catalog querying, shared target policy and local/SSH read interpretation; project the actual composed chart
   - resource: /session/launcher/src/entry/catalog.machine.json
@@ -21,7 +24,7 @@ sources:
 
 # Read-only catalog: structural graph
 
-This is an internal rewrite surface, not the production completion path yet.
+This is the production completion/inventory path of the 0.8.0 architecture.
 `CatalogQuery` is a separate retained actor with only `Observed` and `Cancel`
 ingress. Its waiting type cannot yield a plan or effect. It shares the actual
 `bind_target` subchart of the [entry graph](attempt-graph.md), wiring that
