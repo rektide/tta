@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-10, by: "model:openai/gpt-6.1-sol#high" }
+updated: { at: 2026-11-10, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Promote the guide's reusable API, matching diagram and capability map to the 0.8.0 owned-attempt interfaces
   - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
     title: Complete 0.8.0 runtime deletion and actual SSH/consumer acceptance; mark retired API examples pending the separately commissioned documentation consolidation
   - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
@@ -126,7 +128,7 @@ board; closed tickets remain the delivery history behind each row.
 | **Open another view; switch work** | Outside entry gives [independent window selection](#how-we-use-tmux) over shared processes; explicit shared selection; orphan aliases, custom prefix and last-view survival | Guarded inside switching (`tta-launch-backends-switching`) and input-origin research (`tta-launch-backends-input-origin`) are separate open work |
 | **Create and start a project** | Configured [scaffold-on-miss](#scaffolding-missing-projects) with named adapters and native generator options; literal startup argv/cwd; [initial window naming](#grouped-satellites-startup-argv-and-initial-directory) | Delivered; a future generator need is a new bounded ticket |
 | **Enter work on another host** | [SSH target-local observation](#ssh-targets) and real terminal handoff — the target needs tmux, not installed tta | Remote-carrier and socket-tunnel siblings are optional directions pending a consumer-grounded relevance decision, not requirements of shipped SSH |
-| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — the owned entry attempt from context binding through effects, driven by the CLI, SSH and term-preserver's embedded call sites with explicit caller grouping | [0.8.0 cutover receipt](design/entry/cutover1.gpt61sol.md): superseded runtime removed; real local/SSH consumer retries verified; architecture-document consolidation remains separate |
+| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — the owned entry attempt from context binding through effects, driven by the CLI, SSH and term-preserver's embedded call sites with explicit caller grouping | [0.8.0 cutover receipt](design/entry/cutover1.gpt61sol.md): superseded runtime removed; real local/SSH consumer retries verified; maintained architecture in [doc/entry](doc/entry/README.md) |
 | **Inspect and execute a launch plan** | [POSIX shell snapshots](#shell-output); literal command expressions; native/CLI [execution boundaries](#which-operations-use-tmax); [tracing](#endpoint-and-client-options) | Deferred workflow compilation remains a possible later commission, not a promise of `--print-shell` |
 
 Grouping, configuration, naming and matching are features within these
@@ -453,7 +455,7 @@ Work anchor: `tta-zsh-completion`.
 
 ```mermaid
 flowchart TD
-    resolveUnique["resolve_unique(sessions, fragment, prefix)?<br/>Ambiguity/error exits before continuation"] --> sessionMatch{"Selection returned?"}
+    resolveSession["entry::select::resolve_session(catalog, intent)?<br/>Ambiguity/error exits before continuation"] --> sessionMatch{"Workspace match?"}
     sessionMatch -->|Some| enterSession["Attach, switch, or create satellite"]
     sessionMatch -->|None| resolveProject["matching::select(projects, fragment)?<br/>Ambiguity/error exits before continuation"]
     resolveProject --> projectMatch{"Project returned?"}
@@ -474,7 +476,7 @@ Satellite aliases participate at their logical name's length: `_foo-42` offers
 `foo`. Equal winners in one **actual tmux group** are one workspace; equal winners
 in unrelated groups (or separate ungrouped sessions) remain ambiguous, regardless
 of similar names. An exact raw selector wins even over another group's identical
-alias. The [full state machine](doc/entry/README.md#input-state-machine) documents
+alias. The [entry chart](doc/entry/README.md#the-executable-chart) documents
 guards, numeric stripping, deterministic group representatives and pure stages.
 
 ### Matching and failure behavior
@@ -714,149 +716,132 @@ lookup when evaluated. Evaluate it in the same terminal/context.
 
 ## Reusable pieces
 
-> **0.8.0 API cutover:** use `tta_launcher::entry::{EntryAttempt, catalog}` and
-> `tta_runner::{observe, execute}`. The preparation/workflow API examples in this
-> section describe the retired 0.7 surface, not supported compatibility APIs.
-> Their replacement and the maintained architecture/consumer accounts belong to
-> `tta-entry-attempt-consolidate`. The [cutover receipt](design/entry/cutover1.gpt61sol.md)
-> maps the current code, deleted owners and verification evidence.
-
-The CLI and library share the workflow. Discovery supplies facts, resolution
-chooses work, adapters prepare new projects, and the planner turns that choice
-into executable operations.
+The CLI and library share one owned entry attempt. The chart requests facts,
+native functions decide, and replaceable interpreters observe and execute:
+the same protocol drives local CLI runs, SSH targets and embedded consumers.
 
 | Crate / home | Responsibility |
 | --- | --- |
-| [`tta-launcher`](session/launcher/src/lib.rs) | Pure observation requests/replies, progression, matching, endpoint/client policy and semantic plans; no runner dependency |
-| [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Supplied registry text parsing, generator choice and explicit-default creation prefixes |
+| [`tta-launcher`](session/launcher/src/lib.rs) | The owned [`EntryAttempt`](session/launcher/src/entry/mod.rs) and read-only [`CatalogQuery`](session/launcher/src/entry/catalog.rs) protocols, semantic decisions and bound actions, guarded matching, endpoint/client policy and whole-layer context policy; no runner dependency |
+| [`tta-launcher::scaffold`](session/launcher/src/scaffold.rs) | Registry parsing, generator choice, and adapters split into validation → requirements → destination contract → materialization |
+| [`tta-launcher::target`](session/launcher/src/target.rs) | Pure target shell-carrier construction (`TargetSetup`) and worker-free probe codecs |
 | [`tta-command`](shell/command/src/lib.rs) | Pure literal argv/environment/cwd/file-write/sequence expressions and POSIX rendering |
-| [`tta-runner`](session/runner/src/lib.rs) | Local acquisition/driver, bounded process capture, native execution and SSH probe/prepared-terminal adapters |
+| [`tta-runner`](session/runner/src/lib.rs) | Local/SSH read interpreters (`observe`), one thin shared read driver, bounded process capture, and effect executors (`execute`) that interpret exactly the dispatched effect |
 | [`tta-scaffold-rekon`](scaffold/rekon/src/lib.rs) / [`tta-scaffold-rekon-native`](scaffold/rekon-native/src/lib.rs) | Feature-gated adapters returning command expressions |
 | [`tta`](app/cli/src/main.rs) | CLI/environment policy, tracing and terminal handoff |
-| [`shell/zsh`](shell/zsh/functions/_tta) | Live completion through read-only inventories |
+| [`shell/zsh`](shell/zsh/functions/_tta) | Live completion through read-only catalog queries |
 | [`tta-verify`](verification/driver/src/lib.rs) | Reusable runtime exercise/observation library and verification command |
-| [`tta-core-witness`](verification/core/README.md) | No-runner transcript replay and semantic checks, with a package-only dependency witness |
+| [`tta-core-witness`](verification/core/README.md) | Runner-free supplied-facts attempt exercises and protocol rejection checks, with a package-only dependency witness |
 
 The generic expression model knows no tmux syntax. The launcher handles tmux
 targets, format operands and trailing-semicolon parsing separately: shell
-quoting alone does not make a tmux format literal.
+quoting alone does not make a tmux format literal. The
+[maintained entry contract](doc/entry/README.md) owns the full architecture;
+the [0.8.0 cutover receipt](design/entry/cutover1.gpt61sol.md) records the
+coordinated deletion of the retired 0.7 preparation/workflow/resolver surface.
 
-### Shared local runner API
+### Owned entry attempts
 
-Embedded callers can use the same registry and selection policy, then supply
-their own client mode and launch options. In this outline, `lookup`, `socket`,
-and the other inputs are supplied by the caller:
+An attempt is acquired (the chart will request raw target context) or started
+from a supplied frozen context. It advances one correlated event at a time;
+`waiting()` is inert:
 
 ```rust,ignore
-let prepared = tta_runner::prepare()
-    .lookup(lookup)
-    .argument(fragment)
-    .socket(&socket)
-    .client_mode(mode)
-    .program(tmux_program)
-    .roots(&roots)                    // &[PathBuf], empty for rootless input
-    .choice("default")                // or "false" or a registry name
-    .grouped(grouped)
-    .startup(&startup_argv)
-    .maybe_directory(initial_directory) // absolute Option<&Path>
-    .call()?;
+use tta_launcher::entry::{EntryAttempt, context, protocol::*};
 
-let shell = prepared.plan.expression().shell(tta_command::Handoff::Run)?;
-// Execution is explicitly supplied by the optional runner:
-use tta_runner::execution::ExecuteLaunch;
-prepared.plan.execute(tta_runner::execution::LaunchBackend::default(),
-                      tta_command::Handoff::Exec)?;
+let mut attempt = EntryAttempt::acquire(context::Acquisition {
+    scope: context::Scope {          // local or SSH origin with optional setup
+        origin: context::Origin::Local { host: "local".into() },
+        cwd: None,
+    },
+    overrides: context::Overrides {  // explicit values by presence, never
+        roots: Some(vec!["/work/personal".into(), "/work/team".into()]),
+        ..Default::default()         // prefilled CLI defaults
+    },
+    intent: EntryIntent {            // view policy, startup, prefix, roots…
+        view: ViewPreference::Independent,
+        ..EntryIntent::selector("myproject")
+    },
+    default_scaffold: "default".into(),
+})?;
 ```
 
-`tta_launcher::launch()` and `prepare_launch()` remain pure lowering APIs for an
-already selected workspace. `workflow::Input` and `Workflow` add pure progression:
-the caller supplies target context and a parsed registry, then answers session,
-project, destination and generator-default observations until a plan is ready.
-The [historical entry-graph account](design/entry/xmachines-port0.gpt61sol.md)
-runs on **`xmachines-runtime =1.1.0`** (independent Rust XState
-`6.0.0-alpha.71` semantics), not a JavaScript process. Immutable `next(&self)`
-replays supplied facts through that graph; `Clone + Send + Sync`, native paths,
-argv and typed domain errors remain intact. No machine action performs I/O.
-The [overall input and session-resolution diagrams](doc/entry/README.md#input-state-machine)
-mirror the code; the [port report](design/entry/xmachines-port0.gpt61sol.md)
-records baseline verification and tradeoffs. The subsequent
-[architecture review](design/entry/architecture0.gpt61sol.md) retains the pure
-backbone, strengthens typed dispatch/diagram checks and measures replay cost.
-See the [runner-free toolkit](verification/core/README.md) for runnable examples.
-The [local runner checkpoint](design/launcher/runner-core1.gpt61sol.md) records the
-first milestone; the [SSH checkpoint](design/launcher/runner-core2.gpt61sol.md)
-records the implemented transport boundary and remaining decisions.
-Neither core crate contains filesystem/environment acquisition or process/native
-execution. `tta_runner::command::{execute, process}` interprets generic commands;
-its `Execute` and `ProcessCommand` traits are optional conveniences.
+Reads are answered by an observer — native tmax queries, tmux CLI subprocesses,
+SSH probes or supplied test facts — and driven by one shared loop:
+
+```rust,ignore
+// Local: the scope comes from the first pending read request.
+let Waiting::Read(request) = attempt.waiting() else { unreachable!() };
+let scope = (*request.scope).clone();
+let mut backend = tta_runner::observe::local::SessionBackend::Native; // or Cli
+let mut observer = tta_runner::observe::local::Local::acquire(scope, &mut backend)?;
+let mut executor = tta_runner::execute::local::Local::default();
+
+let snapshot = tta_runner::execute::drive(
+    &mut attempt, &mut observer, &mut executor,
+    Delivery::Execute { native: true },   // or Delivery::Export to freeze a snapshot
+    tta_command::Handoff::Exec,           // the real client replaces this process
+)?;
+```
+
+`execute::drive` interprets the dispatched effects in order, records
+`EffectStarted` before each operation, and returns an `AttemptSnapshot` whose
+outcome is honest: `Completed` with effect receipts, `Delegated` when an
+embedder took over the terminal, `Stopped`/`Cancelled` with the boundary and
+retained effect knowledge. Drivers never choose generators, view policy,
+grouping, satellites or rerank a selection. Export finishes as
+`AttemptOutcome::Exported(action)`; `action.expression()` is the complete CLI
+snapshot and `action.shell()` its POSIX rendering.
+
+SSH replaces the interpreters, not the policy: `tta_runner::ssh::Ssh` builds
+literal transport argv, `observe::ssh::Ssh::acquire` freezes connection/setup
+and answers the same requests with nonce-bound probes, and
+`execute::ssh::drive` dispatches the bound action through one terminal
+invocation sharing that frozen policy. `observe::ssh::write_diagnostics`
+reports retained observations without I/O in the core. See the
+[SSH section](#ssh-targets) for the target profile and capture budget.
 
 Library defaults enable neither scaffold adapters nor scaffold posture. Enable
-`scaffold-rekon` or `scaffold-rekon-native` as needed and layer caller preferences
-before passing `choice`. Runner registry loading honors `TTA_CONFIG`/XDG/HOME, or accepts
-`.config(&config)` with an already loaded `scaffold::Config`.
+`scaffold-rekon`/`scaffold-rekon-native` as needed; adapters validate options,
+declare their destination contract and default requirements, then materialize
+once with observed target defaults. `EntryIntent` fields (not runner builders)
+carry roots, grouping (`ViewPreference::Shared`/`Independent`/`Auto`),
+satellite prefix, session name, startup argv and initial directories. Session
+facts retain actual `Session::group`; callers must not invent group membership
+from names. Errors retain native typed causes end to end.
 
-Resolution executes no generator. `scaffold::Resolved` contains the selection, optional
-generator expression prefix, and generator metadata. Pass the prefix into
-`launch`; creation without it fails. Low-level grouped plans require an explicitly
-chosen satellite name; the workflow requests a fresh inventory and supplies it.
-Omitted grouping means independent outside attachment and ordinary inside
-switching. Pass `.grouped(false)` for deliberate shared attachment. Supply
-`.satellite_prefix("view-")` to the runner/resolver, or an owned string to
-`workflow::Input`; `target::Options` accepts an explicit prefix or observes the
-target's `TTA_SATELLITE_PREFIX`. Session facts retain actual `Session::group`;
-supplied-facts callers must not invent group membership from names.
-Errors retain underlying causes
-through `std::error::Error + Send + Sync` at the scaffold boundary.
+### Read-only catalogs
 
-### Runner-free target setup and shared SSH preparation
-
-`target::Bootstrap` yields context/registry `Request`s or a complete workflow
-`Input`. Feed explicit `Reply`s through `supply()`; `Facts::input()` also lowers
-already supplied target facts directly. `probe::Probe::new(request, token)` emits
-the versioned script or setup-wrapped shell command; `decode()` takes captured
-bytes, actual carrier status and explicit EOF completeness. None of these core
-APIs performs I/O or needs `tta-runner`.
-
-The [runner-free round-trip toolkit](verification/probes/README.md) proves this
-public emit/execute/decode/resume loop through controlled stdlib processes with
-no runner dependency. It complements, rather than weakens, the no-I/O
-[supplied-facts/poison witness](verification/core/README.md).
-
-The optional runner composes that prelude and the ordinary workflow:
+Completion and inventory use the separate `CatalogQuery`, never an entry
+attempt in disguise:
 
 ```rust,ignore
-let ssh = tta_runner::ssh::Ssh::builder()
-    .destination("work".into()).options(ssh_options).build();
-let setup = tta_launcher::target::TargetSetup::builder()
-    .shell("/bin/zsh".into()).login(true).interactive(true).build();
-let options = tta_launcher::target::Options::builder()
-    .argument("myproject".into()).default_scaffold("default".into()).build();
-let prepared = tta_runner::ssh::prepare(ssh, setup, options, Default::default())?;
-// No mutation yet. Retains launch.plan, semantic creation data, target facts,
-// setup and captured/decoded observations. The consumer owns execution/PTY:
-let terminal_command = prepared.command()?;
-let local_shell = prepared.shell(tta_command::Handoff::Run)?;
+use tta_launcher::entry::catalog;
+
+let mut query = catalog::CatalogQuery::acquire(catalog::Input { scope, overrides });
+tta_runner::observe::drive_reads(&mut query, &mut observer)?;
+let catalog::Waiting::Finished(catalog::Outcome::Report(report)) = query.waiting() else {
+    unreachable!("catalog has only two finals");
+};
+let names = report.completion_names();   // aliases, views and @N/name selectors
 ```
 
-`ssh::Error::observations` retains the failed acquisition and prior evidence;
-`ssh::write_diagnostics(writer, records)` shares stderr reporting without doing
-I/O in the core. A reporting failure must not replace the original prepare error.
-`PreparedRemote::command()` is the mutation/terminal boundary; after it starts,
-the caller owns uncertainty and must not blindly replay it. Version 0.4.0 introduced
-these interfaces; **0.5.0** adds shared diagnostic reporting and configurable CLI
-probe policy. Coordinated workspace dependencies remain exact-pinned.
-**0.6.0** adds the outside-independent default, optional explicit grouping policy,
-configurable satellite prefix and group-aware alias resolution (`resolve_unique`).
-`satellite_name` now takes the selected `Session`, inventory and prefix rather
-than decorating a raw base string.
-**0.7.0** replaces singular core/runner roots with ordered lists. `workflow::Input`
-has `roots: Vec<PathBuf>`, target options accept an optional explicit list, and
-project inventories supply requested/physical roots plus physical entry paths.
-Project/Create selections retain `sources` provenance, and `projects::configured_roots`
-is the shared whole-layer configuration helper. Repeated `--root`, the `TTA_ROOTS`
-environment layer, identity-aware completion with `@N/name` selectors, target-local
-SSH root layering and the external-rekon multi-root guard are part of this surface;
-the checkpoints above record the verification.
+A report retains workspace aliases, literal view selectors, project routes
+with physical identity, generator names and per-source failures; only complete
+root evidence certifies bare project names. The query cannot issue an effect.
+The [catalog structural graph](doc/entry/catalog-graph.md) is generated from
+its executable definition.
+
+### Version history
+
+The 0.7 surface — `Workflow` replay, `resolve_unique`, `prepare()`/
+`ssh::prepare` and the parallel portable/native `LaunchPlan` — was removed in
+the coordinated **0.8.0** cutover with no compatibility facade; its delivery
+history (0.4 runner extraction, 0.5 diagnostics/probe policy, 0.6 independent
+views, 0.7 ordered roots) remains recorded in the
+[design reports](design/entry/README.md) and the
+[cutover receipt](design/entry/cutover1.gpt61sol.md). Coordinated workspace
+dependencies remain exact-pinned; `tmax` stays separately versioned.
 The [term-preserver consumer account](doc/consumer/term-preserver.md) ⇄ its
 [launch guide](file:///home/rektide/src/term-preserver/doc/launch/README.md) records
 implemented adoption and the separate mosh observation-channel choice.
