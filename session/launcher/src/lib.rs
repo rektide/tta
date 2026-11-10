@@ -3,22 +3,17 @@
 
 pub mod entry;
 mod matching;
-mod plan;
-mod prepared;
 pub mod probe;
 pub mod projects;
-mod resolve;
 pub mod scaffold;
 pub mod socket;
 pub mod target;
-pub mod workflow;
+mod validation;
 mod workspace;
 
-pub use plan::{ClientMode, PlanError, WindowName, launch, prepare_launch};
-pub use prepared::{LaunchPlan, NativeCreation};
 pub use projects::{ProjectEntry, ProjectInventory, ProjectSource};
-pub use resolve::{DestinationState, Resolution, ResolveError, Selection, resolve, resolve_unique};
 pub use tmax::operation::SessionId;
+pub use validation::ResolveError;
 pub use workspace::{satellite_alias, satellite_name, session_names, validate_satellite_prefix};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

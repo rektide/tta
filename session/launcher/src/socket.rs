@@ -89,28 +89,6 @@ impl Context {
         })
     }
 
-    pub fn client_mode(&self, selected: &Path) -> Result<crate::ClientMode, Error> {
-        let Some(current) = self.current_server() else {
-            return Ok(crate::ClientMode::Attach);
-        };
-        self.client_mode_with_identity(selected, &current, selected)
-    }
-
-    /// Compare supplied physical identities. Observers may canonicalize existing
-    /// paths; the core must never canonicalize a target path on the local host.
-    pub fn client_mode_with_identity(&self, selected: &Path, current_identity: &Path, selected_identity: &Path) -> Result<crate::ClientMode, Error> {
-        let Some(current) = self.current_server() else {
-            return Ok(crate::ClientMode::Attach);
-        };
-        if current_identity != selected_identity {
-            return Err(Error::DifferentServer {
-                current,
-                selected: selected.to_owned(),
-            });
-        }
-        Ok(crate::ClientMode::Switch)
-    }
-
     pub fn current_server(&self) -> Option<PathBuf> {
         let tmux = self.tmux.as_ref()?;
         #[cfg(unix)]
@@ -162,8 +140,6 @@ mod tests {
             context.resolve(&Selection::Path("relative/socket".into())).unwrap().path,
             Path::new("/home/me/relative/socket")
         );
-        assert_eq!(context.client_mode(Path::new("/tmp/old")).unwrap(), crate::ClientMode::Switch);
-        assert!(matches!(context.client_mode(Path::new("/tmp/new")), Err(Error::DifferentServer { .. })));
     }
 
     #[test]
@@ -171,7 +147,6 @@ mod tests {
         let mut context = context();
         context.tmux = Some(",123,4".into());
         assert_eq!(context.resolve(&Selection::Default).unwrap().path, Path::new("/private/tmp/tmux-1000/default"));
-        assert_eq!(context.client_mode(Path::new("/tmp/new")).unwrap(), crate::ClientMode::Attach);
         assert!(context.resolve(&Selection::Name("../default".into())).is_err());
     }
 }

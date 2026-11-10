@@ -160,7 +160,7 @@ pub(super) fn operation(
         EntryDecision::OpenView { work, naming, via } => {
             let anchor = sessions.inventory.sessions().iter().find(|s| s.id == work.anchor.id).expect("checked anchor");
             let name = crate::satellite_name(anchor, sessions.inventory.sessions(), &naming.prefix);
-            crate::resolve::validate_name(&name).map_err(super::action::Error::from)?;
+            crate::validation::validate_name(&name).map_err(super::action::Error::from)?;
             BoundOperation::OpenView {
                 anchor: work.anchor.clone(),
                 name,

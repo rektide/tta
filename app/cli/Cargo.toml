@@ -27,4 +27,4 @@ tta-runner.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tta-verify = { path = "../../verification/driver" }
+tta-verify = { path = "../../verification/driver", version = "=0.8.0" }

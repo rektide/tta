@@ -195,3 +195,5 @@ pub fn completion_candidates(roots: &[PathBuf], inventories: &[ProjectInventory]
     }
     Ok(candidates.into_iter().collect())
 }
+#[cfg(test)]
+mod tests;

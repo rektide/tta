@@ -3,15 +3,6 @@
 version = 4
 
 [[package]]
-name = "aho-corasick"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -346,15 +337,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "matchers"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
-dependencies = [
- "regex-automata",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -475,23 +457,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "regex-automata"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
-dependencies = [
- "aho-corasick",
- "memchr",
- "regex-syntax",
-]
-
-[[package]]
-name = "regex-syntax"
-version = "0.8.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rustix"
@@ -810,45 +775,20 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
- "matchers",
  "nu-ansi-term",
- "once_cell",
- "regex-automata",
  "serde",
  "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
- "tracing",
  "tracing-core",
  "tracing-log",
  "tracing-serde",
 ]
 
 [[package]]
-name = "tracing-test"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a4c448db514d4f24c5ddb9f73f2ee71bfb24c526cf0c570ba142d1119e0051"
-dependencies = [
- "tracing-core",
- "tracing-subscriber",
- "tracing-test-macro",
-]
-
-[[package]]
-name = "tracing-test-macro"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad06847b7afb65c7866a36664b75c40b895e318cea4f71299f013fb22965329d"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "tta"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -864,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "tta-command"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bon",
  "thiserror 2.0.21",
@@ -872,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "tta-core-witness"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -884,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "tta-launcher"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bon",
@@ -894,9 +834,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tmax",
  "toml",
- "tracing",
- "tracing-mock",
- "tracing-test",
  "tta-command",
  "tta-scaffold-rekon",
  "tta-scaffold-rekon-native",
@@ -905,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "tta-probe-witness"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -918,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "tta-runner"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bon",
@@ -930,7 +867,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-mock",
- "tracing-test",
  "tta-command",
  "tta-launcher",
  "tta-scaffold-rekon-native",
@@ -938,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "tta-scaffold-rekon"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "thiserror 2.0.21",
  "toml",
@@ -947,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "tta-scaffold-rekon-native"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -959,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "tta-verify"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bon",

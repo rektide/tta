@@ -13,7 +13,15 @@ use portable_pty::CommandBuilder;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tta_command::{Expression, Handoff, Word};
-use tta_launcher::{Selection, target};
+use tta_launcher::{
+    entry::{
+        EntryAttempt,
+        action::{EntryDecision, EntryPlan, ExportedAction},
+        context,
+        protocol::*,
+    },
+    target,
+};
 use tta_runner::{capture, ssh as runner};
 
 use super::{ProcessOutput, Terminal, isolation};
@@ -22,6 +30,32 @@ pub struct Config {
     pub tta: PathBuf,
     pub consumer: Option<PathBuf>,
     pub timeout: Duration,
+}
+
+/// Fixture inputs are explicit presence-bearing values, not target defaults.
+#[derive(bon::Builder)]
+struct Request {
+    argument: String,
+    roots: Option<Vec<PathBuf>>,
+    program: Option<OsString>,
+    satellite_prefix: Option<String>,
+    directory: Option<PathBuf>,
+    #[builder(default)]
+    startup: Vec<OsString>,
+    #[builder(default = "false".into())]
+    default_scaffold: String,
+}
+
+#[derive(Debug)]
+struct Export {
+    plan: EntryPlan,
+    action: ExportedAction,
+    command: tta_command::Command,
+}
+impl Export {
+    fn command(&self) -> &tta_command::Command {
+        &self.command
+    }
 }
 
 #[derive(Default, Serialize)]
@@ -265,29 +299,60 @@ impl Fixture {
         self.remote(&format!("LC_ALL=C TMUX= TMUX_PANE= {source}"))
     }
 
-    fn prepare(&self, options: target::Options, report: &mut Report) -> Result<runner::PreparedRemote> {
+    fn prepare(&self, options: Request, report: &mut Report) -> Result<Export> {
         self.prepare_with(self.setup.clone(), options, report)
     }
 
-    fn prepare_with(&self, setup: target::TargetSetup, options: target::Options, report: &mut Report) -> Result<runner::PreparedRemote> {
-        match runner::prepare(
+    fn prepare_with(&self, setup: target::TargetSetup, options: Request, report: &mut Report) -> Result<Export> {
+        let scope = context::Scope {
+            origin: context::Origin::Ssh {
+                host: self.ssh.destination.clone(),
+                setup,
+            },
+            cwd: None,
+        };
+        let mut attempt = EntryAttempt::acquire(context::Acquisition {
+            scope: scope.clone(),
+            overrides: context::Overrides {
+                roots: options.roots,
+                program: options.program,
+                satellite_prefix: options.satellite_prefix,
+                ..Default::default()
+            },
+            intent: EntryIntent {
+                directory: options.directory,
+                startup: options.startup,
+                ..EntryIntent::selector(options.argument)
+            },
+            default_scaffold: options.default_scaffold,
+        })?;
+        let mut observer = tta_runner::observe::ssh::Ssh::acquire(
             self.ssh.clone(),
-            setup,
-            options,
+            scope,
             capture::Limits {
                 timeout: self.timeout,
                 ..Default::default()
             },
-        ) {
-            Ok(prepared) => {
-                record_observations(&prepared.observations, report);
-                Ok(prepared)
+        )?;
+        // Exercise production SSH read+export binding. Export is observation-only;
+        // this harness deliberately evaluates that frozen artifact under a PTY.
+        // CLI direct/consumer cases below exercise machine-owned dispatch+exec.
+        let result = tta_runner::execute::ssh::drive(&mut attempt, &mut observer, true, Handoff::Run);
+        record_observations(&observer.observations, report);
+        let snapshot = result?;
+        let Some(AttemptOutcome::Exported(action)) = snapshot.outcome else {
+            if let Some(AttemptOutcome::Stopped { cause, .. }) = snapshot.outcome {
+                return Err(anyhow::Error::new(cause));
             }
-            Err(error) => {
-                record_observations(&error.observations, report);
-                Err(error.into())
-            }
-        }
+            bail!("expected exported attempt, got {:?}", snapshot.outcome);
+        };
+        let plan = snapshot.plan.context("exported attempt retains plan")?;
+        let command = observer.terminal_command(plan.target(), action.expression())?;
+        Ok(Export {
+            plan,
+            action: *action,
+            command,
+        })
     }
 
     fn command_builder(&self, command: &tta_command::Command) -> CommandBuilder {
@@ -360,7 +425,16 @@ impl Fixture {
                     // The user, not the library, authorizes a fresh attempt.
                     terminal.writer.write_all(b" ")?;
                     terminal.writer.flush()?;
-                    retry = Some(self.attached(&format!("_{name}-1"))?);
+                    let retry_name = format!("_{name}-1");
+                    let inventory = self.attached(&retry_name)?;
+                    let primary = self.tmux(&["display-message", "-p", "-t", &format!("={name}"), "#{window_id}"])?;
+                    let independent = self.tmux(&["display-message", "-p", "-t", &format!("={retry_name}"), "#{window_id}"])?;
+                    let keep = self.tmux(&["show-options", "-v", "-t", &format!("={retry_name}:"), "destroy-unattached"])?;
+                    ensure!(
+                        primary.success && independent.success && primary.stdout == independent.stdout && keep.success && keep.stdout == "keep-last\n",
+                        "fresh retry did not open a coherent independent view"
+                    );
+                    retry = Some(json!({"inventory": inventory, "primary_window": primary, "retry_window": independent, "keep_last": keep}));
                     terminal.writer.write_all(b"\x02d")?;
                     terminal.writer.flush()?;
                     wait_text_count(&terminal, "space=retry q=quit", 2, self.timeout)?;
@@ -447,7 +521,7 @@ impl Drop for Fixture {
     }
 }
 
-fn record_observations(records: &[runner::Record], report: &mut Report) {
+fn record_observations(records: &[tta_runner::observe::ssh::Record], report: &mut Report) {
     for record in records {
         let decoded = record
             .decoded
@@ -461,7 +535,7 @@ fn record_observations(records: &[runner::Record], report: &mut Report) {
                 })
             })
             .map_err(Clone::clone);
-        report.observations.push(json!({"request": format!("{:?}", record.request), "status": record.output.status.map(|s| s.to_string()), "complete": record.output.complete(), "stop": format!("{:?}", record.output.stop), "stdout": String::from_utf8_lossy(&record.output.stdout), "stderr": String::from_utf8_lossy(&record.output.stderr), "decoded": decoded}));
+        report.observations.push(json!({"request": format!("{:?}", record.request), "step": format!("{:?}", record.step), "capture": record.output.as_ref().map(|out| json!({"status": out.status.map(|s| s.to_string()), "complete": out.complete(), "stop": format!("{:?}", out.stop), "stdout": String::from_utf8_lossy(&out.stdout), "stderr": String::from_utf8_lossy(&out.stderr)})), "decoded": decoded}));
     }
 }
 
@@ -545,7 +619,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     )?;
     let startup: Vec<OsString> = [recorder.as_os_str().to_owned(), "arg with spaces".into(), "quote' $; # 雪".into(), "".into()].into();
     let prepared = fixture.prepare(
-        target::Options::builder()
+        Request::builder()
             .argument(name.into())
             .default_scaffold("default".into())
             .directory(PathBuf::from("initial ' $; directory"))
@@ -553,26 +627,23 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
             .build(),
         report,
     )?;
-    ensure!(matches!(prepared.launch.selection, Selection::Project { .. }), "cold project selection failed");
     ensure!(
-        prepared.facts.cwd == fixture.invocation && prepared.facts.value("HOME") == fixture.directory.path().join("home").to_str(),
-        "target context disagreement lost"
+        matches!(prepared.plan.decision(), EntryDecision::StartProject { .. }),
+        "cold project selection failed"
     );
-    fixture.terminal(fixture.command_builder(&prepared.command()?), name, report, false, false)?;
+    ensure!(prepared.plan.target().cwd() == fixture.invocation, "target context disagreement lost");
+    fixture.terminal(fixture.command_builder(prepared.command()), name, report, false, false)?;
     let argv = fixture.remote(&format!("cat -- {}", quote(argv_file.into_os_string())?))?;
     ensure!(argv.success, "startup artifact: {argv:?}");
     let expected = format!("{}\0arg with spaces\0quote' $; # 雪\0\0", initial.display());
     ensure!(argv.stdout == expected, "literal argv/cwd changed: {argv:?}");
-    report.checks.push(json!({"check": "cold/project; target defaults; literal startup argv and relative target cwd", "selection": format!("{:?}", prepared.launch.selection), "argv": argv}));
+    report.checks.push(json!({"check": "cold/project; target defaults; literal startup argv and relative target cwd", "decision": format!("{:?}", prepared.plan.decision()), "argv": argv}));
 
     let grouped = fixture.prepare(
-        target::Options::builder()
-            .argument(name.into())
-            .roots(vec!["/unusable/project/root".into()])
-            .build(),
+        Request::builder().argument(name.into()).roots(vec!["/unusable/project/root".into()]).build(),
         report,
     )?;
-    let leaves = grouped.launch.plan.expression().steps();
+    let leaves = grouped.action.expression().steps();
     ensure!(leaves.len() == 1, "grouped tmux queue split");
     let Expression::Command(command) = leaves[0] else {
         bail!("missing grouped command");
@@ -582,13 +653,13 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         "grouped queue ordering missing"
     );
     let satellite = format!("_{name}-1");
-    fixture.terminal(fixture.command_builder(&grouped.command()?), &satellite, report, false, false)?;
+    fixture.terminal(fixture.command_builder(grouped.command()), &satellite, report, false, false)?;
     let inventory = fixture.inventory()?;
     ensure!(
         !inventory.lines().any(|line| line.starts_with(&format!("{satellite}\t"))),
         "detached satellite was not removed"
     );
-    report.checks.push(json!({"check": "existing/group; one create-attach-keep-last queue; detach lifecycle", "shell": grouped.launch.plan.expression().shell(Handoff::Run)?, "inventory_after_detach": inventory}));
+    report.checks.push(json!({"check": "existing/group; one create-attach-keep-last queue; detach lifecycle", "shell": grouped.action.shell(), "inventory_after_detach": inventory}));
 
     fixture.setup.environment.push(target::Environment {
         name: "TTA_SATELLITE_PREFIX".into(),
@@ -596,14 +667,14 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     });
     for (explicit, prefix) in [(None, "remote-"), (Some("chosen-"), "chosen-")] {
         let prepared = fixture.prepare(
-            target::Options::builder()
+            Request::builder()
                 .argument(name.into())
                 .maybe_satellite_prefix(explicit.map(str::to_owned))
                 .build(),
             report,
         )?;
         let satellite = format!("{prefix}{name}-1");
-        fixture.terminal(fixture.command_builder(&prepared.command()?), &satellite, report, false, false)?;
+        fixture.terminal(fixture.command_builder(prepared.command()), &satellite, report, false, false)?;
         report
             .checks
             .push(json!({"check": "SSH default independent entry honors target prefix and explicit override", "prefix": prefix, "explicit": explicit}));
@@ -621,7 +692,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         value: Some(serde_json::to_string(&vec![fixture.root.clone(), second_root.clone()])?),
     });
     // A basename duplicated across distinct physical roots stays actionable.
-    let ambiguous = fixture.prepare(target::Options::builder().argument("shared-work".into()).build(), report);
+    let ambiguous = fixture.prepare(Request::builder().argument("shared-work".into()).build(), report);
     let error = format!("{:#}", ambiguous.unwrap_err());
     ensure!(
         error.contains("ambiguous project fragment") && error.contains("@1/shared-work") && error.contains("@2/shared-work"),
@@ -629,32 +700,26 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     );
     // Target-local TTA_ROOTS drives discovery: the second root's unique
     // project is found while contradictory caller values stay local.
-    let only_second = fixture.prepare(target::Options::builder().argument("elsewhere".into()).build(), report)?;
+    let only_second = fixture.prepare(Request::builder().argument("elsewhere".into()).build(), report)?;
     ensure!(
-        matches!(only_second.launch.selection, Selection::Project { directory, .. } if directory == second_root.join("elsewhere")),
+        matches!(only_second.plan.decision(), EntryDecision::StartProject { project, .. } if project.entry == second_root.join("elsewhere")),
         "target TTA_ROOTS did not supply both roots"
     );
     // An explicit root list replaces the whole target TTA_ROOTS layer: with
     // only the second root configured, the duplicate basename resolves there.
     let explicit = fixture.prepare(
-        target::Options::builder()
-            .argument("shared-work".into())
-            .roots(vec![second_root.clone()])
-            .build(),
+        Request::builder().argument("shared-work".into()).roots(vec![second_root.clone()]).build(),
         report,
     )?;
     ensure!(
-        matches!(&explicit.launch.selection, Selection::Project { directory, .. } if directory == &second_root.join("shared-work")),
+        matches!(explicit.plan.decision(), EntryDecision::StartProject { project, .. } if project.entry == second_root.join("shared-work")),
         "explicit root list did not replace target TTA_ROOTS"
     );
-    fixture.terminal(fixture.command_builder(&explicit.command()?), "shared-work", report, false, false)?;
+    fixture.terminal(fixture.command_builder(explicit.command()), "shared-work", report, false, false)?;
     // An unqualified clean miss across two distinct physical roots never
     // chooses a destination; a qualified selector creates in its own root.
     let ambiguous_destination = fixture.prepare(
-        target::Options::builder()
-            .argument("multi-created".into())
-            .default_scaffold("default".into())
-            .build(),
+        Request::builder().argument("multi-created".into()).default_scaffold("default".into()).build(),
         report,
     );
     let error = format!("{:#}", ambiguous_destination.unwrap_err());
@@ -667,7 +732,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         "ambiguous destination request mutated a root"
     );
     let qualified_create = fixture.prepare(
-        target::Options::builder()
+        Request::builder()
             .argument("@2/multi-created".into())
             .default_scaffold("default".into())
             .startup(vec!["/usr/bin/sleep".into(), "180".into()])
@@ -675,17 +740,17 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         report,
     )?;
     ensure!(
-        matches!(&qualified_create.launch.selection, Selection::Create { directory, .. } if directory == &second_root.join("multi-created")),
+        matches!(qualified_create.plan.decision(), EntryDecision::ScaffoldAndStart { destination, .. } if destination.path == second_root.join("multi-created")),
         "qualified selector did not select the second root"
     );
-    fixture.terminal(fixture.command_builder(&qualified_create.command()?), "multi-created", report, false, false)?;
+    fixture.terminal(fixture.command_builder(qualified_create.command()), "multi-created", report, false, false)?;
     let package = fixture.remote(&format!("cat -- {}", quote(second_root.join("multi-created/package.json").into_os_string())?))?;
     ensure!(package.success, "qualified creation missing in the selected root: {package:?}");
     report.checks.push(json!({"check": "real SSH multi-root: target TTA_ROOTS layering, explicit override, duplicate ambiguity, qualified selection and root-honoring creation", "second_root": second_root}));
     fixture.setup.environment.pop();
 
     let generated = fixture.prepare(
-        target::Options::builder()
+        Request::builder()
             .argument("generated".into())
             .default_scaffold("default".into())
             .startup(vec!["/usr/bin/sleep".into(), "180".into()])
@@ -693,11 +758,11 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         report,
     )?;
     ensure!(
-        matches!(generated.launch.selection, Selection::Create { .. }),
+        matches!(generated.plan.decision(), EntryDecision::ScaffoldAndStart { .. }),
         "registry did not activate native scaffold"
     );
     ensure!(!fixture.root.join("generated").exists(), "planning mutated target files");
-    fixture.terminal(fixture.command_builder(&generated.command()?), "generated", report, false, false)?;
+    fixture.terminal(fixture.command_builder(generated.command()), "generated", report, false, false)?;
     let package = fixture.remote(&format!("cat -- {}", quote(fixture.root.join("generated/package.json").into_os_string())?))?;
     ensure!(package.success, "generated package unavailable: {package:?}");
     let parsed: Value = serde_json::from_str(&package.stdout)?;
@@ -728,14 +793,17 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     });
     let failed = fixture.prepare_with(
         setup,
-        target::Options::builder()
+        Request::builder()
             .argument("failed-generation".into())
             .default_scaffold("default".into())
             .build(),
         report,
     )?;
     let before = fixture.inventory()?;
-    let target = failed.setup.launch(&failed.launch, Handoff::Exec)?;
+    let context::Origin::Ssh { setup, .. } = &failed.plan.target().scope().origin else {
+        unreachable!()
+    };
+    let target = setup.shell_command(&failed.action.expression().shell(Handoff::Exec)?)?;
     let output = fixture.remote(&target)?;
     ensure!(!output.success && output.status == Some(43), "failed generator was hidden: {output:?}");
     ensure!(fixture.inventory()? == before, "failed generator mutated tmux");
@@ -748,10 +816,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     symlink("file-blocker/child", fixture.root.join("blocked-link"))?;
     let before = fixture.inventory()?;
     let blocked = fixture.prepare(
-        target::Options::builder()
-            .argument("blocked-link".into())
-            .default_scaffold("default".into())
-            .build(),
+        Request::builder().argument("blocked-link".into()).default_scaffold("default".into()).build(),
         report,
     );
     ensure!(blocked.is_err(), "a symlink target's ENOTDIR was treated as a missing project");
@@ -766,10 +831,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         executable(&program, &format!("#!/bin/sh\n{source}"))?;
         let before = fixture.inventory()?;
         let result = fixture.prepare(
-            target::Options::builder()
-                .argument("must-not-create".into())
-                .program(program.into_os_string())
-                .build(),
+            Request::builder().argument("must-not-create".into()).program(program.into_os_string()).build(),
             report,
         );
         ensure!(result.is_err(), "{label} observation was accepted");
@@ -830,13 +892,13 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
 
     std::fs::create_dir(fixture.root.join("loss-project"))?;
     let lost = fixture.prepare(
-        target::Options::builder()
+        Request::builder()
             .argument("loss-project".into())
             .startup(vec!["/usr/bin/sleep".into(), "180".into()])
             .build(),
         report,
     )?;
-    fixture.terminal(fixture.command_builder(&lost.command()?), "loss-project", report, false, true)?;
+    fixture.terminal(fixture.command_builder(lost.command()), "loss-project", report, false, true)?;
     ensure!(
         fixture.inventory()?.contains("loss-project\t0"),
         "target mutation did not survive transport loss"
@@ -846,6 +908,34 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
         .push(json!({"check": "actual SSH carrier loss after observed target creation; no automatic replay/rollback", "inventory": fixture.inventory()?}));
 
     if let Some(consumer) = &config.consumer {
+        for backend in ["native", "cli"] {
+            let name = format!("consumer-local-{backend}");
+            std::fs::create_dir(fixture.root.join(&name))?;
+            let mut command = CommandBuilder::new(std::path::absolute(consumer)?);
+            command.args(["--config", "/dev/null", "--tta", &name, "--session-backend", "tta-lib", "--tmux-socket"]);
+            command.arg(&fixture.socket);
+            command.arg("--tmux-program");
+            command.arg(fixture.bin.join("tmux"));
+            command.arg("--session-root");
+            command.arg(&fixture.root);
+            command.args([
+                "--shell",
+                "/bin/sh",
+                "--no-login",
+                "--no-interactive",
+                "--scaffold=false",
+                "--",
+                "/usr/bin/sleep",
+                "180",
+            ]);
+            fixture.local_environment(&mut command);
+            command.env("TMUX", "");
+            command.env("TMUX_PANE", "");
+            command.env("TTA_CONFIG", fixture.directory.path().join("registry.toml"));
+            command.env("TTA_BACKEND", backend);
+            fixture.terminal(command, &name, report, true, false)?;
+            report.checks.push(json!({"check": "local embedded consumer: real proxy/PTY, fresh project attempt, detach, user-authorized retry selects running work and opens one independent keep-last view, detach and quit", "backend": backend}));
+        }
         std::fs::create_dir(fixture.root.join("consumer-project"))?;
         let mut command = CommandBuilder::new(std::path::absolute(consumer)?);
         command.args([
@@ -859,6 +949,11 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
             "--shell",
         ]);
         command.arg(fixture.setup.shell.as_ref().unwrap());
+        // These explicit relative paths belong to the observed TARGET cwd,
+        // never this caller's contradictory local cwd.
+        command.arg("--session-root");
+        command.arg(Path::new("..").join(fixture.root.file_name().unwrap()));
+        command.args(["--dir", "."]);
         command.args(["--", "/usr/bin/sleep", "180"]);
         fixture.local_environment(&mut command);
         fixture.terminal(command, "consumer-project", report, true, false)?;
@@ -866,7 +961,7 @@ fn run(config: &Config, fixture: &mut Fixture, report: &mut Report) -> Result<()
     }
     let calls = std::fs::read(fixture.directory.path().join("tmux-argv"))?;
     let new_sessions = calls.split(|b| *b == 0).filter(|word| *word == b"new-session").count();
-    let expected = if config.consumer.is_some() { 12 } else { 10 };
+    let expected = if config.consumer.is_some() { 16 } else { 10 };
     ensure!(new_sessions == expected, "unexpected tmux creation replay: {new_sessions}, expected {expected}");
     report.checks.push(json!({"check": "recorded target tmux argv: exactly one mutation invocation per authorized attempt", "new_session_invocations": new_sessions, "argv_bytes": calls}));
     Ok(())

@@ -1,306 +1,139 @@
-use std::fs;
-
-use tta_launcher::{ResolveError, Selection, Session};
-use tta_runner::{
-    backend::{LookupError, SessionLookup},
-    resolve::resolve,
+//! Selection semantics through real local reads and retained protocol outcomes.
+mod common;
+use common::entry::*;
+use tta_launcher::{
+    ResolveError,
+    entry::{EntryAttempt, action::EntryDecision, protocol::*},
 };
 
-struct Inventory(Vec<Session>);
-
-impl SessionLookup for Inventory {
-    fn sessions(&self) -> Result<Vec<Session>, LookupError> {
-        Ok(self.0.clone())
-    }
-}
-
-fn inventory(names: &[&str]) -> Inventory {
-    Inventory(
-        names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| Session {
-                id: format!("${index}").parse().unwrap(),
-                name: (*name).to_owned(),
-                group: None,
+#[test]
+fn sessions_win_without_root_reads_and_shortest_ambiguity_is_guarded() {
+    let tmp = common::scratch_dir("tta-select-");
+    for (names, selected) in [
+        (vec!["project", "project-two"], "project"),
+        (vec!["long-project", "project-two"], "project-two"),
+    ] {
+        let mut input = input(tmp.path(), "project");
+        input.intent.roots = vec![tmp.path().join("nonexistent")];
+        input.intent.view = ViewPreference::Shared;
+        let attempt = prepare(input, sessions(&names));
+        assert!(matches!(plan(&attempt).decision(), EntryDecision::EnterView { view, .. } if view.fingerprint.name == selected));
+        assert!(!attempt.snapshot().journal.iter().any(|r| matches!(
+            r,
+            AttemptRecord::ReadIssued(ReadRequest {
+                kind: ReadKind::Projects { .. },
+                ..
             })
-            .collect(),
-    )
-}
-
-#[test]
-fn sessions_win_without_reading_a_root_or_requiring_home() {
-    let lookup = inventory(&["project", "project-two"]);
-    let selected = resolve()
-        .lookup(&lookup)
-        .argument("project")
-        .roots(&["/nonexistent-tta-test-root".into()])
-        .call()
-        .unwrap();
-    assert!(matches!(selected, Selection::Existing(Session { name, .. }) if name == "project"));
-    let selected = resolve().lookup(&lookup).argument("two").call().unwrap();
-    assert!(matches!(selected, Selection::Existing(Session { name, .. }) if name == "project-two"));
-    assert!(matches!(resolve().lookup(&inventory(&[])).argument("x").call(), Err(ResolveError::MissingRoot)));
-}
-
-#[test]
-fn shortest_session_wins_before_project_search() {
-    let selected = resolve()
-        .lookup(&inventory(&["long-project", "project-two"]))
-        .argument("project")
-        .roots(&["/nonexistent-tta-test-root".into()])
-        .call()
-        .unwrap();
-    assert!(matches!(selected, Selection::Existing(Session { name, .. }) if name == "project-two"));
-}
-
-#[test]
-fn shortest_project_wins_including_create_mode() {
-    let root = tempfile::tempdir().unwrap();
-    for name in ["long-project", "project-two"] {
-        fs::create_dir(root.path().join(name)).unwrap();
+        )));
     }
-    for create in [false, true] {
-        let selected = resolve()
-            .lookup(&inventory(&[]))
-            .argument("project")
-            .roots(&[root.path().into()])
-            .create(create)
-            .call()
-            .unwrap();
-        assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "project-two"));
-    }
-}
-
-#[test]
-fn session_ambiguity_is_sorted_and_does_not_fall_back_to_projects() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join("project")).unwrap();
-    let error = resolve()
-        .lookup(&inventory(&["z-project", "a-project"]))
-        .argument("project")
-        .roots(&[root.path().into()])
-        .call()
-        .unwrap_err();
-    let ResolveError::Sessions { candidates, .. } = error else {
-        panic!("{error}")
-    };
-    assert_eq!(candidates, ["a-project ($1)", "z-project ($0)"]);
-}
-
-#[test]
-fn project_exact_wins_and_substring_ambiguity_is_sorted() {
-    let root = tempfile::tempdir().unwrap();
-    for name in ["z-project", "project", "a-project"] {
-        fs::create_dir(root.path().join(name)).unwrap();
-    }
-    let selection = resolve()
-        .lookup(&inventory(&[]))
-        .argument("project")
-        .roots(&[root.path().into()])
-        .call()
-        .unwrap();
+    let attempt = prepare(input(tmp.path(), "project"), sessions(&["z-project", "a-project"]));
     assert!(
-        matches!(selection, Selection::Project { directory, session_name, sources } if directory == root.path().canonicalize().unwrap().join("project") && session_name == "project" && sources.len() == 1)
+        matches!(cause(&attempt), EntryError::Ambiguous { candidates, .. } if candidates.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() == ["a-project", "z-project"])
     );
-    fs::remove_dir(root.path().join("project")).unwrap();
-    let error = resolve()
-        .lookup(&inventory(&[]))
-        .argument("project")
-        .roots(&[root.path().into()])
-        .call()
-        .unwrap_err();
-    let ResolveError::Projects { candidates, .. } = error else {
-        panic!("{error}")
-    };
-    assert_eq!(candidates, ["@1/a-project", "@1/z-project"]);
+    let attempt = prepare(input(tmp.path(), "missing"), vec![]);
+    assert!(matches!(cause(&attempt), EntryError::Discovery(ResolveError::MissingRoot)));
+    assert!(matches!(EntryAttempt::start(input(tmp.path(), "")), Err(InputError::EmptySelector)));
 }
 
 #[test]
-fn only_immediate_directories_match_not_files_or_descendants() {
-    let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("project-file"), "").unwrap();
-    fs::create_dir_all(root.path().join("container/project-nested")).unwrap();
-    assert!(matches!(
-        resolve().lookup(&inventory(&[])).argument("project").roots(&[root.path().into()]).call(),
-        Err(ResolveError::Missing { .. })
-    ));
-    fs::create_dir(root.path().join("literal*project")).unwrap();
-    let selected = resolve().lookup(&inventory(&[])).argument("*").roots(&[root.path().into()]).call().unwrap();
-    assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "literal*project"));
-}
-
-#[test]
-fn invalid_names_require_an_override_and_overrides_cannot_collide() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join("project.name")).unwrap();
-    let empty = inventory(&[]);
-    assert!(matches!(
-        resolve().lookup(&empty).argument("project").roots(&[root.path().into()]).call(),
-        Err(ResolveError::InvalidName(_))
-    ));
-    let selected = resolve()
-        .lookup(&empty)
-        .argument("project")
-        .roots(&[root.path().into()])
-        .session_name("project-name")
-        .call()
-        .unwrap();
-    assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "project-name"));
-    assert!(matches!(
-        resolve()
-            .lookup(&inventory(&["occupied"]))
-            .argument("project")
-            .roots(&[root.path().into()])
-            .session_name("occupied")
-            .call(),
-        Err(ResolveError::Collision { .. })
-    ));
-    for invalid in ["", "a:b", "a.b", "a\nb", "a\tb"] {
-        assert!(matches!(
-            resolve()
-                .lookup(&empty)
-                .argument("project")
-                .roots(&[root.path().into()])
-                .session_name(invalid)
-                .call(),
-            Err(ResolveError::InvalidName(_))
-        ));
+fn project_exact_shortest_literal_and_immediate_directory_rules() {
+    let tmp = common::scratch_dir("tta-project-");
+    let root = tmp.path().join("root");
+    for name in ["long-project", "project-two", "literal*name", "container/project-nested"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
     }
-}
-
-#[test]
-fn empty_argument_is_rejected_before_lookup() {
-    struct Unreachable;
-    impl SessionLookup for Unreachable {
-        fn sessions(&self) -> Result<Vec<Session>, LookupError> {
-            panic!("empty argument must not cause I/O")
-        }
-    }
-    assert!(matches!(resolve().lookup(&Unreachable).argument("").call(), Err(ResolveError::Empty)));
-}
-
-#[cfg(unix)]
-#[test]
-fn project_symlinks_keep_the_selected_basename() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join("real")).unwrap();
-    std::os::unix::fs::symlink(root.path().join("real"), root.path().join("alias")).unwrap();
-    let selected = resolve().lookup(&inventory(&[])).argument("alias").roots(&[root.path().into()]).call().unwrap();
-    assert!(matches!(selected, Selection::Project { session_name, .. } if session_name == "alias"));
-}
-
-#[test]
-fn create_mode_turns_a_clean_miss_into_a_fresh_project_selection() {
-    let root = tempfile::tempdir().unwrap();
-    let empty = inventory(&[]);
-    assert!(matches!(
-        resolve().lookup(&empty).argument("fresh").roots(&[root.path().into()]).call(),
-        Err(ResolveError::Missing { .. })
-    ));
-    let selected = resolve()
-        .lookup(&empty)
-        .argument("fresh")
-        .roots(&[root.path().into()])
-        .create(true)
-        .call()
-        .unwrap();
-    assert!(
-        matches!(selected, Selection::Create { directory, session_name, sources } if directory == root.path().canonicalize().unwrap().join("fresh") && session_name == "fresh" && sources.len() == 1)
-    );
-}
-
-#[test]
-fn create_mode_refuses_unsafe_names_and_occupied_paths() {
-    let root = tempfile::tempdir().unwrap();
-    let empty = inventory(&[]);
-    for unsafe_name in ["nested/path", ".", "..", "/absolute"] {
+    std::fs::write(root.join("project-file"), "").unwrap();
+    for (selector, expected) in [("project", "project-two"), ("*", "literal*name")] {
+        let mut input = input(tmp.path(), selector);
+        input.intent.roots = vec![root.clone()];
+        let attempt = prepare(input, vec![]);
         assert!(
-            matches!(
-                resolve().lookup(&empty).argument(unsafe_name).roots(&[root.path().into()]).create(true).call(),
-                Err(ResolveError::UnsafeName { .. })
-            ),
-            "{unsafe_name}"
+            matches!(plan(&attempt).decision(), EntryDecision::StartProject { project, session, .. } if project.name == expected && session.name == expected)
         );
     }
-    fs::write(root.path().join("taken"), "").unwrap();
+    std::fs::create_dir(root.join("project")).unwrap();
+    let mut invocation = input(tmp.path(), "project");
+    invocation.intent.roots = vec![root.clone()];
+    assert!(matches!(plan(&prepare(invocation, vec![])).decision(), EntryDecision::StartProject { project, .. } if project.name == "project"));
+    let mut invocation = input(tmp.path(), "nested");
+    invocation.intent.roots = vec![root];
     assert!(matches!(
-        resolve().lookup(&empty).argument("taken").roots(&[root.path().into()]).create(true).call(),
-        Err(ResolveError::Exists { .. })
-    ));
-    // Dangling symlinks never match a directory search but still collide.
-    std::os::unix::fs::symlink("missing", root.path().join("dangling")).unwrap();
-    assert!(matches!(
-        resolve().lookup(&empty).argument("dangling").roots(&[root.path().into()]).create(true).call(),
-        Err(ResolveError::Exists { .. })
+        cause(&prepare(invocation, vec![])),
+        EntryError::Discovery(ResolveError::Missing { .. })
     ));
 }
 
 #[test]
-fn destination_inspection_errors_are_not_absence() {
-    let root = tempfile::tempdir().unwrap();
-    let file = root.path().join("file");
-    fs::write(&file, "not a directory").unwrap();
-    assert!(matches!(
-        tta_runner::resolve::destination_state(&file.join("child")),
-        Err(ResolveError::Directory { .. })
-    ));
-    assert_eq!(
-        tta_runner::resolve::destination_state(&root.path().join("missing")).unwrap(),
-        tta_launcher::DestinationState::Absent
-    );
-    assert_eq!(tta_runner::resolve::destination_state(&file).unwrap(), tta_launcher::DestinationState::Present);
-}
-
-#[test]
-fn create_mode_keeps_matching_priority_ambiguity_and_name_rules() {
-    let root = tempfile::tempdir().unwrap();
-    for name in ["a-fresh", "z-fresh"] {
-        fs::create_dir(root.path().join(name)).unwrap();
+fn invalid_names_need_an_override_and_collisions_stop_before_delivery() {
+    let tmp = common::scratch_dir("tta-names-");
+    std::fs::create_dir(tmp.path().join("project.name")).unwrap();
+    for name in [
+        None,
+        Some(""),
+        Some("a:b"),
+        Some("a.b"),
+        Some("a\nb"),
+        Some("a\tb"),
+        Some("safe"),
+        Some("occupied"),
+    ] {
+        let mut invocation = input(tmp.path(), "project");
+        invocation.intent.roots = vec![tmp.path().into()];
+        invocation.intent.session_name = name.map(Into::into);
+        match EntryAttempt::start(invocation) {
+            Err(InputError::Name(ResolveError::InvalidName(_))) => assert!(!matches!(name, Some("safe" | "occupied") | None)),
+            Ok(mut attempt) => {
+                read(&mut attempt, sessions(&["occupied"]));
+                match name {
+                    Some("safe") => assert!(matches!(plan(&attempt).decision(), EntryDecision::StartProject { session, .. } if session.name == "safe")),
+                    Some("occupied") => assert!(matches!(cause(&attempt), EntryError::NameCollision { .. })),
+                    None => assert!(matches!(cause(&attempt), EntryError::Discovery(ResolveError::InvalidName(_)))),
+                    _ => panic!("invalid input accepted"),
+                }
+            }
+            _ => panic!("unexpected invocation result"),
+        }
     }
-    let empty = inventory(&[]);
-    // Ambiguity still stops; creation never resolves it by guessing.
+}
+
+#[cfg(any(feature = "scaffold-rekon", feature = "scaffold-rekon-native"))]
+#[test]
+fn clean_creation_miss_never_rescues_ambiguity_unsafe_names_or_occupied_destinations() {
+    let tmp = common::scratch_dir("tta-create-");
+    std::fs::write(tmp.path().join("taken"), "").unwrap();
+    std::os::unix::fs::symlink("missing", tmp.path().join("dangling")).unwrap();
+    for name in ["fresh", "taken", "dangling", "nested/path", ".", "..", "/absolute"] {
+        let mut invocation = input(tmp.path(), name);
+        invocation.intent.roots = vec![tmp.path().into()];
+        enable_creation(&mut invocation);
+        let attempt = prepare(invocation, vec![]);
+        match name {
+            "fresh" => assert!(
+                matches!(plan(&attempt).decision(), EntryDecision::ScaffoldAndStart { destination, .. } if destination.path == tmp.path().join("fresh"))
+            ),
+            "taken" | "dangling" => assert!(matches!(cause(&attempt), EntryError::DestinationExists { .. })),
+            _ => assert!(matches!(cause(&attempt), EntryError::Discovery(ResolveError::UnsafeName { .. }))),
+        }
+    }
+    assert!(!tmp.path().join("fresh").exists());
+    for name in ["a-fresh", "z-fresh"] {
+        std::fs::create_dir(tmp.path().join(name)).unwrap();
+    }
+    let mut invocation = input(tmp.path(), "fresh");
+    invocation.intent.roots = vec![tmp.path().into()];
+    enable_creation(&mut invocation);
     assert!(matches!(
-        resolve().lookup(&empty).argument("fresh").roots(&[root.path().into()]).create(true).call(),
-        Err(ResolveError::Projects { .. })
+        cause(&prepare(invocation, vec![])),
+        EntryError::Discovery(ResolveError::Projects { .. })
     ));
-    // Existing sessions and directories still win over creation.
-    fs::create_dir(root.path().join("present")).unwrap();
-    assert!(matches!(
-        resolve().lookup(&empty).argument("present").roots(&[root.path().into()]).create(true).call(),
-        Ok(Selection::Project { .. })
-    ));
-    assert!(matches!(
-        resolve()
-            .lookup(&inventory(&["live"]))
-            .argument("live")
-            .roots(&[root.path().into()])
-            .create(true)
-            .call(),
-        Ok(Selection::Existing { .. })
-    ));
-    // Session-name rules and collisions apply before any generator runs.
-    assert!(matches!(
-        resolve()
-            .lookup(&empty)
-            .argument("dotted.name")
-            .roots(&[root.path().into()])
-            .create(true)
-            .call(),
-        Err(ResolveError::InvalidName(_))
-    ));
-    assert!(matches!(
-        resolve().lookup(&empty).argument("dotted.name").roots(&[root.path().into()]).create(true).session_name("dotted").call(),
-        Ok(Selection::Create { session_name, .. }) if session_name == "dotted"
-    ));
-    assert!(matches!(
-        resolve()
-            .lookup(&inventory(&["occupied"]))
-            .argument("fresh-two")
-            .roots(&[root.path().into()])
-            .create(true)
-            .session_name("occupied")
-            .call(),
-        Err(ResolveError::Collision { .. })
-    ));
+}
+
+#[test]
+fn destination_inspection_is_lstat_and_not_directory_errors_are_not_absence() {
+    use tta_runner::observe::filesystem::destination_state;
+    let tmp = common::scratch_dir("tta-lstat-");
+    std::fs::write(tmp.path().join("file"), "").unwrap();
+    assert!(matches!(destination_state(&tmp.path().join("file/child")), Err(ResolveError::Directory { .. })));
+    assert_eq!(destination_state(&tmp.path().join("file")).unwrap(), DestinationEvidence::Present);
+    assert_eq!(destination_state(&tmp.path().join("missing")).unwrap(), DestinationEvidence::Absent);
 }

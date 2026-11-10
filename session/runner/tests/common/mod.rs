@@ -4,6 +4,7 @@
 //! own uniquely named private directory below the chosen root, so isolation
 //! never depends on which root was selected.
 use std::path::PathBuf;
+pub mod entry;
 
 pub fn scratch_root() -> PathBuf {
     if let Some(path) = std::env::var_os("TTA_TEST_TMPDIR").filter(|value| !value.is_empty()) {

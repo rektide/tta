@@ -16,7 +16,6 @@ use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
 use tta_launcher::entry::{
     EntryAttempt,
-    action::EntryDecision,
     catalog::{self, Candidate, CatalogQuery, Input as CatalogInput},
     context,
     protocol::*,
@@ -290,75 +289,21 @@ fn run(args: Args) -> Result<ExitCode> {
     let handoff = if args.print_shell && !args.exec_shell { Handoff::Run } else { Handoff::Exec };
     let mut executor = execute_local::Local::default();
     let snapshot = tta_runner::execute::drive(&mut attempt, &mut observer, &mut executor, delivery, handoff).context("tmux launch failed")?;
-    finish(snapshot, args.print_shell, handoff)
+    finish(snapshot, handoff)
 }
 
 fn attempt_intent_selector(args: &Args) -> &str {
     args.argument.as_deref().unwrap_or("")
 }
 
-/// Derive the operation label from the semantic decision and bound client —
-/// no duplicate classification matrix in the frontend.
-fn operation_label(decision: &EntryDecision, via: ClientEntry) -> &'static str {
-    let inside = via == ClientEntry::SwitchWithinServer;
-    match decision {
-        EntryDecision::EnterView { .. } => {
-            if inside {
-                "switch-client"
-            } else {
-                "attach-session"
-            }
-        }
-        EntryDecision::OpenView { .. } => {
-            if inside {
-                "new-grouped-session-detached+switch-client"
-            } else {
-                "new-grouped-session-detached+attach"
-            }
-        }
-        EntryDecision::StartProject { .. } => {
-            if inside {
-                "new-session-detached+switch-client"
-            } else {
-                "new-session+attach"
-            }
-        }
-        EntryDecision::ScaffoldAndStart { .. } => {
-            if inside {
-                "scaffold+new-session-detached+switch-client"
-            } else {
-                "scaffold+new-session+attach"
-            }
-        }
-    }
-}
-
 /// Report an attempt outcome: exported shell, completed receipts (an
 /// aggregate terminal status becomes this process's exit status), or the
 /// typed stopped cause with its honest mutation knowledge. Labels come from
 /// the semantic decision, never a second classification matrix.
-fn finish(snapshot: AttemptSnapshot, print_shell: bool, handoff: Handoff) -> Result<ExitCode> {
+fn finish(snapshot: AttemptSnapshot, handoff: Handoff) -> Result<ExitCode> {
     let Some(outcome) = snapshot.outcome else {
         anyhow::bail!("entry attempt ended without an outcome at {}", snapshot.leaf);
     };
-    if let Some(plan) = &snapshot.plan {
-        // The label derives from the semantic decision; there is no second
-        // classification matrix in the frontend.
-        let (decision, session_name) = match plan.decision() {
-            EntryDecision::EnterView { view, .. } => ("existing", view.fingerprint.name.clone()),
-            EntryDecision::OpenView { work, .. } => ("existing", work.anchor.name.clone()),
-            EntryDecision::StartProject { session, .. } => ("new", session.name.clone()),
-            EntryDecision::ScaffoldAndStart { session, .. } => ("create", session.name.clone()),
-        };
-        tracing::info!(event = "resolution", decision, session_name = %session_name);
-        let operation = operation_label(plan.decision(), plan.target().client());
-        tracing::info!(event = "plan", operation, client = ?plan.target().client());
-        if print_shell {
-            tracing::info!(event = "emission", handoff = ?handoff);
-        } else {
-            tracing::info!(event = "handoff", operation);
-        }
-    }
     match outcome {
         AttemptOutcome::Exported(exported) => {
             println!("{}", exported.expression().shell(handoff)?);
@@ -576,7 +521,9 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
             Some((_, EffectReceipt::Terminal { code: Some(code) })) => ExitCode::from(*code as u8),
             _ => ExitCode::SUCCESS,
         }),
-        Some(AttemptOutcome::Stopped { cause, .. }) => Err(anyhow::Error::new(Caused(cause)).context("SSH planning stopped before mutation")),
+        Some(AttemptOutcome::Stopped { boundary, effects, cause }) => {
+            Err(anyhow::Error::new(Caused(cause)).context(format!("SSH entry stopped at {boundary}; retained effect knowledge {effects:?}")))
+        }
         Some(AttemptOutcome::Cancelled { boundary, .. }) => anyhow::bail!("entry attempt cancelled at {boundary}"),
         Some(AttemptOutcome::Delegated { .. }) => Ok(ExitCode::SUCCESS),
         None => anyhow::bail!("SSH attempt ended without an outcome at {}", snapshot.leaf),

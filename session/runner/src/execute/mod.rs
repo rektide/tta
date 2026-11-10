@@ -56,8 +56,13 @@ pub fn drive(
 /// successful exec never returns to emit them afterwards.
 pub fn run(attempt: &mut EntryAttempt, observer: &mut dyn Observer, executor: &mut dyn Executor, handoff: Handoff) -> Result<AttemptSnapshot> {
     drive_reads(attempt, observer).context("entry read driver")?;
-    if let Some(plan) = attempt.snapshot().plan {
-        trace_plan(&plan, handoff);
+    let snapshot = attempt.snapshot();
+    if let Some(plan) = snapshot.plan.filter(|_| snapshot.bound.is_some()) {
+        trace_plan(
+            &plan,
+            matches!(snapshot.outcome, Some(tta_launcher::entry::protocol::AttemptOutcome::Exported(_))),
+            handoff,
+        );
     }
     loop {
         let effect = match attempt.waiting() {
@@ -114,7 +119,7 @@ pub fn operation_label(decision: &EntryDecision, via: ClientEntry) -> &'static s
     }
 }
 
-pub(crate) fn trace_plan(plan: &tta_launcher::entry::action::EntryPlan, handoff: Handoff) {
+pub(crate) fn trace_plan(plan: &tta_launcher::entry::action::EntryPlan, exported: bool, handoff: Handoff) {
     let (decision, session_name) = match plan.decision() {
         EntryDecision::EnterView { view, .. } => ("existing", view.fingerprint.name.clone()),
         EntryDecision::OpenView { work, .. } => ("existing", work.anchor.name.clone()),
@@ -124,7 +129,7 @@ pub(crate) fn trace_plan(plan: &tta_launcher::entry::action::EntryPlan, handoff:
     tracing::info!(event = "resolution", decision, session_name = %session_name);
     tracing::info!(event = "plan", operation = operation_label(plan.decision(), plan.target().client()), client = ?plan.target().client());
     tracing::info!(
-        event = if handoff == Handoff::Exec { "handoff" } else { "emission" },
+        event = if exported { "emission" } else { "handoff" },
         operation = operation_label(plan.decision(), plan.target().client()),
         handoff = ?handoff
     );

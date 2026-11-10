@@ -1299,11 +1299,6 @@ fn rekon_registry() -> crate::scaffold::Config {
     crate::scaffold::Config::parse(None, Some("[scaffold]\ndefault = \"rk\"\n\n[scaffold.generators.rk]\nadapter = \"rekon\"\n")).unwrap()
 }
 
-#[cfg(not(feature = "scaffold-rekon"))]
-fn rekon_registry() -> crate::scaffold::Config {
-    crate::scaffold::Config::parse(None, None).unwrap()
-}
-
 #[cfg(feature = "scaffold-rekon")]
 #[test]
 fn unqualified_creation_with_multiple_physical_roots_offers_qualified_selectors() {

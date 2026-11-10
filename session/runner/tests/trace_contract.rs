@@ -1,61 +1,57 @@
-//! Scoped structural mocks do not share tracing-test's global subscriber.
+//! Scoped production trace contract derives labels from semantic decisions.
+mod common;
 use tracing::Level;
 use tracing_mock::{expect, subscriber};
-use tta_launcher::{Selection, Session};
-use tta_runner::{
-    backend::{LookupError, SessionLookup},
-    resolve::resolve,
-};
-
-struct Inventory;
-impl SessionLookup for Inventory {
-    fn sessions(&self) -> Result<Vec<Session>, LookupError> {
-        Ok(vec![Session {
-            id: "$2".parse().unwrap(),
-            name: "project".into(),
-            group: None,
-        }])
-    }
-}
+use tta_command::Handoff;
+use tta_launcher::entry::protocol::*;
 
 #[test]
-fn lookup_then_exact_match_events_remain_inside_the_resolve_span() {
-    let span = expect::span().named("resolve");
+fn exported_entry_emits_resolution_plan_and_emission_once_in_order() {
+    let tmp = common::scratch_dir("tta-trace-");
+    let mut i = common::entry::input(tmp.path(), "project");
+    i.intent.view = ViewPreference::Shared;
+    let mut attempt = common::entry::prepare(i, common::entry::sessions(&["project"]));
+    let mut inventory = common::entry::Inventory(common::entry::sessions(&["project"]));
+    let target = attempt.snapshot().target.unwrap();
+    let mut observer = tta_runner::observe::local::Local::supplied(&target, &mut inventory).unwrap();
+    let field = |value| expect::field("event").with_value(value);
     let (subscriber, handle) = subscriber::mock()
-        .new_span(span.clone().with_fields(expect::field("argument").with_value(&"project").only()))
-        .enter(span.clone())
         .event(
-            expect::event()
-                .at_level(Level::INFO)
-                .with_ancestry(expect::has_contextual_parent("resolve"))
-                .with_fields(
-                    expect::field("event")
-                        .with_value(&"lookup.complete")
-                        .and(expect::field("count").with_value(&1usize))
-                        .only(),
-                ),
+            expect::event().at_level(Level::INFO).with_fields(
+                field(&"resolution")
+                    .and(expect::field("decision").with_value(&"existing"))
+                    .and(expect::field("session_name").with_value(&tracing::field::display("project")))
+                    .only(),
+            ),
         )
         .event(
-            expect::event()
-                .at_level(Level::INFO)
-                .with_ancestry(expect::has_contextual_parent("resolve"))
-                .with_fields(
-                    expect::field("event")
-                        .with_value(&"match.existing")
-                        .and(expect::field("session_id"))
-                        .and(expect::field("session_name"))
-                        .only(),
-                ),
+            expect::event().at_level(Level::INFO).with_fields(
+                field(&"plan")
+                    .and(expect::field("operation").with_value(&"attach-session"))
+                    .and(expect::field("client"))
+                    .only(),
+            ),
         )
-        .exit(span.clone())
-        .drop_span(span)
+        .event(
+            expect::event().at_level(Level::INFO).with_fields(
+                field(&"emission")
+                    .and(expect::field("operation").with_value(&"attach-session"))
+                    .and(expect::field("handoff"))
+                    .only(),
+            ),
+        )
         .only()
         .run_with_handle();
     tracing::subscriber::with_default(subscriber, || {
-        assert!(matches!(
-            resolve().lookup(&Inventory).argument("project").call().unwrap(),
-            Selection::Existing(_)
-        ));
+        let snapshot = tta_runner::execute::drive(
+            &mut attempt,
+            &mut observer,
+            &mut tta_runner::execute::local::Local::default(),
+            Delivery::Export,
+            Handoff::Run,
+        )
+        .unwrap();
+        assert!(matches!(snapshot.outcome, Some(AttemptOutcome::Exported(_))));
     });
     handle.assert_finished();
 }

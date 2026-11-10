@@ -20,7 +20,8 @@ fn failure(output: Output, evidence: &str) {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains(evidence), "missing {evidence}: {stderr}");
-    assert!(stderr.contains("SSH planning stopped before mutation"), "{stderr}");
+    assert!(stderr.contains("SSH entry stopped at context_read"), "{stderr}");
+    assert!(stderr.contains("EffectKnowledge { finished: [], in_flight: [] }"), "{stderr}");
 }
 
 #[test]

@@ -10,13 +10,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
-use bon::builder;
+use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 use toml::Table;
 use tta_command::Expression;
-
-use crate::{DestinationState, ProjectInventory, Resolution, Selection, Session};
 
 /// Observed target defaults, already layered AUTHOR > Git identity and LICENSE.
 /// Absent values are explicit; the generator never reads the local host.
@@ -24,12 +21,6 @@ use crate::{DestinationState, ProjectInventory, Resolution, Selection, Session};
 pub struct Defaults {
     pub author: Option<String>,
     pub license: Option<String>,
-}
-
-#[derive(Debug)]
-pub enum Progress {
-    Observe(Resolution),
-    Resolved(Resolved),
 }
 
 /// Standard-error-compatible boundary for embedded callers (including eyre).
@@ -60,113 +51,6 @@ impl Choice {
             name => Self::Named(name.to_owned()),
         })
     }
-}
-
-#[derive(Debug)]
-pub struct Resolved {
-    pub selection: Selection,
-    /// Pass this to launch().maybe_prefix(...); only Create selections have one.
-    pub prefix: Option<Expression>,
-    /// Present only when a Create selection uses this generator.
-    pub generator: Option<Entry>,
-}
-
-/// Apply a validated registry and choice to supplied facts. Missing facts yield
-/// observation requests; no environment, filesystem or process is consulted.
-#[builder]
-pub fn resolve(
-    sessions: &[Session],
-    argument: &str,
-    #[builder(default = "_")] satellite_prefix: &str,
-    #[builder(default = &[])] roots: &[PathBuf],
-    session_name: Option<&str>,
-    choice: &str,
-    config: &Config,
-    #[builder(default = &[])] projects: &[ProjectInventory],
-    destination: Option<DestinationState>,
-    defaults: &Defaults,
-) -> std::result::Result<Progress, Error> {
-    resolve_with_config(
-        config,
-        sessions,
-        argument,
-        satellite_prefix,
-        roots,
-        session_name,
-        choice,
-        projects,
-        destination,
-        defaults,
-    )
-    .map_err(Error::from)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn resolve_with_config(
-    config: &Config,
-    sessions: &[Session],
-    argument: &str,
-    satellite_prefix: &str,
-    roots: &[PathBuf],
-    session_name: Option<&str>,
-    choice: &str,
-    projects: &[ProjectInventory],
-    destination: Option<DestinationState>,
-    defaults: &Defaults,
-) -> Result<Progress> {
-    let choice = Choice::parse(choice)?;
-    let generator = match &choice {
-        Choice::Off => None,
-        Choice::Named(name) => Some(config.entry(name)?),
-        Choice::Default => config.default_entry()?,
-    };
-    let selection = match crate::resolve()
-        .sessions(sessions)
-        .argument(argument)
-        .satellite_prefix(satellite_prefix)
-        .roots(roots)
-        .maybe_session_name(session_name)
-        .create(generator.is_some())
-        .projects(projects)
-        .maybe_destination(destination)
-        .call()
-    {
-        Ok(Resolution::Selected(selection)) => selection,
-        Ok(request) => return Ok(Progress::Observe(request)),
-        Err(error @ crate::ResolveError::Missing { .. }) if matches!(choice, Choice::Default) && config.is_empty() => {
-            return Err(anyhow::Error::new(error).context(format!(
-                "scaffold mode is on but no generators are configured; add [scaffold.generators] to {} or disable with --scaffold=false",
-                config.path_description()
-            )));
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let (prefix, generator) = if let Selection::Create { directory, .. } = &selection {
-        let entry = generator.expect("create selections require a chosen generator");
-        // The external rekon script takes only the project name and lands it
-        // in its own hardcoded location, ignoring the selected root. With one
-        // configured root that divergence is the documented single-root
-        // limitation; with several configured roots no script destination can
-        // agree with the destination tta selected, so refuse before generation
-        // instead of mutating elsewhere. A qualified @N selector does not help:
-        // the script never sees it either.
-        if entry.adapter == "rekon" && roots.len() > 1 {
-            bail!(
-                "generator {:?} uses the external rekon adapter, whose script ignores the selected project root; refusing to create {:?} across configured roots {roots:?}: use a rekon-native generator (which honors the root), configure a single root, or change the rekon script's destination contract",
-                entry.name,
-                directory
-            );
-        }
-        let project = directory
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .with_context(|| format!("created project directory {directory:?} must have a UTF-8 name"))?;
-        let root = directory.parent().context("created project directory has no parent")?;
-        (Some(entry.scaffold(project, root, defaults)?), Some(entry))
-    } else {
-        (None, None)
-    };
-    Ok(Progress::Resolved(Resolved { selection, prefix, generator }))
 }
 
 #[derive(Clone, Debug)]
@@ -295,17 +179,6 @@ fn adapter(name: &str) -> Option<(Adapter, AdapterValidate, DestinationContract)
 }
 
 impl Entry {
-    /// Which target defaults are still needed after validating adapter options.
-    /// External rekon owns its defaults; it needs no launcher observation.
-    pub fn defaults_required(&self) -> (bool, bool) {
-        if self.adapter != "rekon-native" || self.options.get("package-json").and_then(toml::Value::as_bool) == Some(false) {
-            return (false, false);
-        }
-        let author = !self.options.get("author").and_then(toml::Value::as_str).is_some_and(|value| !value.is_empty());
-        let license = !self.options.contains_key("license");
-        (author, license)
-    }
-
     /// Validate this generator's adapter options and report its declared
     /// default requirements and destination contract, without materializing
     /// its program. The single later materialization receives actual facts.
@@ -506,69 +379,11 @@ adapter = \"rekon\"
 
     #[cfg(feature = "scaffold-rekon")]
     #[test]
-    fn external_rekon_fails_closed_for_multi_root_creation() {
-        use crate::{DestinationState, ProjectInventory, Selection};
+    fn external_rekon_declares_adapter_owned_destination_and_no_defaults() {
         let config = load(MINIMAL);
-        let inventory = |root: &str| ProjectInventory {
-            requested_root: root.into(),
-            root: root.into(),
-            entries: Vec::new(),
-        };
-        let resolve = |roots: &[std::path::PathBuf], argument: &str| {
-            crate::scaffold::resolve()
-                .sessions(&[])
-                .argument(argument)
-                .roots(roots)
-                .choice("default")
-                .config(&config)
-                .projects(&roots.iter().map(|root| inventory(root.to_str().unwrap())).collect::<Vec<_>>())
-                .maybe_destination(Some(DestinationState::Absent))
-                .defaults(&Defaults::default())
-                .call()
-        };
-        let single = resolve(&["/only".into()], "fresh").unwrap();
-        let Progress::Resolved(single) = single else {
-            panic!("all facts were supplied; expected a resolution");
-        };
-        assert!(
-            matches!(&single.selection, Selection::Create { directory, .. } if directory == std::path::Path::new("/only/fresh")),
-            "single-root external rekon keeps its documented divergence"
-        );
-        // A qualified selector with distinct roots, and an unqualified miss
-        // whose roots alias one physical destination: both would otherwise be
-        // creatable, so the adapter boundary is what must refuse.
-        for (roots, supplied, argument) in [
-            (vec!["/one".into(), "/two".into()], vec![("/two", "/two")], "@2/fresh"),
-            (
-                vec!["/alias".into(), "/physical".into()],
-                vec![("/alias", "/physical"), ("/physical", "/physical")],
-                "fresh",
-            ),
-        ] {
-            let projects = supplied
-                .iter()
-                .map(|&(requested, root): &(&str, &str)| ProjectInventory {
-                    requested_root: requested.into(),
-                    root: root.into(),
-                    entries: Vec::new(),
-                })
-                .collect::<Vec<_>>();
-            let error = crate::scaffold::resolve()
-                .sessions(&[])
-                .argument(argument)
-                .roots(&roots)
-                .choice("default")
-                .config(&config)
-                .projects(&projects)
-                .maybe_destination(Some(DestinationState::Absent))
-                .defaults(&Defaults::default())
-                .call()
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("external rekon adapter"), "{argument}: {error}");
-            assert!(error.contains("configured roots"), "{argument}: {error}");
-            assert!(error.contains("rekon-native"), "{argument}: {error}");
-        }
+        let spec = config.entry("rk").unwrap().validated().unwrap();
+        assert_eq!(spec.destination, DestinationContract::AdapterDecided);
+        assert_eq!(spec.needs_defaults, (false, false));
     }
 
     #[cfg(feature = "scaffold-rekon")]

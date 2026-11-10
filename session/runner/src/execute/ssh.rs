@@ -51,6 +51,10 @@ pub fn drive(attempt: &mut EntryAttempt, observer: &mut crate::observe::ssh::Ssh
             .context("entry delivery violated the attempt protocol")?;
     }
     crate::observe::drive_reads(attempt, observer).context("entry read driver")?;
+    let snapshot = attempt.snapshot();
+    if let Some(plan) = snapshot.plan.filter(|_| snapshot.bound.is_some()) {
+        super::trace_plan(&plan, print, terminal_handoff);
+    }
     loop {
         let effect = match attempt.waiting() {
             Waiting::Effect(effect) => effect.clone(),

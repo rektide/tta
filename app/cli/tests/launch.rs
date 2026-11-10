@@ -322,63 +322,84 @@ fn grouped_launch_retains_one_cli_queue_even_with_destroy_unattached_on() {
 #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
 #[test]
 fn failed_native_create_never_hands_off_and_failed_handoff_leaves_creation() {
-    use tta_command::{Command as Step, Expression, Handoff, Word};
-    use tta_launcher::{ClientMode, Selection, prepare_launch, socket};
-    use tta_runner::execution::{ExecuteError, ExecuteLaunch, LaunchBackend};
-
+    use tta_command::Handoff;
+    use tta_launcher::{
+        entry::{EntryAttempt, protocol::*},
+        scaffold, socket,
+    };
+    use tta_runner::{execute, observe};
     let mut fixture = Fixture::new();
     fixture.attach();
     let before = fixture.clients();
     let directory = fixture.temp.path().join("generated");
-    let selection = Selection::Create {
-        sources: vec![],
-        directory: directory.clone(),
-        session_name: "fresh".into(),
+    std::fs::create_dir(&directory).unwrap();
+    let make_attempt = |name: &str| {
+        EntryAttempt::start(Invocation {
+            context: SuppliedContext {
+                host: "private-test".into(),
+                cwd: fixture.temp.path().into(),
+                socket: socket::Resolved::path(&fixture.socket),
+                program: fixture.temp.path().join("missing-client").into_os_string(),
+                config: None,
+                client: ClientEntry::SwitchWithinServer,
+            },
+            intent: EntryIntent {
+                roots: vec![fixture.temp.path().into()],
+                session_name: Some(name.into()),
+                startup: vec!["sleep".into(), "120".into()],
+                ..EntryIntent::selector("generated")
+            },
+            registry: scaffold::Config::parse(None, None).unwrap(),
+            generator: scaffold::Choice::Off,
+        })
+        .unwrap()
     };
-    let make_plan = |prefix: &Expression, program: &Path| {
-        prepare_launch()
-            .selection(&selection)
-            .socket(&socket::Resolved::path(&fixture.socket))
-            .client_mode(ClientMode::Switch)
-            .program(program.as_os_str())
-            .prefix(prefix)
-            .call()
-            .unwrap()
+    let mut attempt = make_attempt("fresh");
+    let target = attempt.snapshot().target.unwrap();
+    let mut sessions = observe::local::SessionBackend::Native;
+    let mut observer = observe::local::Local::supplied(&target, &mut sessions).unwrap();
+    let snapshot = execute::drive(
+        &mut attempt,
+        &mut observer,
+        &mut execute::local::Local::default(),
+        Delivery::Execute { native: true },
+        Handoff::Run,
+    )
+    .unwrap();
+    let Some(AttemptOutcome::Stopped { cause, effects, .. }) = snapshot.outcome else {
+        panic!()
     };
-    let prefix = Expression::from(
-        Step::builder()
-            .program(Word::new("sh").unwrap())
-            .args(vec![Word::new("-c").unwrap(), Word::new("exit 23").unwrap()])
-            .build(),
-    );
-    let plan = make_plan(&prefix, &fixture.temp.path().join("tmux-client"));
-    assert_eq!(plan.execute(LaunchBackend::Native, Handoff::Run).unwrap().unwrap().code(), Some(23));
-    assert!(!directory.exists());
-    assert!(fixture.records().is_empty());
-    assert_eq!(fixture.clients(), before);
-
-    let prefix = Expression::from(Step::builder().program(Word::new("true").unwrap()).build());
-    let plan = make_plan(&prefix, &fixture.temp.path().join("tmux-client"));
+    assert!(matches!(&*cause, EntryError::Effect { effect, failure } if effect.is_terminal() && failure.mutation == MutationKnowledge::MayHaveOccurred));
     assert!(matches!(
-        plan.execute(LaunchBackend::Native, Handoff::Run),
-        Err(ExecuteError::Command(tta_runner::command::Error::Directory { .. }))
+        effects.finished.as_slice(),
+        [(_, EffectReceipt::Directory), (_, EffectReceipt::Created)]
     ));
-    assert!(fixture.records().is_empty());
-
-    let prefix = Expression::from(
-        Step::builder()
-            .program(Word::new("mkdir").unwrap())
-            .args(vec![Word::new(directory.as_os_str()).unwrap()])
-            .build(),
-    );
-    let plan = make_plan(&prefix, &fixture.temp.path().join("missing-client"));
-    assert!(matches!(plan.execute(LaunchBackend::Native, Handoff::Run), Err(ExecuteError::Command(_))));
     assert_eq!(fixture.run(&["display-message", "-p", "-t", "=fresh:", "#{session_name}"]), "fresh");
     assert_eq!(fixture.clients(), before);
-
-    let prefix = Expression::from(Step::builder().program(Word::new("true").unwrap()).build());
-    let plan = make_plan(&prefix, &fixture.temp.path().join("tmux-client"));
-    assert!(matches!(plan.execute(LaunchBackend::Native, Handoff::Run), Err(ExecuteError::Native(_))));
+    // Bind while the next name is free, then let a competing creator win. The
+    // actor attempts native creation once and cannot fall back to a CLI block.
+    let mut attempt = make_attempt("raced");
+    let target = attempt.snapshot().target.unwrap();
+    let mut sessions = observe::local::SessionBackend::Native;
+    let mut observer = observe::local::Local::supplied(&target, &mut sessions).unwrap();
+    observe::drive_reads(&mut attempt, &mut observer).unwrap();
+    attempt.advance(Event::Deliver(Delivery::Execute { native: true })).unwrap();
+    observe::drive_reads(&mut attempt, &mut observer).unwrap();
+    fixture.run(&["new-session", "-d", "-s", "raced", "sleep", "120"]);
+    let snapshot = execute::run(&mut attempt, &mut observer, &mut execute::local::Local::default(), Handoff::Run).unwrap();
+    let Some(AttemptOutcome::Stopped { cause, effects, .. }) = snapshot.outcome else {
+        panic!()
+    };
+    assert!(
+        matches!(&*cause, EntryError::Effect { effect, failure } if matches!(effect.kind, EffectKind::CreateNative { .. }) && failure.mutation == MutationKnowledge::MayHaveOccurred)
+    );
+    assert!(matches!(effects.finished.as_slice(), [(_, EffectReceipt::Directory)]));
+    assert!(
+        !snapshot
+            .journal
+            .iter()
+            .any(|r| matches!(r, AttemptRecord::EffectIssued(effect) if effect.is_terminal()))
+    );
     assert!(fixture.records().is_empty());
     assert_eq!(fixture.clients(), before);
 }

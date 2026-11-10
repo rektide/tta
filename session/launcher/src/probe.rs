@@ -3,26 +3,13 @@
 //! Profile: POSIX sh, id, pwd, cat, od, head; GNU find (`-printf`, `%Y`) for
 //! filesystem facts and GNU stat for symlink referents; Git only for an actually
 //! needed, unset author default. GNU find's `%Y=N` alone is NOT proof of ENOENT.
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Result, bail, ensure};
 use tmax::operation::{ReplyDecoder, TypedOperation};
-use tta_command::{Command, Expression, Handoff, Word};
+use tta_command::Word;
 
-use crate::{DestinationState, ProjectEntry, ProjectInventory, Session, target, workflow};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Request {
-    Setup(target::Request),
-    Workflow(workflow::ObservationRequest),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Reply {
-    Setup(target::Reply),
-    Workflow(workflow::ObservationReply),
-}
+use crate::{Session, target};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Diagnostics {
@@ -31,12 +18,6 @@ pub struct Diagnostics {
     pub transport_stderr: Vec<u8>,
     pub command_stderr: Vec<u8>,
     pub command_status: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Decoded {
-    pub reply: Reply,
-    pub diagnostics: Diagnostics,
 }
 
 /// The carrier supplies real status and EOF completeness. `None` is signal or
@@ -98,190 +79,8 @@ pub(crate) fn envelope<'a>(token: &str, output: Output<'a>) -> Result<Envelope<'
     })
 }
 
-#[derive(Clone, Debug)]
-pub struct Probe {
-    pub request: Request,
-    token: String,
-}
-
 pub(crate) fn quote(value: impl Into<std::ffi::OsString>) -> Result<String> {
     Ok(Word::new(value)?.shell()?)
-}
-
-impl Probe {
-    /// Use a fresh unpredictable token for each execution. Framing separates
-    /// ordinary startup noise; it is not authentication against a hostile host.
-    pub fn new(request: Request, token: impl Into<String>) -> Result<Self> {
-        let token = token.into();
-        validate_token(&token)?;
-        Ok(Self { request, token })
-    }
-
-    /// Command stdout streams literally, including NULs. Its stderr and status
-    /// travel together as bounded hex metadata, so startup stderr cannot turn
-    /// an exact endpoint-absence diagnostic into a false classification.
-    pub fn script(&self) -> Result<String> {
-        frame(&self.token, &self.operation()?)
-    }
-
-    pub fn shell(&self, setup: &target::TargetSetup) -> Result<String> {
-        setup.shell_command(&self.script()?)
-    }
-
-    fn operation(&self) -> Result<String> {
-        Ok(match &self.request {
-            Request::Setup(target::Request::Context) => {
-                let mut script = "pwd -P\nprintf '\\000'\nid -u\nprintf '\\000'\n".to_owned();
-                for variable in target::VARIABLES {
-                    script.push_str(&format!("printf '%s\\000' \"${{{variable}-}}\"\n"));
-                }
-                script
-            }
-            Request::Setup(target::Request::Entry { parent, .. }) => listing(parent)?,
-            Request::Setup(target::Request::Registry { path }) => format!("cat -- {}", quote(path.as_os_str())?),
-            Request::Workflow(workflow::ObservationRequest::Sessions { socket, program }) => {
-                let query = tmax::query::Sessions::new();
-                let mut args = vec![Word::new("-u")?, Word::new("-S")?, Word::new(socket.as_os_str())?];
-                for arg in query.invocation()?.argv()? {
-                    args.push(Word::new(arg)?);
-                }
-                let command = Command::builder()
-                    .program(Word::new(program.clone())?)
-                    .args(args)
-                    .environment(vec![tta_command::Assignment::new("LC_ALL", Word::new("C")?)?])
-                    .build();
-                Expression::from(command).shell(Handoff::Run)?
-            }
-            Request::Workflow(workflow::ObservationRequest::Projects { root, .. }) => {
-                format!(
-                    "cd -P {}\npwd -P\nprintf '\\000'\n{}",
-                    quote(root.as_os_str())?,
-                    project_listing(Path::new("."))?
-                )
-            }
-            Request::Workflow(workflow::ObservationRequest::Destination { path }) => {
-                listing(path.parent().ok_or_else(|| anyhow::anyhow!("destination has no parent"))?)?
-            }
-            Request::Workflow(workflow::ObservationRequest::GeneratorDefaults { directory, author, license }) => {
-                let license = if *license { "${LICENSE-}" } else { "" };
-                let author_value = if *author { "${AUTHOR-}" } else { "" };
-                let mut script = format!(
-                    "cd -P {}\nprintf '%s\\000%s\\000' \"{license}\" \"{author_value}\"\n",
-                    quote(directory.as_os_str())?
-                );
-                if *author {
-                    script.push_str("if [ -z \"${AUTHOR-}\" ]; then git config --get user.name; fi\n");
-                }
-                script
-            }
-        })
-    }
-
-    pub fn decode(&self, output: Output<'_>) -> Result<Decoded> {
-        let envelope = envelope(&self.token, output)?;
-        let reply = self.decode_payload(envelope.diagnostics.command_status, envelope.payload, &envelope.diagnostics.command_stderr)?;
-        Ok(Decoded {
-            reply,
-            diagnostics: envelope.diagnostics,
-        })
-    }
-
-    fn decode_payload(&self, status: i32, payload: &[u8], stderr: &[u8]) -> Result<Reply> {
-        if let Request::Workflow(workflow::ObservationRequest::Sessions { socket, .. }) = &self.request {
-            return Ok(Reply::Workflow(workflow::ObservationReply::Sessions(decode_sessions(
-                status, payload, stderr, socket,
-            )?)));
-        }
-        if let Request::Workflow(workflow::ObservationRequest::GeneratorDefaults { .. }) = &self.request {
-            let (license, rest) = field(payload)?;
-            let (author, git) = field(rest)?;
-            let unset_git = status == 1 && author.is_empty() && git.is_empty() && stderr.is_empty();
-            ensure!(
-                status == 0 || unset_git,
-                "Git defaults probe failed ({status}): {}",
-                String::from_utf8_lossy(stderr)
-            );
-            let value = |bytes: &[u8]| -> Result<Option<String>> {
-                ensure!(!bytes.contains(&0), "NUL in generator default");
-                Ok(Some(std::str::from_utf8(bytes)?.to_owned()).filter(|v| !v.is_empty()))
-            };
-            let author = if !author.is_empty() {
-                value(author)?
-            } else {
-                value(std::str::from_utf8(git)?.trim().as_bytes())?
-            };
-            return Ok(Reply::Workflow(workflow::ObservationReply::GeneratorDefaults(scaffold_defaults(
-                author,
-                value(license)?,
-            ))));
-        }
-        ensure!(status == 0, "probe command failed ({status}): {}", String::from_utf8_lossy(stderr));
-        Ok(match &self.request {
-            Request::Setup(target::Request::Context) => {
-                let (cwd, rest) = field(payload)?;
-                let cwd = PathBuf::from(std::str::from_utf8(strip_newline(cwd)?)?);
-                ensure!(cwd.is_absolute(), "target pwd is not absolute");
-                let (uid, mut rest) = field(rest)?;
-                let uid = std::str::from_utf8(strip_newline(uid)?)?.parse::<u32>()?;
-                let mut environment = BTreeMap::new();
-                for variable in target::VARIABLES {
-                    let (value, next) = field(rest)?;
-                    environment.insert((*variable).into(), std::str::from_utf8(value)?.into());
-                    rest = next;
-                }
-                ensure!(rest.is_empty(), "extra context fields");
-                Reply::Setup(target::Reply::Context(target::Facts { cwd, uid, environment }))
-            }
-            Request::Setup(target::Request::Entry { name, .. }) => Reply::Setup(target::Reply::Entry(entry(payload, name.as_encoded_bytes(), true)?)),
-            Request::Setup(target::Request::Registry { .. }) => {
-                ensure!(!payload.contains(&0), "NUL in registry text");
-                Reply::Setup(target::Reply::Registry(std::str::from_utf8(payload)?.into()))
-            }
-            Request::Workflow(workflow::ObservationRequest::Projects {
-                root: requested_root,
-                argument,
-            }) => {
-                let (root, listing) = field(payload)?;
-                let root = PathBuf::from(std::str::from_utf8(strip_newline(root)?)?);
-                ensure!(root.is_absolute(), "nonabsolute canonical root");
-                let mut projects = Vec::new();
-                for found in entries(listing, true)? {
-                    let Ok(name) = std::str::from_utf8(found.name) else {
-                        continue;
-                    };
-                    if !name.contains(argument) {
-                        continue;
-                    }
-                    found.check()?;
-                    if found.kind.checked()?.directory() {
-                        let directory = PathBuf::from(std::str::from_utf8(strip_newline(found.physical)?)?);
-                        ensure!(directory.is_absolute(), "missing/nonabsolute physical project directory");
-                        projects.push(ProjectEntry { name: name.into(), directory });
-                    }
-                }
-                projects.sort_by(|left, right| left.name.cmp(&right.name));
-                Reply::Workflow(workflow::ObservationReply::Projects(ProjectInventory {
-                    requested_root: requested_root.clone(),
-                    root,
-                    entries: projects,
-                }))
-            }
-            Request::Workflow(workflow::ObservationRequest::Destination { path }) => {
-                let name = path.file_name().ok_or_else(|| anyhow::anyhow!("destination has no basename"))?;
-                let state = if entry(payload, name.as_encoded_bytes(), false)?.is_some() {
-                    DestinationState::Present
-                } else {
-                    DestinationState::Absent
-                };
-                Reply::Workflow(workflow::ObservationReply::Destination(state))
-            }
-            _ => unreachable!("sessions/defaults handled above"),
-        })
-    }
-}
-
-fn scaffold_defaults(author: Option<String>, license: Option<String>) -> crate::scaffold::Defaults {
-    crate::scaffold::Defaults { author, license }
 }
 
 pub(crate) fn listing(path: &Path) -> Result<String> {
@@ -441,16 +240,6 @@ fn unhex(bytes: &[u8]) -> Result<Vec<u8>> {
             Ok(((hi << 4) | lo) as u8)
         })
         .collect()
-}
-
-/// Shared by the local CLI adapter and framed remote probes. Only exact
-/// C-locale diagnostics for the selected endpoint classify server absence.
-pub fn decode_sessions(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path) -> Result<workflow::SessionInventory> {
-    use workflow::SessionInventory;
-    Ok(match session_facts(status, stdout, stderr, socket)? {
-        None => SessionInventory::Absent,
-        Some(sessions) => SessionInventory::Present(sessions),
-    })
 }
 
 pub(crate) fn session_facts(status: i32, stdout: &[u8], stderr: &[u8], socket: &Path) -> Result<Option<Vec<Session>>> {

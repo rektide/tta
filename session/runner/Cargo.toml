@@ -27,7 +27,6 @@ tta-launcher.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
 tracing-mock = "=0.1.0-beta.3"
-tracing-test = { version = "=0.2.6", features = ["no-env-filter"] }
 toml.workspace = true
 tta-scaffold-rekon-native.workspace = true
 

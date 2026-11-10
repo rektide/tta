@@ -413,7 +413,7 @@ fn tmux_queue(target: &BoundTarget, invocations: Vec<Invocation>, startup: &[OsS
 /// The detached-or-attached `new-session` invocation without startup argv;
 /// shared by the CLI queue and the native creation path.
 fn creation_invocation(session: &BoundSession, via: ClientEntry) -> Result<Invocation, Error> {
-    crate::resolve::validate_name(&session.name)?;
+    crate::validation::validate_name(&session.name)?;
     let mut create = Invocation::new("new-session")?;
     if via == ClientEntry::SwitchWithinServer {
         create = create.arg("-d");

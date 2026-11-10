@@ -10,9 +10,9 @@ use std::process::{Command, Output, Stdio};
 mod common;
 
 use tta_command::{Expression, Handoff, Word};
-use tta_launcher::{ClientMode, Selection, Session, launch};
-use tta_runner::backend::{self, SessionLookup};
+use tta_launcher::{Session, entry::protocol::ClientEntry};
 use tta_runner::command::{Execute, ProcessCommand};
+use tta_runner::observe::local::{SessionBackend, Sessions};
 
 struct Server {
     directory: tempfile::TempDir,
@@ -64,18 +64,9 @@ impl Server {
     fn inventories(&self) -> Vec<Vec<Session>> {
         vec![
             #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
-            backend::Native {
-                endpoint: tmax::endpoint::Tmux::new().socket_path(&self.socket),
-            }
-            .sessions()
-            .unwrap(),
+            SessionBackend::Native.inventory(OsStr::new("tmux"), &self.socket).unwrap().sessions().to_vec(),
             #[cfg(feature = "cli")]
-            backend::Cli {
-                program: "tmux".into(),
-                socket: self.socket.clone(),
-            }
-            .sessions()
-            .unwrap(),
+            SessionBackend::Cli.inventory(OsStr::new("tmux"), &self.socket).unwrap().sessions().to_vec(),
         ]
     }
 }
@@ -147,18 +138,13 @@ fn planned_creation_preserves_literal_directory_and_name_and_refuses_races() {
     let directory = server.directory.path().join("space ' #[x] #{session_name} %;");
     fs::create_dir(&directory).unwrap();
     let name = "new#[x] #{session_name} %;";
-    let selection = Selection::Project {
-        sources: vec![],
-        directory: directory.clone(),
-        session_name: name.to_owned(),
-    };
-    let plan = launch()
-        .selection(&selection)
-        .socket(&tta_launcher::socket::Resolved::path(&server.socket))
-        .client_mode(ClientMode::Switch)
-        .program(OsStr::new("tmux"))
-        .call()
-        .unwrap();
+    let mut i = common::entry::input(server.directory.path(), directory.file_name().unwrap().to_str().unwrap());
+    i.context.socket = tta_launcher::socket::Resolved::path(&server.socket);
+    i.context.client = ClientEntry::SwitchWithinServer;
+    i.intent.roots = vec![server.directory.path().into()];
+    i.intent.session_name = Some(name.into());
+    let sessions = server.inventories()[0].clone();
+    let plan = common::entry::export(common::entry::prepare(i, sessions.clone()), sessions);
     let Expression::And(and) = &plan else { panic!("expected sequence") };
     // Execute only creation: switching real terminal clients belongs to PTY
     // acceptance, not this no-terminal test. No native mutation API is used.
@@ -185,10 +171,7 @@ fn native_protocol_failures_are_not_misreported_as_cold_servers() {
     let peer = std::thread::spawn(move || {
         let _ = listener.accept().unwrap();
     });
-    let result = backend::Native {
-        endpoint: tmax::endpoint::Tmux::new().socket_path(&server.socket),
-    }
-    .sessions();
+    let result = SessionBackend::Native.inventory(OsStr::new("tmux"), &server.socket);
     assert!(result.is_err(), "a peer closing during the protocol must be an error");
     peer.join().unwrap();
 }
@@ -205,22 +188,9 @@ fn inaccessible_sockets_are_errors_not_cold_servers() {
     server.start();
     fs::set_permissions(&server.socket, fs::Permissions::from_mode(0o000)).unwrap();
     #[cfg(all(feature = "native", target_os = "linux", target_endian = "little"))]
-    assert!(
-        backend::Native {
-            endpoint: tmax::endpoint::Tmux::new().socket_path(&server.socket)
-        }
-        .sessions()
-        .is_err()
-    );
+    assert!(SessionBackend::Native.inventory(OsStr::new("tmux"), &server.socket).is_err());
     #[cfg(feature = "cli")]
-    assert!(
-        backend::Cli {
-            program: "tmux".into(),
-            socket: server.socket.clone()
-        }
-        .sessions()
-        .is_err()
-    );
+    assert!(SessionBackend::Cli.inventory(OsStr::new("tmux"), &server.socket).is_err());
     fs::set_permissions(&server.socket, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
@@ -228,17 +198,14 @@ fn inaccessible_sockets_are_errors_not_cold_servers() {
 #[test]
 fn cli_missing_executable_and_malformed_reply_are_errors() {
     let server = Server::cold();
-    let missing = backend::Cli {
-        program: server.directory.path().join("missing").into_os_string(),
-        socket: server.socket.clone(),
-    };
-    assert!(matches!(missing.sessions(), Err(backend::LookupError::Io(_))));
-    let malformed = backend::Cli {
-        // printf accepts -u as its literal format and emits a malformed row.
-        program: "printf".into(),
-        socket: server.socket.clone(),
-    };
-    assert!(matches!(malformed.sessions(), Err(backend::LookupError::Decode(_))));
+    assert!(
+        SessionBackend::Cli
+            .inventory(server.directory.path().join("missing").as_os_str(), &server.socket)
+            .is_err()
+    );
+    // printf emits a malformed typed row; capture retains its original cause.
+    let error = SessionBackend::Cli.inventory(OsStr::new("printf"), &server.socket).unwrap_err();
+    assert!(error.downcast_ref::<tta_runner::observe::local::CaptureFailure>().is_some());
 }
 
 #[test]
@@ -270,19 +237,13 @@ fn label_policy_is_frozen_in_direct_and_shell_modes_with_an_explicit_socket_carr
         assert!(!server.socket.parent().unwrap().exists());
         let directory = server.directory.path().join("project");
         fs::create_dir(&directory).unwrap();
-        let selection = Selection::Project {
-            sources: vec![],
-            directory,
-            session_name: "project".to_owned(),
-        };
-        let mut plan = launch()
-            .selection(&selection)
-            .socket(&endpoint)
-            .client_mode(ClientMode::Switch)
-            .program(carrier.as_os_str())
-            .config(std::path::Path::new("/dev/null"))
-            .call()
-            .unwrap();
+        let mut i = common::entry::input(server.directory.path(), "project");
+        i.context.socket = endpoint;
+        i.context.client = ClientEntry::SwitchWithinServer;
+        i.context.program = carrier.into_os_string();
+        i.context.config = Some("/dev/null".into());
+        i.intent.roots = vec![server.directory.path().into()];
+        let mut plan = common::entry::export(common::entry::prepare(i, vec![]), vec![]);
         let Expression::And(and) = &mut plan else { panic!("expected sequence") };
         let Expression::Command(create) = &mut and.steps[1] else {
             panic!("expected create")

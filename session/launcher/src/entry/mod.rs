@@ -898,7 +898,7 @@ fn validate_intent(intent: &EntryIntent) -> Result<(), InputError> {
         }
     }
     if let Some(name) = &intent.session_name {
-        crate::resolve::validate_name(name)?;
+        crate::validation::validate_name(name)?;
     }
     if let InitialWindow::Named(name) = &intent.window
         && (name.is_empty() || name.chars().any(char::is_control))

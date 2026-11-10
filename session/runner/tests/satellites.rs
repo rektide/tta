@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStringExt;
@@ -14,7 +14,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use tta_command::{Expression, Word};
-use tta_launcher::{ClientMode, Selection, Session, launch, socket};
+use tta_launcher::entry::protocol::{ClientEntry, ViewPreference};
 use tta_runner::command::ProcessCommand;
 
 struct Server {
@@ -57,27 +57,30 @@ impl Server {
         self.run(&["display-message", "-p", "-t", &format!("{target}:"), format])
     }
 
-    fn seed(&self) -> Selection {
-        Selection::Existing(Session {
+    fn plan(&self, selector: &str, mode: ClientEntry, startup: &[OsString], directory: Option<&std::path::Path>) -> Expression {
+        let mut i = common::entry::input(self.directory.path(), selector);
+        i.context.socket = tta_launcher::socket::Resolved::path(&self.socket);
+        i.context.client = mode;
+        i.context.config = Some("/dev/null".into());
+        i.intent.view = ViewPreference::Independent;
+        i.intent.startup = startup.to_vec();
+        i.intent.directory = directory.map(Into::into);
+        i.intent.view_directory = directory.map(Into::into);
+        i.intent.roots = vec![self.directory.path().into()];
+        if selector != "seed" {
+            i.intent.session_name = Some("created".into());
+        }
+        let group = self.field("=seed", "#{session_group}");
+        let sessions = vec![tta_launcher::Session {
             id: self.field("=seed", "#{session_id}").parse().unwrap(),
             name: "seed".into(),
-            group: None,
-        })
-    }
-
-    fn plan(&self, selection: &Selection, mode: ClientMode, startup: &[OsString], directory: Option<&std::path::Path>, satellite: Option<&str>) -> Expression {
-        launch()
-            .selection(selection)
-            .socket(&socket::Resolved::path(&self.socket))
-            .client_mode(mode)
-            .program(OsStr::new("tmux"))
-            .config(std::path::Path::new("/dev/null"))
-            .grouped(true)
-            .maybe_satellite_name(satellite)
-            .startup(startup)
-            .maybe_directory(directory)
-            .call()
-            .unwrap()
+            group: (!group.is_empty()).then_some(group),
+        }];
+        if startup.iter().any(|arg| arg.to_str().is_none()) {
+            common::entry::terminal(common::entry::prepare(i, sessions.clone()), sessions)
+        } else {
+            common::entry::export(common::entry::prepare(i, sessions.clone()), sessions)
+        }
     }
 
     fn clients(&self) -> String {
@@ -142,7 +145,7 @@ fn outside_satellite_has_independent_window_and_disappears_on_detach() {
         let seed_window = server.field("=seed", "#{window_id}");
         let initial = server.directory.path().join("initial #{session_name}");
         fs::create_dir(&initial).unwrap();
-        let mut expression = server.plan(&server.seed(), ClientMode::Attach, &["must-not-run".into()], Some(&initial), Some("_seed-1"));
+        let mut expression = server.plan("seed", ClientEntry::AttachTerminal, &["must-not-run".into()], Some(&initial));
         let Expression::Command(command) = &mut expression else {
             panic!("expected grouped command")
         };
@@ -181,7 +184,7 @@ fn inside_satellite_switches_same_client_and_keep_last_preserves_final_session()
     let client = Client::start(server.command().args(["-C", "attach-session", "-t", "=seed"]));
     wait(|| !server.clients().is_empty());
     let before = server.clients();
-    let expression = server.plan(&server.seed(), ClientMode::Switch, &[], None, Some("_seed-1"));
+    let expression = server.plan("seed", ClientEntry::SwitchWithinServer, &[], None);
     let Expression::Command(command) = expression else {
         panic!("expected command")
     };
@@ -222,12 +225,8 @@ fn startup_preserves_raw_arguments_and_explicit_cwd() {
         ";".into(),
         OsString::from_vec(b"raw\xff\\;".to_vec()),
     ];
-    let selection = Selection::Project {
-        sources: vec![],
-        directory: server.directory.path().join("not-used"),
-        session_name: "created".into(),
-    };
-    let expression = server.plan(&selection, ClientMode::Switch, &startup, Some(&directory), None);
+    fs::create_dir(server.directory.path().join("not-used")).unwrap();
+    let expression = server.plan("not-used", ClientEntry::SwitchWithinServer, &startup, Some(&directory));
     let Expression::And(and) = expression else { panic!("expected sequence") };
     let Expression::Command(create) = &and.steps[1] else {
         panic!("expected creation")
@@ -244,12 +243,13 @@ fn lone_startup_executable_with_spaces_is_not_shell_source() {
     let executable = server.directory.path().join("my executable; literal");
     fs::write(&executable, "#!/bin/sh\nprintf done > marker\nexec sleep 120\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-    let selection = Selection::Project {
-        sources: vec![],
-        directory: server.directory.path().to_owned(),
-        session_name: "created".into(),
-    };
-    let expression = server.plan(&selection, ClientMode::Switch, &[executable.into_os_string()], None, None);
+    fs::create_dir(server.directory.path().join("project")).unwrap();
+    let expression = server.plan(
+        "project",
+        ClientEntry::SwitchWithinServer,
+        &[executable.into_os_string()],
+        Some(server.directory.path()),
+    );
     let Expression::And(and) = expression else { panic!("expected sequence") };
     let Expression::Command(create) = &and.steps[1] else {
         panic!("expected creation")

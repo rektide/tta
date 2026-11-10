@@ -1,10 +1,13 @@
-//! Reusable supplied-facts transcript/replay exercises. This crate intentionally
-//! has no runner, tmux process, native client or transport dependency.
+//! Runner-free supplied-facts exercises of the retained public actor. Each run
+//! creates a fresh attempt; no transcript is a resume token or effect receipt.
 use anyhow::{Result, bail, ensure};
 use serde::Serialize;
 use tta_command::{Expression, Handoff};
-use tta_launcher::workflow::{Input, ObservationReply, ObservationRequest, PreparedLaunch, Progress, SessionInventory, Workflow};
-use tta_launcher::{ClientMode, DestinationState, ProjectInventory, Selection, Session, scaffold, socket};
+use tta_launcher::{
+    Session,
+    entry::{EntryAttempt, action::EntryDecision, protocol::*},
+    scaffold, socket,
+};
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum Scenario {
@@ -13,117 +16,107 @@ pub enum Scenario {
     Create,
     Grouped,
 }
+const NAME: &str = "work' $; 雪";
+const ROOT: &str = "/target/physical/projects";
 
-#[derive(Clone, Debug)]
-pub struct Exchange {
-    pub request: ObservationRequest,
-    pub reply: ObservationReply,
+fn invocation(scenario: Scenario) -> Result<Invocation> {
+    Ok(Invocation {
+        context: SuppliedContext {
+            host: "supplied-target".into(),
+            cwd: "/target/invocation".into(),
+            socket: socket::Resolved::path("/target/private/tmux.sock"),
+            program: "/target/bin/tmux".into(),
+            config: None,
+            client: ClientEntry::AttachTerminal,
+        },
+        intent: EntryIntent {
+            roots: vec!["/target/projects".into()],
+            view: if matches!(scenario, Scenario::Grouped) {
+                ViewPreference::Independent
+            } else {
+                ViewPreference::Shared
+            },
+            ..EntryIntent::selector(NAME)
+        },
+        registry: scaffold::Config::parse(
+            Some(std::path::Path::new("/target/config.toml")),
+            Some(
+                "[scaffold.generators.native]\nadapter='rekon-native'\n[scaffold.generators.native.options]\ninstall=false\n[scaffold.generators.native.options.remotes]\norigin=''\ntngl=''\nvoodoo=''\n",
+            ),
+        )?,
+        generator: scaffold::Choice::Default,
+    })
 }
-
-/// Replay checks request identity, reply type, exhaustion, and absence of extra
-/// replies. It cannot contact a host and does not report execution success.
-pub fn replay(input: Input, transcript: &[Exchange]) -> Result<PreparedLaunch> {
-    let mut workflow = Workflow::new(input)?;
-    for exchange in transcript {
-        let Progress::Observe(request) = workflow.next()? else {
-            bail!("transcript has extra replies after readiness");
-        };
-        ensure!(
-            request == exchange.request,
-            "transcript request mismatch: expected {request:?}, got {:?}",
-            exchange.request
-        );
-        workflow.supply(exchange.reply.clone())?;
-    }
-    match workflow.next()? {
-        Progress::Ready(ready) => Ok(*ready),
-        Progress::Observe(request) => bail!("incomplete transcript; still needs {request:?}"),
-    }
-}
-
-pub fn fixture(scenario: Scenario) -> Result<(Input, Vec<Exchange>)> {
-    let name = "work' $; 雪";
-    let socket_path = "/target/private/tmux.sock";
-    let registry = scaffold::Config::parse(
-        Some(std::path::Path::new("/target/config.toml")),
-        Some(
-            "[scaffold.generators.native]\nadapter = 'rekon-native'\n[scaffold.generators.native.options]\ninstall = false\n[scaffold.generators.native.options.remotes]\norigin = ''\ntngl = ''\nvoodoo = ''\n",
-        ),
-    )?;
-    let input = Input::builder()
-        .argument(name.into())
-        .cwd("/target/invocation".into())
-        .socket(socket::Resolved::path(socket_path))
-        .client_mode(ClientMode::Attach)
-        .program("/target/bin/tmux".into())
-        .registry(registry)
-        .scaffold("default".into())
-        .roots(vec!["/target/projects".into()])
-        .grouped(matches!(scenario, Scenario::Grouped))
-        .build();
-    let sessions = || ObservationRequest::Sessions {
-        socket: socket_path.into(),
-        program: "/target/bin/tmux".into(),
-    };
-    let session = Session {
-        id: "$7".parse()?,
-        name: name.into(),
+fn session() -> Session {
+    Session {
+        id: "$7".parse().unwrap(),
+        name: NAME.into(),
         group: None,
-    };
-    let mut exchanges = vec![Exchange {
-        request: sessions(),
-        reply: ObservationReply::Sessions(match scenario {
-            Scenario::Existing | Scenario::Grouped => SessionInventory::Present(vec![session.clone()]),
-            Scenario::Project | Scenario::Create => SessionInventory::Absent,
-        }),
-    }];
-    match scenario {
-        Scenario::Existing => {}
-        Scenario::Grouped => exchanges.push(Exchange {
-            request: sessions(),
-            reply: ObservationReply::Sessions(SessionInventory::Present(vec![session])),
-        }),
-        Scenario::Project | Scenario::Create => {
-            exchanges.push(Exchange {
-                request: ObservationRequest::Projects {
-                    root: "/target/projects".into(),
-                    argument: name.into(),
-                },
-                reply: ObservationReply::Projects(ProjectInventory {
-                    requested_root: "/target/projects".into(),
-                    root: "/target/physical/projects".into(),
-                    entries: if matches!(scenario, Scenario::Project) {
-                        vec![tta_launcher::ProjectEntry {
-                            name: name.into(),
-                            directory: std::path::Path::new("/target/physical/projects").join(name),
-                        }]
-                    } else {
-                        vec![]
-                    },
-                }),
-            });
-            if matches!(scenario, Scenario::Create) {
-                exchanges.push(Exchange {
-                    request: ObservationRequest::Destination {
-                        path: std::path::Path::new("/target/physical/projects").join(name),
-                    },
-                    reply: ObservationReply::Destination(DestinationState::Absent),
-                });
-                exchanges.push(Exchange {
-                    request: ObservationRequest::GeneratorDefaults {
-                        directory: "/target/invocation".into(),
-                        author: true,
-                        license: true,
-                    },
-                    reply: ObservationReply::GeneratorDefaults(scaffold::Defaults {
-                        author: Some("Target author ' 雪".into()),
-                        license: Some("Apache-2.0".into()),
-                    }),
-                });
+    }
+}
+
+fn observation(request: &ReadRequest, scenario: Scenario) -> Result<Observation> {
+    Ok(match &request.kind {
+        ReadKind::Sessions { purpose, endpoint, program } => {
+            ensure!(
+                endpoint.socket == std::path::Path::new("/target/private/tmux.sock") && program == "/target/bin/tmux",
+                "wrong target session read"
+            );
+            if matches!(scenario, Scenario::Existing | Scenario::Grouped) {
+                Observation::Sessions(SessionInventory::Present(vec![session()]))
+            } else {
+                ensure!(
+                    matches!(purpose, SessionReadPurpose::Selection | SessionReadPurpose::BindAction),
+                    "wrong read purpose"
+                );
+                Observation::Sessions(SessionInventory::Absent)
             }
         }
-    }
-    Ok((input, exchanges))
+        ReadKind::Projects { slot, root, filter } => {
+            ensure!(
+                slot.0 == 1 && root == std::path::Path::new("/target/projects") && filter == NAME,
+                "wrong project read"
+            );
+            Observation::Projects(tta_launcher::ProjectInventory {
+                requested_root: root.clone(),
+                root: ROOT.into(),
+                entries: if matches!(scenario, Scenario::Project) {
+                    vec![tta_launcher::ProjectEntry {
+                        name: NAME.into(),
+                        directory: std::path::Path::new(ROOT).join(NAME),
+                    }]
+                } else {
+                    vec![]
+                },
+            })
+        }
+        ReadKind::Destination { path, .. } => {
+            ensure!(path == &std::path::Path::new(ROOT).join(NAME), "wrong destination");
+            Observation::Destination(DestinationEvidence::Absent)
+        }
+        ReadKind::GeneratorDefaults { cwd, needs } => {
+            ensure!(
+                cwd == std::path::Path::new("/target/invocation") && needs.author && needs.license,
+                "wrong defaults"
+            );
+            Observation::Defaults(GeneratorDefaults {
+                author: Some("Target author ' 雪".into()),
+                license: Some("Apache-2.0".into()),
+            })
+        }
+        ReadKind::ProjectIdentity { route } => {
+            ensure!(route.requested_root == std::path::Path::new("/target/projects"), "wrong selected route");
+            Observation::ProjectIdentity(std::path::Path::new(ROOT).join(NAME))
+        }
+        ReadKind::CreationRootIdentity { root, expected } => {
+            ensure!(
+                root == std::path::Path::new("/target/projects") && expected == std::path::Path::new(ROOT),
+                "wrong root binding"
+            );
+            Observation::ProjectIdentity(ROOT.into())
+        }
+        other => bail!("unexpected supplied read: {other:?}"),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -135,239 +128,180 @@ pub struct Report {
     pub selection: String,
     pub shell: String,
     pub checks: Vec<&'static str>,
-    /// Pure construction, not a claim that these probes were executed.
     pub emitted_probes: Vec<String>,
 }
-
 #[derive(Debug, Serialize)]
 pub struct RecordedExchange {
     pub request: String,
     pub reply: String,
 }
 
+fn drive(attempt: &mut EntryAttempt, scenario: Scenario, records: &mut Vec<RecordedExchange>, probes: &mut Vec<String>) -> Result<()> {
+    while let Waiting::Read(request) = attempt.waiting() {
+        let request = request.clone();
+        let observation = observation(&request, scenario)?;
+        // Construction only: these scripts are NOT run by this no-I/O witness.
+        probes.push(tta_launcher::entry::probe::Probe::new(request.clone(), format!("witness-token-{}", request.id.sequence))?.script()?);
+        records.push(RecordedExchange {
+            request: format!("{request:?}"),
+            reply: format!("{observation:?}"),
+        });
+        attempt.advance(Event::Observed(ReadCompletion {
+            request,
+            result: Ok(observation),
+        }))?;
+    }
+    Ok(())
+}
+
 pub fn exercise(scenario: Scenario) -> Result<Report> {
-    let (input, transcript) = fixture(scenario)?;
-    let prepared = replay(input.clone(), &transcript)?;
-    let expected_existing = matches!(scenario, Scenario::Existing | Scenario::Grouped);
+    let mut attempt = EntryAttempt::start(invocation(scenario)?)?;
+    let mut observations = Vec::new();
+    let mut emitted_probes = Vec::new();
+    drive(&mut attempt, scenario, &mut observations, &mut emitted_probes)?;
+    let Waiting::Planned(plan) = attempt.waiting() else {
+        bail!("not planned: {:?}", attempt.snapshot());
+    };
+    let decision = plan.decision().clone();
     ensure!(
-        matches!(&prepared.selection, Selection::Existing(_)) == expected_existing,
-        "wrong selection domain"
-    );
-    ensure!(
-        matches!(&prepared.selection, Selection::Create { .. }) == matches!(scenario, Scenario::Create),
+        matches!(decision, EntryDecision::ScaffoldAndStart { .. }) == matches!(scenario, Scenario::Create),
         "wrong creation decision"
     );
-    let mut checks = vec![
-        "exact observation sequence and reply types",
-        "selection domain",
-        "target-local paths from supplied facts",
-    ];
-    if matches!(scenario, Scenario::Project | Scenario::Create) {
-        let expected = std::path::Path::new("/target/physical/projects").join(&input.argument);
-        let (Selection::Project { directory, .. } | Selection::Create { directory, .. }) = &prepared.selection else {
-            bail!("wrong selection domain")
-        };
-        ensure!(directory == &expected, "selection ignored supplied physical root");
-        let steps = prepared.plan.expression().steps();
-        let last_cd = steps
-            .iter()
-            .rev()
-            .find_map(|step| if let Expression::ChangeDir(cd) = step { Some(cd) } else { None });
-        ensure!(
-            last_cd.is_some_and(|cd| cd.path.as_os_str() == expected.as_os_str()),
-            "emitted ChangeDir ignored supplied physical root"
-        );
-        checks.push("selection and ChangeDir use supplied physical root");
-    }
-    let commands: Vec<_> = prepared
-        .plan
-        .expression()
-        .steps()
-        .into_iter()
-        .filter_map(|step| if let Expression::Command(command) = step { Some(command) } else { None })
+    ensure!(
+        matches!(decision, EntryDecision::EnterView { .. } | EntryDecision::OpenView { .. }) == matches!(scenario, Scenario::Existing | Scenario::Grouped),
+        "wrong work domain"
+    );
+    attempt.advance(Event::Deliver(Delivery::Export))?;
+    drive(&mut attempt, scenario, &mut observations, &mut emitted_probes)?;
+    let Waiting::Finished(AttemptOutcome::Exported(action)) = attempt.waiting() else {
+        bail!("not exported: {:?}", attempt.snapshot());
+    };
+    let steps = action.expression().steps();
+    let commands: Vec<_> = steps
+        .iter()
+        .filter_map(|s| if let Expression::Command(c) = s { Some(c) } else { None })
         .collect();
-    let tmux = commands.last().ok_or_else(|| anyhow::anyhow!("no tmux command"))?;
-    ensure!(tmux.program.as_os_str() == "/target/bin/tmux", "local program leaked into target plan");
-    let args: Vec<_> = tmux.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect();
+    let tmux = commands.last().context("no tmux action")?;
+    ensure!(tmux.program.as_os_str() == "/target/bin/tmux", "invoking-host program leaked");
+    let args: Vec<_> = tmux.args.iter().map(|w| w.as_os_str().to_str().unwrap()).collect();
+    let mut checks = vec![
+        "correlated reads and native supplied facts",
+        "semantic decision domain",
+        "fresh operation-specific binding before observation-only export",
+    ];
     match scenario {
+        Scenario::Existing => {
+            ensure!(args == ["-S", "/target/private/tmux.sock", "attach-session", "-t", "$7"], "canonical ID lost");
+        }
         Scenario::Grouped => {
-            ensure!(commands.len() == 1, "grouped queue split across processes");
-            ensure!(args[2] == "new-session" && args[3] == "-d", "satellite must be detached");
-            let attach = args.iter().position(|arg| *arg == "attach-session").unwrap();
-            let keep = args.iter().position(|arg| *arg == "set-option").unwrap();
-            ensure!(attach < keep && args.last() == Some(&"keep-last"), "wrong satellite lifecycle ordering");
-            ensure!(args.iter().filter(|arg| **arg == ";").count() == 2, "not one tmux queue");
-            checks.push("one grouped create/attach/keep-last tmux queue");
+            ensure!(steps.len() == 1 && args.iter().filter(|v| **v == ";").count() == 2, "coherent queue split");
+            let attach = args.iter().position(|a| *a == "attach-session").unwrap();
+            let keep = args.iter().position(|a| *a == "set-option").unwrap();
+            ensure!(attach < keep && args.last() == Some(&"keep-last"), "wrong lifecycle order");
+            checks.push("one create/attach/keep-last queue");
         }
-        Scenario::Existing => ensure!(
-            args == ["-S", "/target/private/tmux.sock", "attach-session", "-t", "$7"],
-            "existing selection did not retain canonical ID"
-        ),
-        Scenario::Create => {
-            let writes: Vec<_> = prepared
-                .plan
-                .expression()
-                .steps()
-                .into_iter()
-                .filter_map(|step| if let Expression::Write(write) = step { Some(write) } else { None })
-                .collect();
-            ensure!(writes.len() == 1, "expected one package.json write");
-            let package: serde_json::Value = serde_json::from_str(writes[0].contents.as_os_str().to_str().unwrap())?;
+        Scenario::Project | Scenario::Create => {
+            let expected = std::path::Path::new(ROOT).join(NAME);
             ensure!(
-                package["author"] == "Target author ' 雪" && package["license"] == "Apache-2.0",
-                "target defaults not reflected in literal package content"
+                steps
+                    .iter()
+                    .rev()
+                    .find_map(|s| if let Expression::ChangeDir(cd) = s { Some(cd.path.as_os_str()) } else { None })
+                    == Some(expected.as_os_str()),
+                "physical root ignored"
             );
-            checks.push("supplied target author/license in package.json");
+            checks.push("selected physical route retained into ChangeDir");
+            if matches!(scenario, Scenario::Create) {
+                let writes: Vec<_> = steps.iter().filter_map(|s| if let Expression::Write(w) = s { Some(w) } else { None }).collect();
+                ensure!(writes.len() == 1, "generator materialized more than once");
+                let package: serde_json::Value = serde_json::from_str(writes[0].contents.as_os_str().to_str().unwrap())?;
+                ensure!(
+                    package["author"] == "Target author ' 雪" && package["license"] == "Apache-2.0",
+                    "target defaults lost"
+                );
+                checks.push("actual supplied defaults in one generated package");
+            }
         }
-        Scenario::Project => ensure!(commands.len() == 1, "existing directory unexpectedly scaffolded"),
     }
-    ensure!(replay(input, &transcript[..transcript.len() - 1]).is_err(), "incomplete transcript accepted");
-    checks.push("truncated replay rejected");
+    ensure!(
+        !attempt.snapshot().journal.iter().any(|r| matches!(r, AttemptRecord::EffectIssued(_))),
+        "export attempted execution"
+    );
     Ok(Report {
-        kind: "supplied-facts runner-free replay",
+        kind: "supplied-facts retained entry attempt; no host I/O",
         scenario: format!("{scenario:?}"),
         execution_attempted: false,
-        observations: transcript
-            .iter()
-            .map(|exchange| RecordedExchange {
-                request: format!("{:?}", exchange.request),
-                reply: format!("{:?}", exchange.reply),
-            })
-            .collect(),
-        selection: format!("{:?}", prepared.selection),
-        shell: prepared.plan.expression().shell(Handoff::Run)?,
+        observations,
+        selection: format!("{decision:?}"),
+        shell: action.expression().shell(Handoff::Run)?,
         checks,
-        emitted_probes: transcript
-            .iter()
-            .enumerate()
-            .map(|(index, exchange)| {
-                tta_launcher::probe::Probe::new(
-                    tta_launcher::probe::Request::Workflow(exchange.request.clone()),
-                    format!("witness-token-{index}"),
-                )?
-                .shell(
-                    &tta_launcher::target::TargetSetup::builder()
-                        .shell("/target/shell".into())
-                        .cwd("/target/invocation".into())
-                        .build(),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?,
+        emitted_probes,
     })
 }
+use anyhow::Context;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn all_scenarios_pass_semantic_checks_without_a_runner() {
+    fn all_scenarios_reach_export_without_a_runner() {
         for scenario in [Scenario::Existing, Scenario::Project, Scenario::Create, Scenario::Grouped] {
             exercise(scenario).unwrap();
         }
     }
     #[test]
-    fn mismatched_and_extra_replies_fail_closed() {
-        let (input, mut transcript) = fixture(Scenario::Existing).unwrap();
-        let mut workflow = Workflow::new(input.clone()).unwrap();
-        assert!(workflow.supply(ObservationReply::Destination(DestinationState::Absent)).is_err());
-        let request = workflow.next().unwrap();
-        assert!(matches!(request, Progress::Observe(ObservationRequest::Sessions { .. })));
-        transcript.push(transcript[0].clone());
-        assert!(replay(input, &transcript).is_err());
-    }
-
-    #[test]
-    fn every_pending_kind_and_truncated_prefix_fails_without_advancing() {
-        for scenario in [Scenario::Existing, Scenario::Project, Scenario::Create, Scenario::Grouped] {
-            let (input, exchanges) = fixture(scenario).unwrap();
-            for len in 0..exchanges.len() {
-                assert!(replay(input.clone(), &exchanges[..len]).is_err());
-            }
-            let mut workflow = Workflow::new(input.clone()).unwrap();
-            for exchange in &exchanges {
-                let wrong = match exchange.request {
-                    ObservationRequest::Destination { .. } => ObservationReply::Sessions(SessionInventory::Absent),
-                    _ => ObservationReply::Destination(DestinationState::Absent),
-                };
-                assert!(workflow.supply(wrong).is_err());
-                let Progress::Observe(pending) = workflow.next().unwrap() else {
-                    panic!("advanced on wrong reply")
-                };
-                assert_eq!(pending, exchange.request);
-                workflow.supply(exchange.reply.clone()).unwrap();
-            }
-            assert!(workflow.supply(ObservationReply::Sessions(SessionInventory::Absent)).is_err());
-            let mut wrong = exchanges;
-            wrong[0].request = ObservationRequest::Sessions {
-                socket: "/wrong-target/socket".into(),
-                program: "/target/bin/tmux".into(),
-            };
-            assert!(replay(input, &wrong).is_err());
+    fn inspection_wrong_shape_stale_and_duplicate_replies_do_not_advance() {
+        let mut attempt = EntryAttempt::start(invocation(Scenario::Existing).unwrap()).unwrap();
+        let Waiting::Read(request) = attempt.waiting() else { panic!() };
+        let request = request.clone();
+        let before = attempt.snapshot();
+        for _ in 0..3 {
+            assert_eq!(attempt.snapshot().journal, before.journal);
         }
-    }
-
-    #[test]
-    fn session_hit_needs_no_root_but_invalid_registry_choice_stops_first() {
-        let (mut input, exchanges) = fixture(Scenario::Existing).unwrap();
-        input.roots.clear();
-        assert!(replay(input.clone(), &exchanges).is_ok());
-        input.scaffold = "unknown-generator".into();
-        assert!(Workflow::new(input).is_err());
-    }
-
-    #[test]
-    fn fresh_grouped_inventory_changes_suffix_not_selected_base() {
-        let (input, mut exchanges) = fixture(Scenario::Grouped).unwrap();
-        let base = input.argument.clone();
-        exchanges[1].reply = ObservationReply::Sessions(SessionInventory::Present(vec![
-            Session {
-                id: "$7".parse().unwrap(),
-                name: base.clone(),
-                group: None,
-            },
-            Session {
-                id: "$8".parse().unwrap(),
-                name: format!("_{base}-1"),
-                group: Some("unrelated".into()),
-            },
-        ]));
-        let prepared = replay(input, &exchanges).unwrap();
-        let leaves = prepared.plan.expression().steps();
-        assert_eq!(leaves.len(), 1);
-        let Expression::Command(command) = leaves[0] else { panic!("queue split") };
-        let argv: Vec<_> = command.args.iter().map(|word| word.as_os_str().to_str().unwrap()).collect();
-        assert!(argv.contains(&format!("_{base}-2").as_str()));
-        assert!(argv.contains(&"$7"));
-        assert_eq!(argv.iter().filter(|arg| **arg == ";").count(), 2);
-    }
-
-    #[test]
-    fn fresh_inventory_must_preserve_selected_id_name_and_group() {
-        let (input, exchanges) = fixture(Scenario::Grouped).unwrap();
-        for change in ["gone", "id", "name", "group"] {
-            let mut exchanges = exchanges.clone();
-            let ObservationReply::Sessions(SessionInventory::Present(sessions)) = &mut exchanges[1].reply else {
-                unreachable!()
-            };
-            match change {
-                "gone" => sessions.clear(),
-                "id" => sessions[0].id = "$99".parse().unwrap(),
-                "name" => sessions[0].name = "renamed".into(),
-                "group" => sessions[0].group = Some("changed".into()),
-                _ => unreachable!(),
-            }
-            let error = replay(input.clone(), &exchanges).unwrap_err();
-            assert!(error.to_string().contains("disappeared or changed"), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn explicit_generator_defaults_suppress_observation() {
-        let (mut input, mut exchanges) = fixture(Scenario::Create).unwrap();
-        input.registry = scaffold::Config::parse(None, Some("[scaffold.generators.native]\nadapter='rekon-native'\n[scaffold.generators.native.options]\nauthor='Explicit author'\nlicense='BSD-2-Clause'\ninstall=false\n")).unwrap();
-        exchanges.pop();
-        let shell = replay(input, &exchanges).unwrap().plan.expression().shell(Handoff::Run).unwrap();
-        assert!(shell.contains("Explicit author") && shell.contains("BSD-2-Clause"));
-        assert!(!shell.contains("Target author"));
+        assert!(
+            attempt
+                .advance(Event::Observed(ReadCompletion {
+                    request: request.clone(),
+                    result: Ok(Observation::Destination(DestinationEvidence::Absent))
+                }))
+                .is_err()
+        );
+        let mut wrong = request.clone();
+        wrong.id.sequence += 1;
+        assert!(
+            attempt
+                .advance(Event::Observed(ReadCompletion {
+                    request: wrong,
+                    result: Ok(Observation::Sessions(SessionInventory::Absent))
+                }))
+                .is_err()
+        );
+        assert_eq!(attempt.snapshot().journal, before.journal);
+        attempt
+            .advance(Event::Observed(ReadCompletion {
+                request: request.clone(),
+                result: Ok(observation(&request, Scenario::Existing).unwrap()),
+            }))
+            .unwrap();
+        assert!(matches!(attempt.waiting(), Waiting::Planned(_)));
+        assert!(
+            attempt
+                .advance(Event::Observed(ReadCompletion {
+                    request,
+                    result: Ok(Observation::Sessions(SessionInventory::Absent))
+                }))
+                .is_err()
+        );
+        // EnterView, not just grouped entry, must stop on changed fresh anchor.
+        attempt.advance(Event::Deliver(Delivery::Export)).unwrap();
+        let Waiting::Read(request) = attempt.waiting() else { panic!() };
+        let request = request.clone();
+        attempt
+            .advance(Event::Observed(ReadCompletion {
+                request,
+                result: Ok(Observation::Sessions(SessionInventory::Absent)),
+            }))
+            .unwrap();
+        assert!(matches!(attempt.waiting(), Waiting::Finished(AttemptOutcome::Stopped { .. })));
     }
 }

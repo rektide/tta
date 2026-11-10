@@ -1,25 +1,18 @@
-//! Target-local shell setup and inspectable context/registry acquisition. This
-//! module never reads the environment or resolves a path on the calling host.
-use std::collections::{BTreeMap, VecDeque};
-use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
-
-use anyhow::{Result, bail, ensure};
+//! Pure target-shell carrier construction and classified filesystem entry facts.
+//! Context acquisition and entry policy belong to the entry protocol.
+use anyhow::{Result, ensure};
 use bon::Builder;
-use tta_command::{Assignment, Handoff, Word};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use tta_command::{Assignment, Word};
 
-use crate::{ClientMode, WindowName, scaffold, socket, workflow};
-
-/// Applied *after* the selected shell's startup. `None` explicitly unsets a
-/// variable; an empty string is a real value. These are literal data, not code.
+/// Applied after the selected shell's startup. None explicitly unsets a value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Environment {
     pub name: String,
     pub value: Option<String>,
 }
 
-/// Reused for every probe and terminal action. With no explicit shell the
-/// target's SHELL (then /bin/sh) is selected, never the caller's local SHELL.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Builder)]
 pub struct TargetSetup {
     pub shell: Option<String>,
@@ -56,10 +49,8 @@ fn nu_quote(value: &str) -> String {
 }
 
 impl TargetSetup {
-    /// A POSIX-compatible SSH command shell carries the selected shell. Fish
-    /// and Nu startup are supported; the actual probe/action language is sh.
-    /// A new SSH terminal is always outside tmux: startup cannot supply a local
-    /// client identity, and TMUX/TMUX_PANE are cleared after explicit overrides.
+    /// The target's selected shell performs startup; POSIX sh carries the actual
+    /// source. A new SSH terminal cannot inherit a local tmux client identity.
     pub fn shell_command(&self, source: &str) -> Result<String> {
         Word::new(source)?;
         let mut body = String::new();
@@ -72,7 +63,6 @@ impl TargetSetup {
         }
         body.push_str("unset TMUX TMUX_PANE || exit $?\n");
         if let Some(cwd) = &self.cwd {
-            // ./ prevents option/CDPATH interpretation without expanding ~.
             let path = if cwd.is_absolute() { cwd.clone() } else { Path::new(".").join(cwd) };
             body.push_str(&format!("cd -P {} || exit $?\n", quote(path.into_os_string())?));
         }
@@ -94,7 +84,6 @@ impl TargetSetup {
         if self.interactive {
             flags.push_str(" -i");
         }
-        // Choose the family on the target even when SHELL is not known locally.
         let bootstrap = format!(
             "tta_shell={shell}\ncase \"${{tta_shell##*/}}\" in\nfish) exec \"$tta_shell\"{flags} -c {} ;;\nnu|nushell) exec \"$tta_shell\" -c {} ;;\n*) exec \"$tta_shell\"{flags} -c {} ;;\nesac",
             quote(fish)?,
@@ -103,160 +92,6 @@ impl TargetSetup {
         );
         Ok(format!("/bin/sh -c {}", quote(bootstrap)?))
     }
-
-    pub fn launch(&self, prepared: &workflow::PreparedLaunch, handoff: Handoff) -> Result<String> {
-        self.shell_command(&prepared.plan.expression().shell(handoff)?)
-    }
-}
-
-/// Only target-observed values participate in remote defaults. Missing HOME is
-/// legal for session-only entry. Empty variables follow existing unset policy.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Facts {
-    pub cwd: PathBuf,
-    pub uid: u32,
-    pub environment: BTreeMap<String, String>,
-}
-
-pub const VARIABLES: &[&str] = &[
-    "HOME",
-    "XDG_CONFIG_HOME",
-    "TTA_CONFIG",
-    "TTA_ROOT",
-    "TTA_ROOTS",
-    "PROJECTS_DIR",
-    "TTA_SOCKET_NAME",
-    "TTA_SOCKET_PATH",
-    "TMUX_TMPDIR",
-    "TTA_TMUX",
-    "TTA_TMUX_CONFIG",
-    "TTA_SCAFFOLD",
-    "TTA_SATELLITE_PREFIX",
-    "PATH",
-    "SHELL",
-];
-
-/// Explicit caller values win over target environment. No backend default is
-/// inherited from the local host: SSH observations/terminal actions use tmux CLI.
-#[derive(Clone, Debug, Builder)]
-pub struct Options {
-    pub argument: String,
-    pub roots: Option<Vec<PathBuf>>,
-    pub socket: Option<socket::Selection>,
-    pub program: Option<OsString>,
-    pub registry_path: Option<PathBuf>,
-    pub scaffold: Option<String>,
-    #[builder(default = "false".into())]
-    pub default_scaffold: String,
-    pub config: Option<PathBuf>,
-    pub session_name: Option<String>,
-    pub grouped: Option<bool>,
-    pub satellite_prefix: Option<String>,
-    #[builder(default)]
-    pub startup: Vec<OsString>,
-    pub directory: Option<PathBuf>,
-    #[builder(default)]
-    pub window_name: WindowName,
-}
-
-impl Facts {
-    pub fn value(&self, name: &str) -> Option<&str> {
-        self.environment.get(name).map(String::as_str).filter(|value| !value.is_empty())
-    }
-
-    pub fn registry_path(&self, options: &Options) -> Option<PathBuf> {
-        let path = options
-            .registry_path
-            .clone()
-            .or_else(|| self.value("TTA_CONFIG").map(PathBuf::from))
-            .or_else(|| {
-                self.value("XDG_CONFIG_HOME")
-                    .map(PathBuf::from)
-                    .filter(|p| p.is_absolute())
-                    .or_else(|| self.value("HOME").map(|home| Path::new(home).join(".config")))
-                    .map(|config| config.join("tta/config.toml"))
-            });
-        path.map(|path| self.cwd.join(path))
-    }
-
-    pub fn input(&self, options: &Options, registry: scaffold::Config) -> Result<workflow::Input> {
-        ensure!(self.cwd.is_absolute(), "target cwd is not absolute: {:?}", self.cwd);
-        let roots = crate::projects::configured_roots(
-            options.roots.as_deref(),
-            self.value("TTA_ROOTS"),
-            self.value("TTA_ROOT").map(std::ffi::OsStr::new),
-            self.value("PROJECTS_DIR").map(std::ffi::OsStr::new),
-            self.value("HOME").map(Path::new),
-            &self.cwd,
-        )?;
-        let selection = match &options.socket {
-            Some(selection) => selection.clone(),
-            None => match (self.value("TTA_SOCKET_NAME"), self.value("TTA_SOCKET_PATH")) {
-                (Some(_), Some(_)) => bail!("target TTA_SOCKET_NAME and TTA_SOCKET_PATH conflict"),
-                (Some(name), None) => socket::Selection::Name(name.into()),
-                (None, Some(path)) => socket::Selection::Path(path.into()),
-                _ => socket::Selection::Default,
-            },
-        };
-        let context = socket::Context {
-            cwd: self.cwd.clone(),
-            uid: self.uid,
-            tmux: None,
-            tmpdir: self.value("TMUX_TMPDIR").map(PathBuf::from),
-        };
-        let mut program = options.program.clone().unwrap_or_else(|| self.value("TTA_TMUX").unwrap_or("tmux").into());
-        if program.as_encoded_bytes().contains(&b'/') {
-            program = self.cwd.join(program).into_os_string();
-        }
-        Ok(workflow::Input::builder()
-            .argument(options.argument.clone())
-            .cwd(self.cwd.clone())
-            .socket(context.resolve(&selection)?)
-            .client_mode(ClientMode::Attach)
-            .program(program)
-            .registry(registry)
-            .scaffold(
-                options
-                    .scaffold
-                    .clone()
-                    .or_else(|| self.value("TTA_SCAFFOLD").map(str::to_owned))
-                    .unwrap_or_else(|| options.default_scaffold.clone()),
-            )
-            .roots(roots)
-            .maybe_session_name(options.session_name.clone())
-            .maybe_config(
-                options
-                    .config
-                    .clone()
-                    .or_else(|| self.value("TTA_TMUX_CONFIG").map(PathBuf::from))
-                    .map(|p| self.cwd.join(p)),
-            )
-            .maybe_grouped(options.grouped)
-            .satellite_prefix(
-                options
-                    .satellite_prefix
-                    .clone()
-                    .or_else(|| self.value("TTA_SATELLITE_PREFIX").map(str::to_owned))
-                    .unwrap_or_else(|| "_".into()),
-            )
-            .startup(options.startup.clone())
-            .maybe_directory(options.directory.as_ref().map(|p| self.cwd.join(p)))
-            .window_name(options.window_name.clone())
-            .build())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Request {
-    Context,
-    /// A successful enumeration of this parent, not a false shell `test`.
-    Entry {
-        parent: PathBuf,
-        name: OsString,
-    },
-    Registry {
-        path: PathBuf,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,246 +113,9 @@ impl Entry {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Reply {
-    Context(Facts),
-    Entry(Option<Entry>),
-    Registry(String),
-}
-
-#[derive(Clone, Debug)]
-pub enum Progress {
-    Observe(Request),
-    Ready(Box<workflow::Input>),
-}
-
-/// This prelude is pure and separately driveable. Registry validation is still
-/// complete before the session workflow is constructed. Path components are
-/// inspected on the target; `..` is never canonicalized on the calling host.
-#[derive(Clone, Debug)]
-pub struct Bootstrap {
-    options: Options,
-    facts: Option<Facts>,
-    path: Option<PathBuf>,
-    parent: PathBuf,
-    components: VecDeque<OsString>,
-    read: bool,
-    registry: Option<scaffold::Config>,
-}
-
-impl Bootstrap {
-    pub fn new(options: Options) -> Self {
-        Self {
-            options,
-            facts: None,
-            path: None,
-            parent: "/".into(),
-            components: VecDeque::new(),
-            read: false,
-            registry: None,
-        }
-    }
-
-    pub fn facts(&self) -> Option<&Facts> {
-        self.facts.as_ref()
-    }
-
-    pub fn next(&self) -> Result<Progress> {
-        let Some(facts) = &self.facts else {
-            return Ok(Progress::Observe(Request::Context));
-        };
-        if let Some(registry) = &self.registry {
-            return Ok(Progress::Ready(Box::new(facts.input(&self.options, registry.clone())?)));
-        }
-        if self.read {
-            return Ok(Progress::Observe(Request::Registry {
-                path: self.path.clone().expect("registry path"),
-            }));
-        }
-        Ok(Progress::Observe(Request::Entry {
-            parent: self.parent.clone(),
-            name: self.components.front().expect("registry component").clone(),
-        }))
-    }
-
-    fn missing(&mut self) -> Result<()> {
-        self.registry = Some(scaffold::Config::parse(self.path.as_deref(), None)?);
-        Ok(())
-    }
-
-    fn skip_parent_components(&mut self) {
-        while self.components.front().is_some_and(|part| part == "..") && self.components.len() > 1 {
-            self.parent.push(self.components.pop_front().unwrap());
-        }
-    }
-
-    pub fn supply(&mut self, reply: Reply) -> Result<()> {
-        match (self.next()?, reply) {
-            (Progress::Observe(Request::Context), Reply::Context(facts)) => {
-                ensure!(facts.cwd.is_absolute(), "target cwd must be absolute");
-                self.path = facts.registry_path(&self.options);
-                self.facts = Some(facts);
-                if let Some(path) = &self.path {
-                    for part in path.components() {
-                        match part {
-                            Component::Normal(name) => self.components.push_back(name.to_owned()),
-                            Component::ParentDir => self.components.push_back("..".into()),
-                            Component::RootDir | Component::CurDir => {}
-                            _ => bail!("unsupported target registry path: {path:?}"),
-                        }
-                    }
-                    ensure!(!self.components.is_empty(), "registry path names a directory: {path:?}");
-                    ensure!(
-                        self.components.back().is_none_or(|part| part != ".."),
-                        "registry path names a parent directory: {path:?}"
-                    );
-                    self.skip_parent_components();
-                } else {
-                    self.missing()?;
-                }
-            }
-            (Progress::Observe(Request::Entry { .. }), Reply::Entry(entry)) => {
-                let Some(entry) = entry else {
-                    return self.missing();
-                };
-                let entry = entry.checked()?;
-                if entry.dangling() {
-                    return self.missing();
-                }
-                let component = self.components.pop_front().expect("pending component");
-                if self.components.is_empty() {
-                    self.read = true;
-                } else {
-                    ensure!(
-                        entry.directory(),
-                        "registry path component is not a directory: {:?}",
-                        self.parent.join(component.clone())
-                    );
-                    self.parent.push(component);
-                    self.skip_parent_components();
-                }
-            }
-            (Progress::Observe(Request::Registry { .. }), Reply::Registry(text)) => {
-                self.registry = Some(scaffold::Config::parse(self.path.as_deref(), Some(&text))?);
-            }
-            (pending, reply) => bail!("setup reply {reply:?} does not answer {pending:?}"),
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn facts() -> Facts {
-        Facts {
-            cwd: "/target/invocation".into(),
-            uid: 4321,
-            environment: [
-                ("HOME", "/target/home"),
-                ("TTA_ROOT", "target-projects"),
-                ("TTA_TMUX", "./bin/tmux"),
-                ("TTA_SOCKET_PATH", "target.sock"),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.into(), value.into()))
-            .collect(),
-        }
-    }
-
-    #[test]
-    fn target_precedence_and_new_terminal_identity_never_use_local_context() {
-        let facts = facts();
-        let options = Options::builder().argument("work".into()).build();
-        let registry = scaffold::Config::parse(None, None).unwrap();
-        let input = facts.input(&options, registry.clone()).unwrap();
-        assert_eq!(input.roots, vec![PathBuf::from("/target/invocation/target-projects")]);
-        assert_eq!(input.socket.path, Path::new("/target/invocation/target.sock"));
-        assert_eq!(input.program, "/target/invocation/./bin/tmux");
-        assert_eq!(input.client_mode, ClientMode::Attach);
-        let options = Options::builder()
-            .argument("work".into())
-            .roots(vec!["explicit".into()])
-            .socket(socket::Selection::Name("chosen".into()))
-            .program("chosen-tmux".into())
-            .scaffold("false".into())
-            .build();
-        let input = facts.input(&options, registry).unwrap();
-        assert_eq!(input.roots, vec![PathBuf::from("/target/invocation/explicit")]);
-        assert_eq!(input.socket.path, Path::new("/tmp/tmux-4321/chosen"));
-        assert_eq!(input.program, "chosen-tmux");
-    }
-
-    #[test]
-    fn plural_roots_use_only_target_facts_and_explicit_layer_replaces_the_list() {
-        let mut facts = facts();
-        facts.environment.insert("TTA_ROOTS".into(), r#"["second", "/target/first"]"#.into());
-        let registry = scaffold::Config::parse(None, None).unwrap();
-        let options = Options::builder().argument("work".into()).build();
-        assert_eq!(
-            facts.input(&options, registry.clone()).unwrap().roots,
-            vec![PathBuf::from("/target/invocation/second"), "/target/first".into()]
-        );
-        facts.environment.insert("TTA_ROOTS".into(), "invalid".into());
-        assert!(facts.input(&options, registry.clone()).is_err());
-        let explicit = Options::builder().argument("work".into()).roots(vec!["chosen".into()]).build();
-        assert_eq!(
-            facts.input(&explicit, registry.clone()).unwrap().roots,
-            vec![PathBuf::from("/target/invocation/chosen")]
-        );
-        facts.environment.clear();
-        assert!(facts.input(&options, registry).unwrap().roots.is_empty());
-    }
-
-    #[test]
-    fn registry_prelude_is_inspectable_and_wrong_replies_cannot_advance_it() {
-        let options = Options::builder()
-            .argument("work".into())
-            .registry_path("/target/missing/config.toml".into())
-            .build();
-        let mut bootstrap = Bootstrap::new(options);
-        assert!(bootstrap.supply(Reply::Registry(String::new())).is_err());
-        assert!(matches!(bootstrap.next().unwrap(), Progress::Observe(Request::Context)));
-        bootstrap.supply(Reply::Context(facts())).unwrap();
-        assert!(matches!(bootstrap.next().unwrap(), Progress::Observe(Request::Entry { parent, name }) if parent == Path::new("/") && name == "target"));
-        bootstrap.supply(Reply::Entry(Some(Entry { kind: b'd', referent: b'd' }))).unwrap();
-        bootstrap.supply(Reply::Entry(None)).unwrap();
-        assert!(matches!(bootstrap.next().unwrap(), Progress::Ready(_)));
-        assert!(bootstrap.supply(Reply::Entry(None)).is_err());
-    }
-
-    #[test]
-    fn target_prefix_precedence_and_explicit_shared_policy_survive_input_lowering() {
-        let mut facts = facts();
-        facts.environment.insert("TTA_SATELLITE_PREFIX".into(), "remote-".into());
-        let registry = scaffold::Config::parse(None, None).unwrap();
-        let input = facts.input(&Options::builder().argument("work".into()).build(), registry.clone()).unwrap();
-        assert_eq!(input.satellite_prefix, "remote-");
-        assert_eq!(input.grouped, None);
-        assert_eq!(input.client_mode, ClientMode::Attach);
-        let input = facts
-            .input(
-                &Options::builder()
-                    .argument("work".into())
-                    .satellite_prefix("chosen-".into())
-                    .grouped(false)
-                    .build(),
-                registry.clone(),
-            )
-            .unwrap();
-        assert_eq!(input.satellite_prefix, "chosen-");
-        assert_eq!(input.grouped, Some(false));
-        facts.environment.insert("TTA_SATELLITE_PREFIX".into(), String::new());
-        assert_eq!(
-            facts
-                .input(&Options::builder().argument("work".into()).build(), registry)
-                .unwrap()
-                .satellite_prefix,
-            "_"
-        );
-    }
-
     #[test]
     fn setup_preserves_literal_values_and_rejects_executable_environment_names() {
         let setup = TargetSetup::builder()
@@ -529,8 +127,7 @@ mod tests {
                 value: Some("/target/quote' $;\n".into()),
             }])
             .build();
-        let source = setup.shell_command("printf ok").unwrap();
-        assert!(source.contains(" -l -i -c "));
+        assert!(setup.shell_command("printf ok").unwrap().contains(" -l -i -c "));
         let bad = TargetSetup::builder()
             .environment(vec![Environment {
                 name: "PATH; touch x".into(),

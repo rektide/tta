@@ -65,7 +65,7 @@ impl WorkspaceCatalog {
         let mut ids = std::collections::BTreeSet::new();
         let mut names = std::collections::BTreeSet::new();
         for session in inventory.sessions() {
-            crate::resolve::validate_name(&session.name).map_err(EntryError::InventoryName)?;
+            crate::validation::validate_name(&session.name).map_err(EntryError::InventoryName)?;
             if !ids.insert(session.id) || !names.insert(&session.name) {
                 return Err(EntryError::Inventory("duplicate session ID or literal name".into()));
             }

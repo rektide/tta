@@ -10,6 +10,40 @@ use tta_launcher::entry::{context, protocol::*, registry};
 
 use super::{Guard, Observer};
 
+#[cfg(feature = "native")]
+fn absent_server(error: &tmax::error::OperationError) -> bool {
+    use tmax::error::OperationError;
+    match error {
+        OperationError::ServerConnection { source, .. } => matches!(source.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused),
+        OperationError::Rejected(diagnostic) => {
+            diagnostic.return_code == Some(1) && !diagnostic.truncated && diagnostic.body.is_empty() && diagnostic.stderr == b"no sessions\n"
+        }
+        _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    #[test]
+    fn absence_classification_never_hides_permission_or_protocol_errors() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::NotFound,
+            ErrorKind::ConnectionRefused,
+            ErrorKind::PermissionDenied,
+            ErrorKind::TimedOut,
+        ] {
+            let error = tmax::error::OperationError::ServerConnection {
+                socket_path: "/private/tmux".into(),
+                source: Error::from(kind),
+            };
+            assert_eq!(super::absent_server(&error), matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused));
+        }
+        assert!(!super::absent_server(&tmax::error::OperationError::Io(Error::from(ErrorKind::NotFound))));
+        assert!(!super::absent_server(&tmax::error::OperationError::Engine("bad protocol".into())));
+    }
+}
+
 pub trait Sessions {
     fn inventory(&mut self, program: &OsStr, socket: &Path) -> Result<SessionInventory>;
 }
@@ -61,7 +95,7 @@ impl Sessions for SessionBackend {
                 let _ = program;
                 match tmax::endpoint::Tmux::new().socket_path(socket).query(tmax::query::Sessions::new()) {
                     Ok(sessions) => Ok(SessionInventory::Present(sessions.into_iter().map(Into::into).collect())),
-                    Err(error) if crate::backend::absent_server(&error) => Ok(if matches!(error, tmax::error::OperationError::Rejected(_)) {
+                    Err(error) if absent_server(&error) => Ok(if matches!(error, tmax::error::OperationError::Rejected(_)) {
                         SessionInventory::Present(Vec::new())
                     } else {
                         SessionInventory::Absent
@@ -143,14 +177,11 @@ impl Observer for Local<'_> {
             }
             ReadKind::Sessions { endpoint, program, .. } => Observation::Sessions(self.sessions.inventory(program, &endpoint.socket)?),
             ReadKind::Projects { root, filter, .. } => {
-                let mut inventory = crate::resolve::project_inventory(root, filter)?;
+                let mut inventory = super::filesystem::project_inventory(root, filter)?;
                 inventory.entries.sort_by(|a, b| a.name.cmp(&b.name));
                 Observation::Projects(inventory)
             }
-            ReadKind::Destination { path, .. } => Observation::Destination(match crate::resolve::destination_state(path)? {
-                tta_launcher::DestinationState::Absent => DestinationEvidence::Absent,
-                tta_launcher::DestinationState::Present => DestinationEvidence::Present,
-            }),
+            ReadKind::Destination { path, .. } => Observation::Destination(super::filesystem::destination_state(path)?),
             ReadKind::GeneratorDefaults { cwd, needs } => Observation::Defaults(defaults(cwd, *needs)?),
             ReadKind::ProjectIdentity { route } => {
                 let entry = route.requested_root.join(&route.name);

@@ -167,7 +167,7 @@ pub(super) fn creation_policy(
 
 /// Validate a new-work session name against the complete selection inventory.
 pub(super) fn validate_new_session_name(selection: &WorkspaceCatalog, name: &str) -> Result<(), EntryError> {
-    crate::resolve::validate_name(name).map_err(EntryError::Discovery)?;
+    crate::validation::validate_name(name).map_err(EntryError::Discovery)?;
     if let Some(session) = selection.inventory.sessions().iter().find(|session| session.name == name) {
         return Err(EntryError::NameCollision {
             name: name.to_owned(),

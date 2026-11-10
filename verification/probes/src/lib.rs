@@ -1,119 +1,48 @@
-//! Promoted independent review witness for the SSH milestone: drive the *public* core
-//! API through a complete runner-free request -> probe -> decode -> resume
-//! loop using only std process execution. This package deliberately has no
-//! `tta-runner` dependency; if the loop needs the runner, it must fail here.
-//!
-//! Original implementation: GLM 5.3 max, ses_e8088432bffeXANRjlyh66v273,
-//! commit a65eac3a. Promotion: Sol, ses_e804f36ddffepWs5FSeXN6VDBv.
-//! Kept separate from the no-I/O supplied-facts witness in verification/core.
-//!
-//! Covered concerns:
-//! - `target::Bootstrap` walked from "/" with a symlinked component and an
-//!   interior "..", through real GNU find/stat listings;
-//! - the framed `probe::Probe` script executed and decoded via the public
-//!   `probe::Output` contract (stdlib capture, honest completeness);
-//! - `Registry` and `GeneratorDefaults` probes (no process-carrier coverage
-//!   existed; only the real SSH fixture exercised them);
-//! - contradictory local environment values overridden by target facts;
-//! - symlink ENOTDIR and non-UTF-8 registry content failing closed inside
-//!   the same loop.
+//! Independent runner-free public protocol witness. Controlled stdlib process
+//! carriers execute probes, never the exported action. Not authenticated SSH.
 #![forbid(unsafe_code)]
-
-use std::ffi::OsString;
-use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
-use anyhow::{Context as _, Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tta_command::{Expression, Handoff};
-use tta_launcher::{Selection, probe, target, workflow};
-
-struct Ran {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    status: Option<i32>,
-    complete: bool,
-}
-
-/// Stdlib-only carrier for finite, controlled fixtures. Both pipes reach real
-/// EOF and an exit code is required. This is NOT a general bounded acquisition
-/// implementation: there is no per-process deadline or memory cap. Use the
-/// runner capture API for arbitrary programs, not this verification helper.
-fn run_script(script: &str, poison: &[(&str, &str)]) -> Result<Ran> {
-    let mut command = Command::new("/bin/sh");
-    command.arg("-c").arg(script).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    for (name, value) in poison {
-        command.env(name, value);
-    }
-    let mut child = command.spawn().context("spawn stdlib probe carrier")?;
-    let mut out_pipe = child.stdout.take().expect("piped stdout");
-    let mut err_pipe = child.stderr.take().expect("piped stderr");
-    let out = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        out_pipe.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let err = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        err_pipe.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stdout = out.join().expect("stdout reader")?;
-    let stderr = err.join().expect("stderr reader")?;
-    let status = child.wait()?;
-    Ok(Ran {
-        stdout,
-        stderr,
-        status: status.code(),
-        complete: status.code().is_some(),
-    })
-}
-
-fn token() -> Result<String> {
-    let mut nonce = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut nonce)?;
-    Ok(nonce.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-/// One public-API observation: construct, emit, execute, decode. The setup
-/// is shared by probes and the final action, mirroring the runner contract.
-fn observe(setup: &target::TargetSetup, request: probe::Request, poison: &[(&str, &str)], records: &mut Vec<Value>) -> Result<probe::Decoded> {
-    let probe = probe::Probe::new(request.clone(), token()?)?;
-    let ran = run_script(&probe.shell(setup)?, poison).context("execute emitted probe")?;
-    let decoded = probe.decode(probe::Output {
-        stdout: &ran.stdout,
-        stderr: &ran.stderr,
-        status: ran.status,
-        complete: ran.complete,
-    });
-    records.push(json!({
-        "request": format!("{request:?}"),
-        "carrier_status": ran.status,
-        "complete": ran.complete,
-        "stdout_bytes": ran.stdout.len(),
-        "stderr_bytes": ran.stderr.len(),
-        "decoded": decoded.as_ref().map(|d| json!({
-            "reply": format!("{:?}", d.reply),
-            "command_status": d.diagnostics.command_status,
-            "startup_stdout_bytes": d.diagnostics.startup_stdout.len(),
-            "trailing_stdout_bytes": d.diagnostics.trailing_stdout.len(),
-            "transport_stderr_bytes": d.diagnostics.transport_stderr.len(),
-            "command_stderr_bytes": d.diagnostics.command_stderr.len(),
-        })).map_err(|e: &anyhow::Error| format!("{e:#}")),
-    }));
-    decoded
-}
+use std::{
+    ffi::OsString,
+    io::Read,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+use tta_command::{Expression, Handoff, Word};
+use tta_launcher::{
+    entry::{
+        EntryAttempt,
+        action::{EntryDecision, ExportedAction},
+        context, probe,
+        protocol::*,
+        registry,
+    },
+    target,
+};
 
 fn quote(value: impl Into<OsString>) -> Result<String> {
-    Ok(tta_command::Word::new(value)?.shell()?)
+    Ok(Word::new(value)?.shell()?)
 }
-
 fn executable(path: &Path, source: &str) -> Result<()> {
     std::fs::write(path, source)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
+const POISON: &[(&str, &str)] = &[
+    ("HOME", "/local/wrong/home"),
+    ("TTA_ROOT", "/local/wrong/root"),
+    ("TTA_ROOTS", "not-json"),
+    ("TTA_CONFIG", "/local/wrong/config"),
+    ("TTA_TMUX", "/local/wrong/tmux"),
+    ("TTA_SOCKET_PATH", "/local/wrong/socket"),
+    ("TMUX", "/local/wrong/socket,1,0"),
+    ("AUTHOR", "Local Wrong Author"),
+    ("LICENSE", "Local-Wrong-License"),
+];
+const REGISTRY: &[u8] = b"[scaffold.generators.native]\nadapter='rekon-native'\n[scaffold.generators.native.options]\ninstall=false\n[scaffold.generators.native.options.remotes]\norigin=''\ntngl=''\nvoodoo=''\n";
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -121,71 +50,48 @@ struct Fixture {
     root: PathBuf,
     invocation: PathBuf,
     tmux: PathBuf,
-    registry: PathBuf,
-    shell_argv_log: PathBuf,
+    log: PathBuf,
 }
-
-/// The registry is reached through `<base>/cfg-link/../tta/<name>` where
-/// `cfg-link` is a symlink to `home/.config`: the walk must cross a symlinked
-/// component, an interior "..", and ordinary components from "/" down.
-fn shell_source(log: &Path, home: &Path, root: &Path, socket: &Path, registry: &Path, tmux: &Path, invocation: &Path) -> Result<String> {
-    Ok(format!(
-        "#!/bin/sh\nprintf '%s\\000' \"$@\" >> {log}\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n[ \"$#\" -eq 2 ] || exit 91\nshift\nprintf 'startup chatter\\n'\nprintf 'startup diagnostic\\n' >&2\nexport HOME={home} TTA_ROOT={root} TTA_SOCKET_PATH={socket} TTA_CONFIG={registry} TTA_TMUX={tmux} LICENSE=Apache-2.0\nunset TMUX TMUX_PANE TTA_SOCKET_NAME TTA_SCAFFOLD AUTHOR XDG_CONFIG_HOME\ncd -P {invocation} || exit $?\nexec /bin/sh -c \"$1\"\n",
-        log = quote(log)?,
-        home = quote(home)?,
-        root = quote(root)?,
-        socket = quote(socket)?,
-        registry = quote(registry)?,
-        tmux = quote(tmux)?,
-        invocation = quote(invocation)?,
-    ))
-}
-
-/// Owned scratch root for runner-free fixtures: `TTA_TEST_TMPDIR` overrides;
-/// `/tmp/opencode` when the current user can create directories there; the
-/// system temp directory otherwise. Each fixture makes its own private
-/// uniquely named directory below this root.
-fn scratch_root() -> std::path::PathBuf {
-    if let Some(path) = std::env::var_os("TTA_TEST_TMPDIR").filter(|value| !value.is_empty()) {
-        return path.into();
-    }
-    if tempfile::Builder::new().prefix("tta-scratch-probe-").tempdir_in("/tmp/opencode").is_ok() {
-        return "/tmp/opencode".into();
-    }
-    std::env::temp_dir()
-}
-
 impl Fixture {
-    fn new(shell_name: &str, registry_name: &str, registry_bytes: &[u8]) -> Result<Self> {
-        let directory = tempfile::Builder::new().prefix("tta-ssh-regress-").tempdir_in(scratch_root())?;
+    fn new(bytes: &[u8]) -> Result<Self> {
+        let root = std::env::var_os("TTA_TEST_TMPDIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let directory = tempfile::Builder::new().prefix("tta-runner-free-").tempdir_in(root)?;
         let base = directory.path();
-        let root = base.join("target projects ' #;");
-        let invocation = base.join("invocation dir");
+        let root = base.join("projects ' #;");
+        let invocation = base.join("invocation");
         let home = base.join("home");
-        std::fs::create_dir_all(&root)?;
-        std::fs::create_dir_all(&invocation)?;
-        std::fs::create_dir_all(home.join(".config/tta"))?;
+        for path in [&root, &invocation, &home.join(".config"), &home.join("tta")] {
+            std::fs::create_dir_all(path)?;
+        }
         std::fs::write(
             home.join(".gitconfig"),
             "[user]\n name = Witness Git Author\n email = witness@example.invalid\n",
         )?;
-        // cfg-link -> home/.config, so cfg-link/.. resolves to home and the
-        // registry physically lives at home/tta/<name>.
         std::os::unix::fs::symlink("home/.config", base.join("cfg-link"))?;
-        std::fs::create_dir_all(home.join("tta"))?;
-        let registry = base.join("cfg-link/../tta").join(registry_name);
-        std::fs::write(home.join("tta").join(registry_name), registry_bytes)?;
+        let registry = base.join("cfg-link/../tta/config.toml");
+        std::fs::write(home.join("tta/config.toml"), bytes)?;
         let tmux = base.join("fake-tmux");
-        let socket = base.join("tmux.sock");
-        let shell_argv_log = base.join("shell-argv");
         executable(
             &tmux,
-            "#!/bin/sh\nsocket=\nprev=\nfor arg in \"$@\"; do\n if [ \"$prev\" = -S ]; then socket=$arg; fi\n prev=$arg\ndone\nprintf 'no server running on %s\\n' \"$socket\" >&2\nexit 1\n",
+            "#!/bin/sh\nprev=; socket=\nfor arg do [ \"$prev\" != -S ] || socket=$arg; prev=$arg; done\nprintf 'no server running on %s\\n' \"$socket\" >&2\nexit 1\n",
         )?;
-        let shell = base.join(shell_name);
-        executable(&shell, &shell_source(&shell_argv_log, &home, &root, &socket, &registry, &tmux, &invocation)?)?;
+        let shell = base.join("selected-shell");
+        let log = base.join("shell-argv");
+        executable(
+            &shell,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\000' \"$@\" >> {log}\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n[ \"$#\" -eq 2 ] || exit 91\nshift\nprintf 'startup chatter\\n'\nprintf 'startup diagnostic\\n' >&2\nexport HOME={home} TTA_ROOT={root} TTA_SOCKET_PATH={socket} TTA_CONFIG={registry} TTA_TMUX={tmux} LICENSE=Apache-2.0\nunset TTA_ROOTS TMUX TMUX_PANE TTA_SOCKET_NAME TTA_SCAFFOLD TTA_SATELLITE_PREFIX AUTHOR XDG_CONFIG_HOME\ncd -P {invocation} || exit $?\nexec /bin/sh -c \"$1\"\n",
+                log = quote(&log)?,
+                home = quote(&home)?,
+                root = quote(&root)?,
+                socket = quote(base.join("socket").into_os_string())?,
+                registry = quote(registry.into_os_string())?,
+                tmux = quote(&tmux)?,
+                invocation = quote(&invocation)?
+            ),
+        )?;
         let setup = target::TargetSetup::builder()
-            .shell(shell.to_str().context("UTF-8 fixture path")?.into())
+            .shell(shell.to_str().context("UTF-8 fixture")?.into())
             .login(true)
             .interactive(true)
             .build();
@@ -195,46 +101,123 @@ impl Fixture {
             root,
             invocation,
             tmux,
-            registry,
-            shell_argv_log,
+            log,
         })
-    }
-
-    /// Records of the selected shell's argv, NUL-delimited, four words each
-    /// (flags, -c, carrier). The shell appends one record per invocation.
-    fn shell_records(&self) -> Result<usize> {
-        let bytes = std::fs::read(&self.shell_argv_log).unwrap_or_default();
-        let words = bytes.split(|b| *b == 0).filter(|word| !word.is_empty()).count();
-        ensure!(words % 4 == 0, "shell argv log is not four words per invocation");
-        Ok(words / 4)
-    }
-
-    fn shell_argv_flat(&self) -> Result<Vec<String>> {
-        let bytes = std::fs::read(&self.shell_argv_log).unwrap_or_default();
-        Ok(bytes
-            .split(|b| *b == 0)
-            .filter(|word| !word.is_empty())
-            .map(|word| String::from_utf8_lossy(word).into_owned())
-            .collect())
     }
 }
 
-/// Contradictory local values that must never become target facts.
-const POISON: &[(&str, &str)] = &[
-    ("HOME", "/local/wrong/home"),
-    ("XDG_CONFIG_HOME", "/local/wrong/xdg"),
-    ("TTA_ROOT", "/local/wrong/root"),
-    ("TTA_CONFIG", "/local/wrong/config.toml"),
-    ("TTA_TMUX", "/local/wrong/tmux"),
-    ("TTA_SOCKET_PATH", "/local/wrong/socket"),
-    ("TTA_SOCKET_NAME", "/local/wrong/name"),
-    ("TTA_SCAFFOLD", "local-wrong-generator"),
-    ("TMUX", "/local/wrong/socket,1,0"),
-    ("AUTHOR", "Local Wrong Author"),
-    ("LICENSE", "Local-Wrong-License"),
-];
+/// Only finite controlled fixture programs use this stdlib carrier. Readers
+/// reach actual EOF; no deadline/cap is promised (arbitrary hosts use runner).
+fn observe(request: &ReadRequest, step: Option<registry::Step>, records: &mut Vec<Value>) -> Result<probe::Reply> {
+    let mut nonce = [0; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut nonce)?;
+    let token = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let probe = match step.clone() {
+        Some(step) => probe::Probe::registry(request.clone(), step, token)?,
+        None => probe::Probe::new(request.clone(), token)?,
+    };
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", &probe.shell()?])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (name, value) in POISON {
+        command.env(name, value);
+    }
+    let mut child = command.spawn()?;
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        stdout.read_to_end(&mut b).map(|_| b)
+    });
+    let err = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        stderr.read_to_end(&mut b).map(|_| b)
+    });
+    let stdout = out.join().unwrap()?;
+    let stderr = err.join().unwrap()?;
+    let status = child.wait()?.code();
+    let decoded = probe.decode(tta_launcher::probe::Output {
+        stdout: &stdout,
+        stderr: &stderr,
+        status,
+        complete: status.is_some(),
+    });
+    records.push(json!({"request": format!("{request:?}"), "step": format!("{step:?}"), "carrier_status": status, "complete": status.is_some(), "stdout_bytes": stdout.len(), "stderr_bytes": stderr.len(), "decoded": decoded.as_ref().map(|d| json!({"reply": format!("{:?}", d.reply), "command_status": d.diagnostics.command_status, "startup_stdout_bytes": d.diagnostics.startup_stdout.len(), "transport_stderr_bytes": d.diagnostics.transport_stderr.len()})).map_err(|e| format!("{e:#}"))}));
+    Ok(decoded?.reply)
+}
 
-const REGISTRY: &[u8] = b"[scaffold]\ndefault = 'native'\n[scaffold.generators.native]\nadapter = 'rekon-native'\n[scaffold.generators.native.options]\ninstall = false\n[scaffold.generators.native.options.remotes]\norigin = ''\ntngl = ''\nvoodoo = ''\n";
+#[derive(Debug)]
+struct ObservationCause(anyhow::Error);
+impl std::fmt::Display for ObservationCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+impl std::error::Error for ObservationCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+fn drive(fixture: &Fixture, selector: &str, records: &mut Vec<Value>) -> Result<ExportedAction> {
+    let mut attempt = EntryAttempt::acquire(context::Acquisition {
+        scope: context::Scope {
+            origin: context::Origin::Ssh {
+                host: "runner-free-target".into(),
+                setup: fixture.setup.clone(),
+            },
+            cwd: None,
+        },
+        overrides: context::Overrides::default(),
+        intent: EntryIntent::selector(selector),
+        default_scaffold: "default".into(),
+    })?;
+    loop {
+        match attempt.waiting() {
+            Waiting::Read(request) => {
+                let request = request.clone();
+                let result = (|| -> Result<Observation> {
+                    if let ReadKind::Registry { path } = &request.kind {
+                        let mut task = registry::Task::new(path.clone())?;
+                        while let Some(step) = task.step().cloned() {
+                            let probe::Reply::Registry(reply) = observe(&request, Some(step.clone()), records)? else {
+                                bail!("wrong registry decode")
+                            };
+                            task.accept(&step, reply)?;
+                        }
+                        Ok(Observation::Registry(task.result().context("registry unfinished")?.clone()))
+                    } else {
+                        let probe::Reply::Observation(observation) = observe(&request, None, records)? else {
+                            bail!("wrong observation decode")
+                        };
+                        Ok(observation)
+                    }
+                })()
+                .map_err(|e| ObservationFailure {
+                    source: Box::new(ObservationCause(e)),
+                });
+                attempt.advance(Event::Observed(ReadCompletion { request, result }))?;
+            }
+            Waiting::Planned(plan) => {
+                ensure!(
+                    plan.target().cwd() == fixture.invocation && plan.target().program() == fixture.tmux,
+                    "local target values leaked"
+                );
+                ensure!(
+                    matches!(plan.decision(), EntryDecision::ScaffoldAndStart { destination, .. } if destination.path == fixture.root.join(selector)),
+                    "wrong destination"
+                );
+                attempt.advance(Event::Deliver(Delivery::Export))?;
+            }
+            Waiting::Finished(AttemptOutcome::Exported(action)) => return Ok(*action.clone()),
+            Waiting::Finished(AttemptOutcome::Stopped { cause, .. }) => return Err(anyhow::Error::new(cause.clone())),
+            _ => bail!("unexpected attempt boundary: {}", attempt.snapshot().leaf),
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -246,248 +229,103 @@ pub struct Report {
     pub checks: Vec<Value>,
     pub observations: Vec<Value>,
 }
-
-/// Execute the controlled local fixtures and return evidence even on failure.
-/// Requires a usable fixture scratch root (`TTA_TEST_TMPDIR`, `/tmp/opencode`,
-/// or the system temp directory), POSIX sh, GNU find/stat and Git. No SSH or
-/// real tmux is contacted; only the emitted observations run, never the launch action.
 pub fn exercise() -> Report {
     let mut report = Report {
-        kind: "runner-free public-API probe round-trip (stdlib process carrier, not SSH)",
+        kind: "runner-free retained actor and emitted probe round-trip; process carrier, not SSH",
         success: false,
         failure: None,
         action_executed: false,
-        tools: Vec::new(),
-        checks: Vec::new(),
-        observations: Vec::new(),
+        tools: vec![],
+        checks: vec![],
+        observations: vec![],
     };
     let result = (|| -> Result<()> {
         for program in ["/usr/bin/find", "/usr/bin/stat", "/usr/bin/git"] {
-            let output = Command::new(program)
-                .arg("--version")
-                .output()
-                .with_context(|| format!("required tool {program}"))?;
-            report.tools.push(json!({"program": program, "status": output.status.code(), "stdout": String::from_utf8_lossy(&output.stdout), "stderr": String::from_utf8_lossy(&output.stderr)}));
-            ensure!(output.status.success(), "required tool {program} failed");
+            let out = Command::new(program).arg("--version").output()?;
+            ensure!(out.status.success(), "required tool {program}");
+            report.tools.push(json!({"program": program, "stdout": String::from_utf8_lossy(&out.stdout)}));
         }
-        run(&mut report.checks, &mut report.observations)
+        let fixture = Fixture::new(REGISTRY)?;
+        let action = drive(&fixture, "witness-create", &mut report.observations)?;
+        report
+            .checks
+            .push(json!({"check": "one retained actor owns context, registry through symlink/interior '..', selection and fresh binding"}));
+        let argv = std::fs::read(&fixture.log)?;
+        let words: Vec<_> = argv.split(|b| *b == 0).filter(|b| !b.is_empty()).collect();
+        ensure!(
+            words.len() == report.observations.len() * 4 && words.chunks(4).all(|w| w[0] == b"-l" && w[1] == b"-i" && w[2] == b"-c"),
+            "selected shell not applied once per probe"
+        );
+        report
+            .checks
+            .push(json!({"check": "each probe executes selected login/interactive shell exactly once", "probe_count": report.observations.len()}));
+        let decoded = &report.observations[0]["decoded"]["Ok"];
+        ensure!(
+            decoded["startup_stdout_bytes"] == 16 && decoded["transport_stderr_bytes"] == 19,
+            "startup channels lost"
+        );
+        report
+            .checks
+            .push(json!({"check": "startup stdout/stderr stay distinct from framed payload and command diagnostics"}));
+        let steps = action.expression().steps();
+        let writes: Vec<_> = steps.iter().filter_map(|s| if let Expression::Write(w) = s { Some(w) } else { None }).collect();
+        ensure!(writes.len() == 1, "generator materialization duplicated");
+        let package: Value = serde_json::from_str(writes[0].contents.as_os_str().to_str().unwrap())?;
+        ensure!(
+            package["author"] == "Witness Git Author" && package["license"] == "Apache-2.0",
+            "local defaults leaked"
+        );
+        ensure!(!fixture.root.join("witness-create").exists(), "export mutated project");
+        report
+            .checks
+            .push(json!({"check": "target physical destination and actual Git/license defaults materialize once; export remains observation-only"}));
+        let context::Origin::Ssh { setup, .. } = &action.action().binding_requests()[0].scope.origin else {
+            unreachable!()
+        };
+        ensure!(
+            setup.shell_command(&action.expression().shell(Handoff::Exec)?)?.contains("new-session"),
+            "frozen handoff lost action"
+        );
+        report
+            .checks
+            .push(json!({"check": "bound target setup constructs one frozen handoff, without execution"}));
+        std::fs::write(fixture.root.join("blocker"), "x")?;
+        std::os::unix::fs::symlink("blocker/child", fixture.root.join("blocked"))?;
+        std::fs::create_dir(fixture.root.join("decoy ' $;\n wit"))?;
+        let error = drive(&fixture, "blocked", &mut report.observations).unwrap_err();
+        ensure!(format!("{error:#}").contains("cannot inspect symlink"), "ENOTDIR hidden: {error:#}");
+        report
+            .checks
+            .push(json!({"check": "symlink ENOTDIR stops actor before scaffold, not absence", "error": format!("{error:#}")}));
+        let bad = Fixture::new(b"\xff\xfe[scaffold]\n")?;
+        let error = drive(&bad, "anything", &mut report.observations).unwrap_err();
+        ensure!(format!("{error:#}").contains("utf-8"), "registry decode cause lost: {error:#}");
+        report
+            .checks
+            .push(json!({"check": "non-UTF-8 registry fails the bounded acquisition before session selection", "error": format!("{error:#}")}));
+        ensure!(fixture.directory.path().exists(), "fixture unexpectedly gone");
+        Ok(())
     })();
     report.success = result.is_ok();
-    report.failure = result.err().map(|error| format!("{error:#}"));
+    report.failure = result.err().map(|e| format!("{e:#}"));
     report
-}
-
-fn drive_setup(
-    setup: &mut target::TargetSetup,
-    options: target::Options,
-    poison: &[(&str, &str)],
-    records: &mut Vec<Value>,
-) -> Result<(workflow::Input, target::Facts)> {
-    let mut bootstrap = target::Bootstrap::new(options);
-    let input = loop {
-        match bootstrap.next()? {
-            target::Progress::Ready(input) => break *input,
-            target::Progress::Observe(request) => {
-                let reply = match observe(setup, probe::Request::Setup(request), poison, records)?.reply {
-                    probe::Reply::Setup(reply) => reply,
-                    probe::Reply::Workflow(_) => bail!("setup probe decoded a workflow reply"),
-                };
-                bootstrap.supply(reply)?;
-                if let Some(facts) = bootstrap.facts() {
-                    // Freeze the observed physical cwd for every later probe
-                    // and the final action, as the runner contract requires.
-                    setup.cwd = Some(facts.cwd.clone());
-                }
-            }
-        }
-    };
-    Ok((input, bootstrap.facts().expect("ready bootstrap").clone()))
-}
-
-fn run(checks: &mut Vec<Value>, records: &mut Vec<Value>) -> Result<()> {
-    let fixture = Fixture::new("selected-shell", "config.toml", REGISTRY)?;
-    let mut setup = fixture.setup.clone();
-    let (input, facts) = drive_setup(
-        &mut setup,
-        target::Options::builder()
-            .argument("witness-create".into())
-            .default_scaffold("default".into())
-            .build(),
-        POISON,
-        records,
-    )?;
-    ensure!(facts.cwd == fixture.invocation, "target cwd disagreement: {:?}", facts.cwd);
-    let home = fixture.directory.path().join("home");
-    ensure!(facts.value("HOME") == home.to_str(), "local HOME leaked: {:?}", facts.value("HOME"));
-    ensure!(facts.value("TTA_ROOT") == Some(fixture.root.to_str().expect("UTF-8")), "local TTA_ROOT leaked");
-    ensure!(
-        facts.value("TTA_CONFIG") == Some(fixture.registry.to_str().expect("UTF-8")),
-        "registry path disagreement: {:?}",
-        facts.value("TTA_CONFIG")
-    );
-    ensure!(facts.value("TTA_TMUX") == Some(fixture.tmux.to_str().expect("UTF-8")), "local TTA_TMUX leaked");
-    checks.push(json!({"check": "runner-free Bootstrap: context probe and registry walk through a symlinked component and interior '..'; contradictory local values never became facts"}));
-
-    // Probe counts are structural, not absolute: the setup registry walk
-    // follows the fixture's path depth, while the launch workflow itself uses
-    // exactly one Sessions + Projects + Destination + GeneratorDefaults probe,
-    // and every probe maps to exactly one selected-shell invocation.
-    let setup_probes = records.len();
-    let setup_shells = fixture.shell_records()?;
-    ensure!(setup_shells == setup_probes, "setup probes {setup_probes} vs selected shells {setup_shells}");
-    let mut workflow = workflow::Workflow::new(input.clone())?;
-    let prepared = loop {
-        match workflow.next()? {
-            workflow::Progress::Ready(prepared) => break *prepared,
-            workflow::Progress::Observe(request) => {
-                let reply = match observe(&setup, probe::Request::Workflow(request), POISON, records)?.reply {
-                    probe::Reply::Workflow(reply) => reply,
-                    probe::Reply::Setup(_) => bail!("workflow probe decoded a setup reply"),
-                };
-                workflow.supply(reply)?;
-            }
-        }
-    };
-    let records_after_happy = records.len();
-    ensure!(records_after_happy - setup_probes == 4, "unexpected workflow probe count: {}", records_after_happy - setup_probes);
-    ensure!(
-        fixture.shell_records()? == records.len(),
-        "unexpected selected-shell invocations: {}",
-        fixture.shell_records()?
-    );
-    let argv = fixture.shell_argv_flat()?;
-    ensure!(
-        argv.chunks(4)
-            .all(|record| record.first().is_some_and(|w| w == "-l") && record.get(1).is_some_and(|w| w == "-i") && record.get(2).is_some_and(|w| w == "-c")),
-        "selected-shell login/interactive argv not applied to every probe"
-    );
-    checks.push(json!({"check": "every probe ran the selected shell with -l -i -c; exactly 12 probes (setup 8, workflow 4)"}));
-
-    let first = &records[0];
-    let decoded = &first["decoded"]["Ok"];
-    ensure!(
-        !decoded.is_null() && decoded["startup_stdout_bytes"] == json!(16) && decoded["transport_stderr_bytes"] == json!(19),
-        "framing lost the deliberate startup chatter: {first}"
-    );
-    checks.push(json!({"check": "startup stdout and startup stderr stayed distinct diagnostic channels through the public decode"}));
-
-    let expected_directory = fixture.root.join("witness-create");
-    let Selection::Create { directory, .. } = &prepared.selection else {
-        bail!("wrong selection: {:?}", prepared.selection)
-    };
-    ensure!(directory == &expected_directory, "create directory: {directory:?}");
-    let steps = prepared.plan.expression().steps();
-    let writes: Vec<_> = steps.iter().filter_map(|s| if let Expression::Write(w) = s { Some(w) } else { None }).collect();
-    ensure!(writes.len() == 1, "expected one package.json write");
-    let package: Value = serde_json::from_str(writes[0].contents.as_os_str().to_str().expect("UTF-8 package"))?;
-    ensure!(
-        package["author"] == "Witness Git Author" && package["license"] == "Apache-2.0",
-        "local author/license leaked: {package}"
-    );
-    let commands: Vec<_> = steps
-        .iter()
-        .filter_map(|s| if let Expression::Command(c) = s { Some(c) } else { None })
-        .collect();
-    let tmux = commands.last().expect("tmux command");
-    ensure!(tmux.program.as_os_str() == fixture.tmux, "tmux program disagreement: {:?}", tmux.program);
-    let args: Vec<_> = tmux.args.iter().map(|a| a.as_os_str().to_str().expect("UTF-8 arg")).collect();
-    let socket = fixture.directory.path().join("tmux.sock").to_str().expect("UTF-8").to_owned();
-    ensure!(args.contains(&"-S") && args.contains(&socket.as_str()), "socket disagreement: {args:?}");
-    ensure!(
-        args.contains(&"new-session") && args.contains(&"witness-create"),
-        "cold creation command missing: {args:?}"
-    );
-    let last_cd = steps.iter().rev().find_map(|s| if let Expression::ChangeDir(cd) = s { Some(cd) } else { None });
-    ensure!(
-        last_cd.is_some_and(|cd| cd.path.as_os_str() == expected_directory.as_os_str()),
-        "ChangeDir ignored the target project directory"
-    );
-    checks
-        .push(json!({"check": "runner-free Create plan: target registry generator, target Git/license defaults, target socket/program and literal directory"}));
-
-    let handoff = setup.launch(&prepared, Handoff::Exec)?;
-    ensure!(handoff.starts_with("/bin/sh -c "), "prepared launch is not a single selected-shell command");
-    ensure!(handoff.contains("new-session"), "prepared launch lost the tmux action");
-    checks.push(json!({"check": "TargetSetup::launch renders the prepared plan as one selected-shell handoff"}));
-
-    // ENOTDIR: a symlink whose referent has a non-directory ancestor must
-    // stop the same loop; find's %Y=N cannot masquerade as absence here.
-    std::fs::write(fixture.root.join("blocker"), "x")?;
-    std::os::unix::fs::symlink("blocker/child", fixture.root.join("blocked"))?;
-    std::fs::create_dir(fixture.root.join("decoy ' $;\n wit"))?;
-    let mut blocked_input = input.clone();
-    blocked_input.argument = "blocked".into();
-    let mut workflow = workflow::Workflow::new(blocked_input)?;
-    let blocked = loop {
-        match workflow.next()? {
-            workflow::Progress::Ready(_) => bail!("blocked selection became ready"),
-            workflow::Progress::Observe(request) => match observe(&setup, probe::Request::Workflow(request), POISON, records) {
-                Ok(decoded) => match decoded.reply {
-                    probe::Reply::Workflow(reply) => workflow.supply(reply)?,
-                    probe::Reply::Setup(_) => bail!("workflow probe decoded a setup reply"),
-                },
-                Err(error) => break error,
-            },
-        }
-    };
-    ensure!(
-        blocked.to_string().contains("cannot inspect symlink"),
-        "ENOTDIR classification missing: {blocked:#}"
-    );
-    // The blocked workflow added exactly its Sessions + failed Projects probe;
-    // the one-shell-per-probe invariant still holds.
-    ensure!(
-        fixture.shell_records()? == records.len(),
-        "blocked run broke the one-selected-shell-per-probe invariant: {} shells vs {} probes",
-        fixture.shell_records()?,
-        records.len()
-    );
-    checks.push(json!({"check": "symlink ENOTDIR fails the runner-free loop closed inside Projects decode; hostile decoy names parsed without poisoning", "error": format!("{blocked:#}")}));
-
-    // Non-UTF-8 registry content must fail the Registry decode, not parse.
-    let bad = Fixture::new("selected-shell-badcfg", "bad-config.toml", b"\xff\xfe[scaffold]\ndefault = 'native'\n")?;
-    let mut bad_setup = bad.setup.clone();
-    let mut bad_records = Vec::new();
-    let bad_error = drive_setup(
-        &mut bad_setup,
-        target::Options::builder()
-            .argument("anything".into())
-            .default_scaffold("default".into())
-            .build(),
-        POISON,
-        &mut bad_records,
-    )
-    .expect_err("non-UTF-8 registry became ready");
-    ensure!(
-        bad_error.to_string().contains("utf-8"),
-        "non-UTF-8 registry failed without a decode reason: {bad_error:#}"
-    );
-    checks.push(json!({"check": "non-UTF-8 registry text fails the Registry decode inside the loop", "error": format!("{bad_error:#}")}));
-    for record in bad_records.drain(..) {
-        records.push(record);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn public_core_round_trip_reaches_launch_commands_without_runner() {
+    fn public_core_reaches_freshly_bound_export_without_runner() {
         let report = super::exercise();
         assert!(report.success, "{report:#?}");
         assert_eq!(report.checks.len(), 7);
         assert!(!report.action_executed);
-        assert!(
-            report
-                .observations
-                .iter()
-                .any(|r| r["decoded"]["Err"].as_str().is_some_and(|e| e.contains("cannot inspect symlink")))
-        );
-        assert!(
-            report
-                .observations
-                .iter()
-                .any(|r| r["decoded"]["Err"].as_str().is_some_and(|e| e.contains("utf-8")))
-        );
+        for cause in ["cannot inspect symlink", "utf-8"] {
+            assert!(
+                report
+                    .observations
+                    .iter()
+                    .any(|r| r["decoded"]["Err"].as_str().is_some_and(|e| e.contains(cause)))
+            );
+        }
     }
 }

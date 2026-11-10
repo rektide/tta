@@ -3,10 +3,14 @@
 //! SSH acceptance live in the commissioned verification matrix, not here.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "scaffold-rekon")]
+use std::path::PathBuf;
 
 use anyhow::Result;
-use tta_command::{Assignment, Handoff, Word};
+use tta_command::Handoff;
+#[cfg(feature = "scaffold-rekon")]
+use tta_command::{Assignment, Word};
 use tta_launcher::entry::{EntryAttempt, protocol::*};
 use tta_runner::execute::{self, local};
 use tta_runner::observe::local as read_local;
@@ -20,6 +24,7 @@ fn executable(path: &Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+#[cfg(any(feature = "native", feature = "scaffold-rekon"))]
 fn effects_journal(snapshot: &AttemptSnapshot) -> Vec<&EffectRequest> {
     snapshot
         .journal
@@ -106,6 +111,7 @@ fn terminal_block_execution_runs_the_complete_cli_queue_once() {
 }
 
 #[test]
+#[cfg(feature = "native")]
 fn failed_native_create_keeps_earlier_receipts_and_never_falls_back() {
     let temp = scratch();
     let tmux = temp.path().join("tmux");
@@ -209,7 +215,7 @@ fn drive_scaffold(attempt: &mut EntryAttempt, environment: &[Assignment], sessio
     execute::drive(attempt, &mut observer, &mut executor, delivery, Handoff::Run).unwrap()
 }
 
-#[cfg(feature = "scaffold-rekon")]
+#[cfg(all(feature = "scaffold-rekon", feature = "native"))]
 #[test]
 fn native_scaffold_generates_then_checks_before_one_native_create() {
     let (temp, bin, root, events) = scaffold_fixture(false);

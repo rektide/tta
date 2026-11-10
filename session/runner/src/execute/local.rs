@@ -1,6 +1,7 @@
 //! Local effect execution: foreground generation, produced-directory
 //! verification, one native detached creation and the terminal action. No
 //! effect is retried and no CLI fallback follows a dispatched native create.
+#[cfg(feature = "native")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +23,7 @@ pub enum EffectError {
         source: std::io::Error,
     },
     #[error("native session creation failed; it may already have taken effect: {0}")]
+    #[cfg(feature = "native")]
     Native(#[from] tmax::error::OperationError),
     #[error("native session creation was acknowledged, but its output could not be forwarded: {0}")]
     Output(#[from] std::io::Error),
