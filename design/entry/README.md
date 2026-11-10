@@ -17,7 +17,7 @@ sources:
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Record parent-conveyed human approval and connect the implemented internal kernel and discovery handoff
   - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
-    title: Parent conveys explicit approval and commissions sequential implementation tickets
+    title: Parent commissions the approved implementation and compares the three independent post-cutover kubeless inquiries
   - resource: opencode://ses_e3db9cabaffeSpjYjLIjvqdbPO
     title: Connect the newly commissioned destination redesign to previous stages without changing their delivery standing
   - resource: /design/entry/redesign0.gpt6a.md
@@ -59,6 +59,34 @@ surface.
   [catalog](/doc/entry/catalog-graph.md) structural graphs, and
   [entry verification guide](/verification/entry/README.md) describe the
   delivered 0.8.0 architecture.
+
+## Kubeless backbone inquiry after cutover
+
+Ticket `tta-entry-attempt-kubeless` commissioned three independent assessments
+of the delivered architecture. Research completion is not an adoption decision.
+
+- [Astra high](kubeless/backbone0.gpt6a.md): retain the chart; compare a narrow
+  native execution adapter against a direct helper if further evidence is wanted.
+- [Terra xhigh](kubeless/backbone0.gpt61t.md): investigate a leaf host seam;
+  custody is a stronger contingent alternative for different owner/driver lifetimes,
+  with native result ownership requiring an explicit integration design.
+- [G](kubeless/backbone0.glm53m.md): retain the current architecture and prefer
+  a law-mapping review over integration; includes an executed foreign-consumer
+  leaf spike, not a prototype of the actual tta attempt.
+
+All three recommend retaining EntryAttempt/xmachines now. They disagree about
+the value of the next experiment: Astra/Terra propose a real-attempt adapter
+comparison; G sees insufficient present benefit. No report establishes a general
+incompatibility between kubeless custody and a bounded attempt: a coherent owner
+replacement must be evaluated separately from adding a competing ledger. Nor
+does a working leaf spike prove integration gain. The compared kubeless revisions
+differ; any future experiment must pin one common reviewed revision.
+
+Parent recommendation: no production dependency change on this evidence. If
+further exploration is selected, compare the same real EntryAttempt encounters
+through a direct native helper and a kubeless host adapter, counting ownership
+and code actually removed as well as added. Bigger adoption needs a demonstrated
+consumer requirement, such as driver replacement or retained late results.
 
 ## Earlier engine and architecture stages
 
