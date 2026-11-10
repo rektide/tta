@@ -1,5 +1,3 @@
-#![cfg(feature = "entry-internal")]
-
 use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
 
 use tta_launcher::entry::{EntryAttempt, catalog, context, protocol::*};

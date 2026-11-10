@@ -1,5 +1,3 @@
-#![cfg(feature = "entry-internal")]
-
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 

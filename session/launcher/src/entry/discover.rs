@@ -189,9 +189,8 @@ pub(super) fn refuse_undeclared_destination(
 ) -> Result<(), EntryError> {
     if contract == crate::scaffold::DestinationContract::AdapterDecided && configured_roots.len() > 1 {
         return Err(EntryError::Generator(anyhow::anyhow!(
-            "generator {:?} uses the external {:?} adapter, whose script ignores the selected project root; refusing to create across configured roots {configured_roots:?}: use a rekon-native generator (which honors the root), configure a single root, or change the rekon script's destination contract",
-            generator.name,
-            generator.adapter
+            "generator {:?} uses the external rekon adapter, whose script ignores the selected project root; refusing to create across configured roots {configured_roots:?}: use a rekon-native generator (which honors the root), configure a single root, or change the rekon script's destination contract",
+            generator.name
         )));
     }
     Ok(())

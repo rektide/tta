@@ -74,6 +74,8 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Report {
     pub target: Option<BoundTarget>,
+    /// The satellite prefix the resolved policy used for alias projection.
+    pub satellite_prefix: String,
     pub workspaces: Vec<Workspace>,
     pub projects: Vec<Project>,
     pub candidates: Vec<Candidate>,
@@ -501,6 +503,7 @@ impl CatalogQuery {
         candidates.sort_by_key(Candidate::text);
         Report {
             target: self.target.clone(),
+            satellite_prefix: self.policy.as_ref().expect("policy").intent.satellite_prefix.clone(),
             workspaces,
             projects: projects.into_values().collect(),
             candidates,

@@ -209,7 +209,9 @@ fn candidate_errors_leave_stdout_empty_and_backends_match_build_features() {
         .arg("--completion-candidates=projects")
         .output()
         .unwrap();
-    assert!(!output.status.success());
+    // Partial evidence: a failed root never certifies bare names, but it no
+    // longer kills the whole query; the failure stays visible on stderr.
+    assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot inspect project directory"));
     let backends = names(tta().arg("--completion-candidates=backends"));

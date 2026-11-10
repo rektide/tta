@@ -304,6 +304,20 @@ pub struct ExportedAction {
     pub(super) shell: String,
 }
 
+impl ExportedAction {
+    pub fn action(&self) -> &BoundAction {
+        &self.action
+    }
+    /// The complete portable CLI expression; never a native tail.
+    pub fn expression(&self) -> &Expression {
+        &self.expression
+    }
+    /// POSIX rendering with `Handoff::Run`; callers re-render for exec.
+    pub fn shell(&self) -> &str {
+        &self.shell
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -423,21 +437,13 @@ pub(super) fn native_creation(session: &BoundSession) -> Result<(Invocation, Pat
         if session.startup.len() == 1 {
             invocation = invocation.args(["/bin/sh", "-c", "exec \"$0\""]);
         }
+        // Native protocol argv carries the words raw; the CLI queue's
+        // final-semicolon escaping belongs to the CLI expression only.
         for word in &session.startup {
-            invocation = invocation.arg(&escaped(word)?);
+            invocation = invocation.arg(word.to_str().expect("native eligibility required UTF-8 startup"));
         }
     }
     Ok((invocation, session.directory.path().to_owned()))
-}
-
-/// The exact tmux argv boundary rule for one raw startup operand, in text
-/// form for the native (UTF-8-only) invocation path.
-fn escaped(word: &OsString) -> Result<String, Error> {
-    let text = word.to_str().ok_or_else(|| Error::Command(tta_command::Error::NonUtf8(word.clone())))?;
-    Ok(match text.strip_suffix(';') {
-        Some(prefix) => format!("{prefix}\\;"),
-        None => text.to_owned(),
-    })
 }
 
 /// Terminal tail after an acknowledged native creation: enter the pane

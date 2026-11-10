@@ -139,6 +139,9 @@ impl BoundTarget {
     pub fn program(&self) -> &std::ffi::OsStr {
         self.program.as_os_str()
     }
+    pub fn socket(&self) -> &crate::socket::Resolved {
+        &self.socket
+    }
     pub fn cwd(&self) -> &std::path::Path {
         &self.cwd
     }
@@ -467,13 +470,15 @@ pub enum EffectReceipt {
 
 /// Honest mutation knowledge for a stopped effect. `NotStarted` means the
 /// effect never dispatched; it is not a claim that an earlier failed
-/// generator left no residue. `Acknowledged` completion is recorded in the
-/// receipt list, not here.
+/// generator left no residue. `Acknowledged` records that the effect's
+/// mutation was applied even though a later boundary (output forwarding,
+/// handoff) failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum MutationKnowledge {
     #[default]
     NotStarted,
     MayHaveOccurred,
+    Acknowledged,
 }
 
 /// Dispatch knowledge retained across cancellation or failure: finished

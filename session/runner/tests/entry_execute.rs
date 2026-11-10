@@ -1,4 +1,3 @@
-#![cfg(feature = "entry-internal")]
 //! The thin effect driver against actual local interpreters: fake CLI
 //! programs and worker-free observers. Real tmux/terminal and authenticated
 //! SSH acceptance live in the commissioned verification matrix, not here.

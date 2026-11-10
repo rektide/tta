@@ -10,7 +10,6 @@ repository.workspace = true
 default = ["native"]
 native = ["tmax/client"]
 cli = []
-entry-internal = ["tta-launcher/entry-internal"]
 scaffold-rekon = ["tta-launcher/scaffold-rekon"]
 scaffold-rekon-native = ["tta-launcher/scaffold-rekon-native"]
 

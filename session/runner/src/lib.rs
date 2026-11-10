@@ -5,12 +5,8 @@ pub mod backend;
 pub mod capture;
 pub mod command;
 pub mod driver;
-#[cfg(feature = "entry-internal")]
-#[doc(hidden)]
 pub mod execute;
 pub mod execution;
-#[cfg(feature = "entry-internal")]
-#[doc(hidden)]
 pub mod observe;
 pub mod resolve;
 pub mod scaffold;

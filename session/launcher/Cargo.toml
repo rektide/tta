@@ -8,8 +8,6 @@ repository.workspace = true
 
 [features]
 default = []
-# Unreleased cross-crate integration surface; coordinated public cutover is later.
-entry-internal = []
 scaffold-rekon = ["dep:tta-scaffold-rekon"]
 scaffold-rekon-native = ["dep:tta-scaffold-rekon-native"]
 

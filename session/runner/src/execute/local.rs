@@ -115,7 +115,7 @@ fn check_directory(path: &Path) -> std::result::Result<EffectReceipt, EffectFail
 
 #[cfg(feature = "native")]
 fn create_native(invocation: &tmax::operation::Invocation, directory: &Path, target: &BoundTarget) -> std::result::Result<EffectReceipt, EffectFailure> {
-    tracing::info!(event = "effect.native_create", operation = "new-session-detached", socket = ?target.socket().path);
+    tracing::info!(event = "launch.native", operation = "new-session-detached", socket = ?target.socket().path);
     let endpoint = tmax::endpoint::Tmux::new().socket_path(&target.socket().path);
     // One mutation attempt: a failure here may already have applied and is
     // never retried or answered with a CLI fallback.

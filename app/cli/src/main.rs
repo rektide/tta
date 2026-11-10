@@ -14,13 +14,19 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tta_command::Handoff;
-use tta_launcher::workflow::PreparedLaunch;
-use tta_runner::execution::{ExecuteLaunch, LaunchBackend};
-use tta_runner::{backend, scaffold, socket};
+use tta_launcher::entry::{
+    EntryAttempt,
+    action::EntryDecision,
+    catalog::{self, Candidate, CatalogQuery, Input as CatalogInput},
+    context,
+    protocol::*,
+};
+use tta_runner::execute::local as execute_local;
+use tta_runner::observe::{self, local as read_local};
 
 mod environment;
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 enum Backend {
     #[cfg(feature = "native")]
     #[default]
@@ -152,6 +158,78 @@ fn print_candidates(mut names: Vec<String>) {
     }
 }
 
+/// Explicit CLI values as overrides: environment layering, whole-layer
+/// selection and defaults belong to the shared context policy alone.
+fn overrides(args: &Args) -> context::Overrides {
+    let socket = match (&args.socket_name, &args.socket_path) {
+        (Some(name), _) => Some(tta_launcher::socket::Selection::Name(name.clone())),
+        (_, Some(path)) => Some(tta_launcher::socket::Selection::Path(path.clone())),
+        _ => None,
+    };
+    context::Overrides {
+        roots: (!args.root.is_empty()).then(|| args.root.clone()),
+        socket,
+        program: args.tmux.clone(),
+        config: args.tmux_config.clone(),
+        registry: args.scaffold_config.clone(),
+        scaffold: args.scaffold.clone(),
+        satellite_prefix: args.satellite_prefix.clone(),
+    }
+}
+
+fn intent(args: &Args) -> EntryIntent {
+    EntryIntent {
+        selector: args.argument.as_deref().unwrap_or("catalog").to_owned(),
+        view: match args.group {
+            Some(true) => ViewPreference::Independent,
+            Some(false) => ViewPreference::Shared,
+            None => ViewPreference::Auto,
+        },
+        satellite_prefix: "_".into(),
+        view_directory: args.dir.clone(),
+        roots: Vec::new(),
+        session_name: args.session_name.clone(),
+        startup: args.command.clone(),
+        directory: args.dir.clone(),
+        window: match args.window_name.as_deref() {
+            Some(value) => window(value),
+            None => InitialWindow::AfterSession,
+        },
+    }
+}
+
+fn window(value: &str) -> InitialWindow {
+    match value {
+        "default" | "true" | "1" => InitialWindow::AfterSession,
+        "false" | "0" | "off" | "none" => InitialWindow::Unnamed,
+        name => InitialWindow::Named(name.to_owned()),
+    }
+}
+
+fn default_scaffold() -> String {
+    if cfg!(feature = "scaffold-by-default") { "default" } else { "false" }.into()
+}
+
+fn native_capable(backend: Backend) -> bool {
+    #[cfg(feature = "native")]
+    {
+        backend == Backend::Native
+    }
+    #[cfg(not(feature = "native"))]
+    {
+        false
+    }
+}
+
+fn session_backend(backend: Backend) -> read_local::SessionBackend {
+    match backend {
+        #[cfg(feature = "native")]
+        Backend::Native => read_local::SessionBackend::Native,
+        #[cfg(feature = "cli")]
+        Backend::Cli => read_local::SessionBackend::Cli,
+    }
+}
+
 fn main() -> Result<ExitCode> {
     let args = environment::configure(Args::parse())?;
     if args.trace.unwrap_or(false) {
@@ -169,11 +247,10 @@ fn main() -> Result<ExitCode> {
     result
 }
 
-fn run(mut args: Args) -> Result<ExitCode> {
+fn run(args: Args) -> Result<ExitCode> {
     if args.ssh.is_some() {
         return run_ssh(args);
     }
-    tta_launcher::validate_satellite_prefix(args.satellite_prefix.as_deref().unwrap_or("_"))?;
     if matches!(args.completion_candidates, Some(CompletionCandidates::Backends)) {
         print_candidates(
             Backend::value_variants()
@@ -183,172 +260,245 @@ fn run(mut args: Args) -> Result<ExitCode> {
         );
         return Ok(ExitCode::SUCCESS);
     }
-    if matches!(args.completion_candidates, Some(CompletionCandidates::Projects)) {
-        // Identity-aware inventory: every configured root with an empty filter,
-        // then the pure completion helper. A basename is offered bare only when
-        // launch could select it unambiguously; every ambiguous basename stays
-        // reachable through qualified @N/name selectors. The pure helper exposes
-        // every qualified route: the line-oriented protocol keeps menus minimal
-        // by dropping a qualified selector whose bare basename is already
-        // offered and selects the same physical project.
-        if args.root.is_empty() {
-            return Err(tta_launcher::ResolveError::MissingRoot.into());
-        }
-        let inventories = args
-            .root
-            .iter()
-            .map(|root| tta_runner::resolve::project_inventory(root, ""))
-            .collect::<Result<Vec<_>, tta_launcher::ResolveError>>()?;
-        let candidates = tta_launcher::projects::completion_candidates(&args.root, &inventories)?;
-        let bare: std::collections::BTreeSet<String> = candidates.iter().filter(|candidate| !candidate.starts_with('@')).cloned().collect();
-        print_candidates(
-            candidates
-                .into_iter()
-                .filter(|candidate| match candidate.strip_prefix('@').and_then(|selector| selector.split_once('/')) {
-                    Some((_, name)) => !bare.contains(name),
-                    None => true,
-                })
-                .collect(),
-        );
-        return Ok(ExitCode::SUCCESS);
+    if args.completion_candidates.is_some() {
+        return run_completion(args);
     }
-    let config = match &args.scaffold_config {
-        Some(path) => scaffold::load_config_from(Some(path))?,
-        None => scaffold::load_config()?,
-    };
-    if matches!(args.completion_candidates, Some(CompletionCandidates::Scaffolds)) {
-        print_candidates(config.names());
-        return Ok(ExitCode::SUCCESS);
-    }
-    let context = socket::context()?;
     let backend = args.backend.unwrap_or_default();
-    let mut tmux = args.tmux.unwrap_or_else(|| OsString::from("tmux"));
-    // Explicit relative executable/config paths belong to the invocation cwd,
-    // not the project cwd used later by the launch plan. Bare names keep PATH.
-    if tmux.as_encoded_bytes().contains(&b'/') {
-        tmux = context.cwd.join(&tmux).into_os_string();
-    }
-    args.tmux_config = args.tmux_config.map(|path| context.cwd.join(path));
-    args.dir = args.dir.map(|path| context.cwd.join(path));
-    let selection = match (args.socket_name, args.socket_path) {
-        (Some(name), _) => socket::Selection::Name(name),
-        (_, Some(path)) => socket::Selection::Path(path),
-        _ => socket::Selection::Default,
-    };
-    let socket = context.resolve(&selection)?;
-    // Inventory is allowed for another server: it never switches this client.
-    let mode = if args.completion_candidates.is_none() {
-        Some(socket::client_mode(&context, &socket.path)?)
-    } else {
-        None
-    };
-    let lookup: Box<dyn backend::SessionLookup> = match backend {
-        #[cfg(feature = "native")]
-        Backend::Native => Box::new(backend::Native {
-            endpoint: tmax::endpoint::Tmux::new().socket_path(&socket.path),
-        }),
-        #[cfg(feature = "cli")]
-        Backend::Cli => Box::new(backend::Cli {
-            program: tmux.clone(),
-            socket: socket.path.clone(),
-        }),
-    };
-    if matches!(
-        args.completion_candidates,
-        Some(CompletionCandidates::Sessions | CompletionCandidates::SessionAliases)
-    ) {
-        let prefix = args.satellite_prefix.as_deref().unwrap_or("_");
-        let sessions = lookup.sessions()?;
-        print_candidates(if matches!(args.completion_candidates, Some(CompletionCandidates::SessionAliases)) {
-            sessions
-                .iter()
-                .map(|session| tta_launcher::satellite_alias(&session.name, prefix).to_owned())
-                .collect()
-        } else {
-            tta_launcher::session_names(&sessions, prefix)
-        });
-        return Ok(ExitCode::SUCCESS);
-    }
-    let argument = args.argument.as_deref().expect("clap requires a fragment outside completion mode");
-    let mode = mode.expect("launch mode was checked before lookup");
-    tracing::info!(event = "lookup.start", backend = ?backend, socket = ?socket.path, argument);
-    // Scaffold selection: CLI > environment > compiled default posture.
-    let choice = args
-        .scaffold
-        .as_deref()
-        .unwrap_or(if cfg!(feature = "scaffold-by-default") { "default" } else { "false" });
-    // The configured root is inspected only after session matching fails.
-    let PreparedLaunch {
-        selection: resolved,
-        generator,
-        plan,
-    } = tta_runner::prepare()
-        .lookup(lookup.as_ref())
-        .argument(argument)
-        .socket(&socket)
-        .client_mode(mode)
-        .program(&tmux)
-        .roots(&args.root)
-        .maybe_session_name(args.session_name.as_deref())
-        .choice(choice)
-        .config(&config)
-        .maybe_tmux_config(args.tmux_config.as_deref())
-        .maybe_grouped(args.group)
-        .satellite_prefix(args.satellite_prefix.as_deref().unwrap_or("_"))
-        .startup(&args.command)
-        .maybe_directory(args.dir.as_deref())
-        .window_name(match args.window_name.as_deref() {
-            Some(value) => tta_launcher::WindowName::parse(value)?,
-            None => tta_launcher::WindowName::Session,
-        })
-        .call()?;
-    match &resolved {
-        tta_launcher::Selection::Existing(session) => {
-            tracing::info!(event = "resolution", decision = "existing", session_id = %session.id, session_name = %session.name)
-        }
-        tta_launcher::Selection::Project { directory, session_name, .. } => {
-            tracing::info!(event = "resolution", decision = "new", directory = ?directory, session_name = %session_name)
-        }
-        tta_launcher::Selection::Create { directory, session_name, .. } => {
-            let entry = generator.as_ref().expect("create selections require a chosen generator");
-            tracing::info!(event = "resolution", decision = "create", directory = ?directory, session_name = session_name, generator = %entry.name, adapter = %entry.adapter);
-        }
-    }
-    let operation = match (&resolved, mode) {
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) if args.group.unwrap_or(true) => "new-grouped-session-detached+attach",
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) if args.group.unwrap_or(false) => "new-grouped-session-detached+switch-client",
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Attach) => "attach-session",
-        (tta_launcher::Selection::Existing(_), tta_launcher::ClientMode::Switch) => "switch-client",
-        (tta_launcher::Selection::Project { .. }, tta_launcher::ClientMode::Attach) => "new-session+attach",
-        (tta_launcher::Selection::Project { .. }, tta_launcher::ClientMode::Switch) => "new-session-detached+switch-client",
-        (tta_launcher::Selection::Create { .. }, tta_launcher::ClientMode::Attach) => "scaffold+new-session+attach",
-        (tta_launcher::Selection::Create { .. }, tta_launcher::ClientMode::Switch) => "scaffold+new-session-detached+switch-client",
-    };
-    tracing::info!(event = "plan", operation, client_mode = ?mode);
-    if args.print_shell {
-        let handoff = if args.exec_shell { Handoff::Exec } else { Handoff::Run };
-        tracing::info!(event = "emission", handoff = ?handoff);
-        println!("{}", plan.expression().shell(handoff)?);
-        return Ok(ExitCode::SUCCESS);
-    }
-    // Reuse the caller's terminal. Successful exec never returns to Rust.
-    tracing::info!(event = "handoff", program = ?tmux, operation);
-    let launch_backend = match backend {
-        #[cfg(feature = "native")]
-        Backend::Native => LaunchBackend::Native,
-        #[cfg(feature = "cli")]
-        Backend::Cli => LaunchBackend::Cli,
-    };
-    let status = plan.execute(launch_backend, Handoff::Exec).context("tmux launch failed")?;
-    Ok(match status {
-        Some(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
-        None => ExitCode::SUCCESS,
+    let mut attempt = EntryAttempt::acquire(context::Acquisition {
+        scope: context::Scope {
+            origin: context::Origin::Local { host: "local".into() },
+            cwd: None,
+        },
+        overrides: overrides(&args),
+        intent: intent(&args),
+        default_scaffold: default_scaffold(),
     })
+    .map_err(|error| anyhow::anyhow!("invalid entry invocation: {error}"))?;
+    tracing::info!(event = "lookup.start", backend = ?backend, argument = %attempt_intent_selector(&args));
+    let mut sessions = session_backend(backend);
+    let scope = attempt_scope(&attempt)?;
+    let mut observer = read_local::Local::acquire(scope, &mut sessions).expect("local acquisition for a local attempt");
+    let delivery = if args.print_shell {
+        Delivery::Export
+    } else {
+        Delivery::Execute {
+            native: native_capable(backend),
+        }
+    };
+    // Successful exec replaces this process with the real tmux client; only
+    // shell emission distinguishes Run from Exec.
+    let handoff = if args.print_shell && !args.exec_shell { Handoff::Run } else { Handoff::Exec };
+    let mut executor = execute_local::Local::default();
+    let snapshot = tta_runner::execute::drive(&mut attempt, &mut observer, &mut executor, delivery, handoff).context("tmux launch failed")?;
+    finish(snapshot, args.print_shell, handoff)
+}
+
+fn attempt_intent_selector(args: &Args) -> &str {
+    args.argument.as_deref().unwrap_or("")
+}
+
+/// Derive the operation label from the semantic decision and bound client —
+/// no duplicate classification matrix in the frontend.
+fn operation_label(decision: &EntryDecision, via: ClientEntry) -> &'static str {
+    let inside = via == ClientEntry::SwitchWithinServer;
+    match decision {
+        EntryDecision::EnterView { .. } => {
+            if inside {
+                "switch-client"
+            } else {
+                "attach-session"
+            }
+        }
+        EntryDecision::OpenView { .. } => {
+            if inside {
+                "new-grouped-session-detached+switch-client"
+            } else {
+                "new-grouped-session-detached+attach"
+            }
+        }
+        EntryDecision::StartProject { .. } => {
+            if inside {
+                "new-session-detached+switch-client"
+            } else {
+                "new-session+attach"
+            }
+        }
+        EntryDecision::ScaffoldAndStart { .. } => {
+            if inside {
+                "scaffold+new-session-detached+switch-client"
+            } else {
+                "scaffold+new-session+attach"
+            }
+        }
+    }
+}
+
+/// Report an attempt outcome: exported shell, completed receipts (an
+/// aggregate terminal status becomes this process's exit status), or the
+/// typed stopped cause with its honest mutation knowledge. Labels come from
+/// the semantic decision, never a second classification matrix.
+fn finish(snapshot: AttemptSnapshot, print_shell: bool, handoff: Handoff) -> Result<ExitCode> {
+    let Some(outcome) = snapshot.outcome else {
+        anyhow::bail!("entry attempt ended without an outcome at {}", snapshot.leaf);
+    };
+    if let Some(plan) = &snapshot.plan {
+        // The label derives from the semantic decision; there is no second
+        // classification matrix in the frontend.
+        let (decision, session_name) = match plan.decision() {
+            EntryDecision::EnterView { view, .. } => ("existing", view.fingerprint.name.clone()),
+            EntryDecision::OpenView { work, .. } => ("existing", work.anchor.name.clone()),
+            EntryDecision::StartProject { session, .. } => ("new", session.name.clone()),
+            EntryDecision::ScaffoldAndStart { session, .. } => ("create", session.name.clone()),
+        };
+        tracing::info!(event = "resolution", decision, session_name = %session_name);
+        let operation = operation_label(plan.decision(), plan.target().client());
+        tracing::info!(event = "plan", operation, client = ?plan.target().client());
+        if print_shell {
+            tracing::info!(event = "emission", handoff = ?handoff);
+        } else {
+            tracing::info!(event = "handoff", operation);
+        }
+    }
+    match outcome {
+        AttemptOutcome::Exported(exported) => {
+            println!("{}", exported.expression().shell(handoff)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        AttemptOutcome::Completed { effects } => Ok(match effects.finished.last() {
+            Some((_, EffectReceipt::Terminal { code: Some(code) })) => ExitCode::from(*code as u8),
+            _ => ExitCode::SUCCESS,
+        }),
+        AttemptOutcome::Delegated { .. } => Ok(ExitCode::SUCCESS),
+        AttemptOutcome::Cancelled { boundary, .. } => {
+            anyhow::bail!("entry attempt cancelled at {boundary}");
+        }
+        AttemptOutcome::Stopped { cause, .. } => {
+            Err(anyhow::Error::new(Caused(cause)).context("tmux launch failed; do not replay a possibly executed mutation"))
+        }
+    }
+}
+
+/// Keep the full typed source chain in the reported error.
+struct Caused(std::sync::Arc<EntryError>);
+
+impl std::fmt::Debug for Caused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+impl std::fmt::Display for Caused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for Caused {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+fn run_completion(args: Args) -> Result<ExitCode> {
+    let backend = args.backend.unwrap_or_default();
+    let mut sessions = session_backend(backend);
+    let mut query = CatalogQuery::acquire(CatalogInput {
+        scope: context::Scope {
+            origin: context::Origin::Local { host: "local".into() },
+            cwd: None,
+        },
+        overrides: overrides(&args),
+    });
+    {
+        let scope = match query.waiting() {
+            catalog::Waiting::Read(request) => (*request.scope).clone(),
+            _ => anyhow::bail!("catalog must start with a context read"),
+        };
+        let mut observer = read_local::Local::acquire(scope, &mut sessions).expect("local acquisition for a catalog query");
+        observe::drive_reads(&mut query, &mut observer).context("completion read driver")?;
+    }
+    let report = match query.waiting() {
+        catalog::Waiting::Finished(catalog::Outcome::Report(report)) => report,
+        catalog::Waiting::Finished(catalog::Outcome::Cancelled { boundary }) => anyhow::bail!("catalog cancelled at {boundary}"),
+        _ => anyhow::bail!("catalog ended without a report"),
+    };
+    // Policy/binding errors invalidate the whole query; per-source read
+    // failures stay visible as diagnostics while successful sources still
+    // project their candidates. A failed registry source is always fatal:
+    // every completion mode shares it.
+    let registry_failed = report
+        .sources
+        .iter()
+        .any(|source| matches!(source.request.kind, ReadKind::Registry { .. }) && source.result.is_err());
+    if !report.errors.is_empty() || registry_failed {
+        for error in &report.errors {
+            eprintln!("{error:#}");
+        }
+        for source in &report.sources {
+            if let Err(error) = &source.result {
+                eprintln!("completion source failed: {error:#}");
+            }
+        }
+        anyhow::bail!("completion policy failed");
+    }
+    for source in &report.sources {
+        if let Err(error) = &source.result {
+            eprintln!("completion source failed: {error:#}");
+        }
+    }
+    match args.completion_candidates {
+        Some(CompletionCandidates::Projects) => {
+            // A bare basename is offered only when complete root evidence
+            // establishes its unique physical identity; every ambiguous name
+            // stays reachable through its qualified @N/name selector.
+            let texts: Vec<String> = report
+                .candidates
+                .iter()
+                .filter(|candidate| matches!(candidate, Candidate::Project { .. }))
+                .map(Candidate::text)
+                .collect();
+            if !report.sources.iter().any(|source| matches!(source.request.kind, ReadKind::Projects { .. })) {
+                return Err(tta_launcher::ResolveError::MissingRoot.into());
+            }
+            let bare: std::collections::BTreeSet<String> = texts.iter().filter(|text| !text.starts_with('@')).cloned().collect();
+            print_candidates(
+                texts
+                    .into_iter()
+                    .filter(|text| match text.strip_prefix('@').and_then(|selector| selector.split_once('/')) {
+                        Some((_, name)) => !bare.contains(name),
+                        None => true,
+                    })
+                    .collect(),
+            );
+        }
+        // Aliases only: the primary completion surface, so a generated
+        // satellite name never hides the workspace alias on Tab.
+        Some(CompletionCandidates::SessionAliases) => {
+            print_candidates(
+                report
+                    .workspaces
+                    .iter()
+                    .flat_map(|workspace| &workspace.views)
+                    .map(|view| tta_launcher::satellite_alias(&view.fingerprint.name, &report.satellite_prefix).to_owned())
+                    .collect(),
+            );
+        }
+        // Raw names plus aliases, matching the literal session-name surface.
+        Some(CompletionCandidates::Sessions) => {
+            print_candidates(
+                report
+                    .candidates
+                    .iter()
+                    .filter(|candidate| matches!(candidate, Candidate::View { .. } | Candidate::WorkspaceAlias { .. }))
+                    .map(Candidate::text)
+                    .collect(),
+            );
+        }
+        Some(CompletionCandidates::Scaffolds) => print_candidates(report.generators.clone()),
+        _ => unreachable!("completion dispatch checked the mode"),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_ssh(args: Args) -> Result<ExitCode> {
-    use tta_launcher::target;
-    use tta_runner::command::Execute;
     #[cfg(feature = "native")]
     if matches!(args.backend, Some(Backend::Native)) {
         anyhow::bail!("--ssh uses target tmux CLI probes and handoff, not the local native backend");
@@ -365,72 +515,77 @@ fn run_ssh(args: Args) -> Result<ExitCode> {
     let mut environment = Vec::new();
     for value in &args.target_env {
         let (name, value) = value.split_once('=').context("--target-env requires NAME=VALUE")?;
-        environment.push(target::Environment {
+        environment.push(tta_launcher::target::Environment {
             name: name.into(),
             value: Some(value.into()),
         });
     }
     for name in &args.target_unset {
-        environment.push(target::Environment {
+        environment.push(tta_launcher::target::Environment {
             name: name.clone(),
             value: None,
         });
     }
-    let setup = target::TargetSetup::builder()
-        .maybe_shell(args.target_shell)
+    let setup = tta_launcher::target::TargetSetup::builder()
+        .maybe_shell(args.target_shell.clone())
         .login(args.target_login.unwrap_or(true))
         .interactive(args.target_interactive)
         .environment(environment)
-        .maybe_cwd(args.target_cwd)
+        .maybe_cwd(args.target_cwd.clone())
         .build();
     let ssh = tta_runner::ssh::Ssh::builder()
-        .destination(args.ssh.expect("SSH branch"))
-        .maybe_program(args.ssh_program)
-        .options(args.ssh_option)
+        .destination(args.ssh.clone().expect("SSH branch"))
+        .maybe_program(args.ssh_program.clone())
+        .options(args.ssh_option.clone())
         .build();
-    let socket = match (args.socket_name, args.socket_path) {
-        (Some(name), _) => Some(socket::Selection::Name(name)),
-        (_, Some(path)) => Some(socket::Selection::Path(path)),
-        _ => None,
-    };
-    let options = target::Options::builder()
-        .argument(args.argument.expect("fragment required"))
-        .maybe_roots((!args.root.is_empty()).then(|| args.root.clone()))
-        .maybe_socket(socket)
-        .maybe_program(args.tmux)
-        .maybe_registry_path(args.scaffold_config)
-        .maybe_scaffold(args.scaffold)
-        .default_scaffold(if cfg!(feature = "scaffold-by-default") { "default" } else { "false" }.into())
-        .maybe_config(args.tmux_config)
-        .maybe_session_name(args.session_name)
-        .maybe_grouped(args.group)
-        .maybe_satellite_prefix(args.satellite_prefix)
-        .startup(args.command)
-        .maybe_directory(args.dir)
-        .window_name(match args.window_name.as_deref() {
-            Some(value) => tta_launcher::WindowName::parse(value)?,
-            None => tta_launcher::WindowName::Session,
+    let mut attempt = EntryAttempt::acquire(context::Acquisition {
+        scope: context::Scope {
+            origin: context::Origin::Ssh {
+                host: args.ssh.clone().expect("SSH branch"),
+                setup,
+            },
+            cwd: None,
+        },
+        // Target-local defaults come only from target facts; pre-defaulted
+        // local CLI values never enter remote overrides.
+        overrides: overrides(&args),
+        intent: intent(&args),
+        default_scaffold: default_scaffold(),
+    })
+    .map_err(|error| anyhow::anyhow!("invalid entry invocation: {error}"))?;
+    let mut observer = observe::ssh::Ssh::acquire(ssh, attempt_scope(&attempt)?, limits)?;
+    let handoff = if args.exec_shell { Handoff::Exec } else { Handoff::Run };
+    let snapshot = tta_runner::execute::ssh::drive(&mut attempt, &mut observer, args.print_shell, handoff).map_err(|error| {
+        error.context(if args.print_shell {
+            "SSH planning failed"
+        } else {
+            "SSH terminal handoff failed; do not replay a possibly executed target mutation"
         })
-        .build();
-    let prepared = match tta_runner::ssh::prepare(ssh, setup, options, limits) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if let Err(write_error) = tta_runner::ssh::write_diagnostics(std::io::stderr().lock(), &error.observations) {
-                // Reporting failure must not replace the original planning cause.
-                eprintln!("cannot write SSH probe diagnostics: {write_error}");
-            }
-            return Err(error.into());
+    })?;
+    observe::ssh::write_diagnostics(std::io::stderr().lock(), &observer.observations)?;
+    match snapshot.outcome {
+        Some(AttemptOutcome::Exported(exported)) => {
+            // The exported artifact is the TARGET-side block; the printed
+            // command is the resolved local SSH invocation carrying it.
+            let target = snapshot.target.as_ref().expect("bound target");
+            let command = observer.terminal_command(target, exported.expression())?;
+            println!("{}", tta_command::Expression::from(command).shell(handoff)?);
+            Ok(ExitCode::SUCCESS)
         }
-    };
-    tta_runner::ssh::write_diagnostics(std::io::stderr().lock(), &prepared.observations)?;
-    if args.print_shell {
-        println!("{}", prepared.shell(if args.exec_shell { Handoff::Exec } else { Handoff::Run })?);
-        return Ok(ExitCode::SUCCESS);
+        Some(AttemptOutcome::Completed { effects }) => Ok(match effects.finished.last() {
+            Some((_, EffectReceipt::Terminal { code: Some(code) })) => ExitCode::from(*code as u8),
+            _ => ExitCode::SUCCESS,
+        }),
+        Some(AttemptOutcome::Stopped { cause, .. }) => Err(anyhow::Error::new(Caused(cause)).context("SSH planning stopped before mutation")),
+        Some(AttemptOutcome::Cancelled { boundary, .. }) => anyhow::bail!("entry attempt cancelled at {boundary}"),
+        Some(AttemptOutcome::Delegated { .. }) => Ok(ExitCode::SUCCESS),
+        None => anyhow::bail!("SSH attempt ended without an outcome at {}", snapshot.leaf),
     }
-    let status = tta_command::Expression::from(prepared.command()?)
-        .execute(Handoff::Exec)
-        .context("SSH terminal handoff failed; do not replay a possibly executed target mutation")?;
-    Ok(status
-        .map(|status| ExitCode::from(status.code().unwrap_or(1) as u8))
-        .unwrap_or(ExitCode::SUCCESS))
+}
+
+fn attempt_scope(attempt: &EntryAttempt) -> Result<context::Scope> {
+    match attempt.waiting() {
+        Waiting::Read(request) => Ok((*request.scope).clone()),
+        _ => anyhow::bail!("acquisition must start with a context read"),
+    }
 }
