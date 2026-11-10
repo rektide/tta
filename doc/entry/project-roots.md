@@ -6,7 +6,10 @@ resource: /doc/entry/project-roots.md
 status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-09
+updated: {by: "model:zai-coding-plan/glm-5.3#max", at: 2026-11-10}
 sources:
+  - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
+    title: Rebind the root contract's progression section to the 0.8.0 owned-attempt chart after the cutover
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Establish the commissioned multi-root contract and core/API slice before surface integration
   - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
@@ -125,12 +128,15 @@ Generator planning and mutation retain their existing short-circuit boundaries.
 
 ## Progression and diagrams
 
-The [entry graph](/doc/entry/README.md#input-state-machine) keeps its eight stages.
-The projects stage supplies **one root inventory per visit**; resolve requests the
-next still-needed root before selecting any project or destination. A qualified
-selector needs only one visit. The repeated existing `projects → resolve →
-projects` route needs no additional state or event. Native paths, inventory and
-provenance never enter machine serialization.
+The [entry chart](/doc/entry/README.md#the-executable-chart) owns this
+progression since the 0.8.0 cutover: `select.project_scope` parses the
+optional `@N/` qualification, `select.projects_read` supplies **one root
+inventory per visit** and reenters on its remaining-root summary until every
+required slot is observed, and `select.projects_rank` applies the guarded
+physical ranking. A qualified selector needs only one visit. The repeated
+read/reentry route is an explicit self-transition in the executable chart, not
+a resolver loop. Native paths, inventory and provenance never enter machine
+serialization.
 
 The existing argument-filtered observation policy is preserved: launch inventories
 inspect matching basenames, while completion requests an empty filter. Physical
