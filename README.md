@@ -6,10 +6,12 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-09, by: "model:zai-coding-plan/glm-5.3#max" }
+updated: { at: 2026-11-10, by: "model:zai-coding-plan/glm-5.3#max" }
 sources:
   - resource: opencode://ses_e3e1e7340ffeqbKYojX8Zvxx4L
     title: Complete multi-root CLI/environment/completion integration, external-rekon boundary, SSH acceptance and configurable fixture scratch for tta-project-roots
+  - resource: opencode://ses_e3d4bcd7dfferOAqdJlG648aqj
+    title: Cut the CLI and term-preserver over to semantic entry attempts with machine-owned execution effects; full real-terminal matrix and worker-free loopback SSH planning verified
   - resource: opencode://ses_e3e3170d4ffeij7U00lUlwaZg7
     title: Establish ordered-root core/API and physical provenance at 0.7.0; document the still-pending CLI/completion integration
   - resource: opencode://ses_e3e371b6affeGKQKZ8BQx0AGtt
@@ -122,7 +124,7 @@ board; closed tickets remain the delivery history behind each row.
 | **Open another view; switch work** | Outside entry gives [independent window selection](#how-we-use-tmux) over shared processes; explicit shared selection; orphan aliases, custom prefix and last-view survival | Guarded inside switching (`tta-launch-backends-switching`) and input-origin research (`tta-launch-backends-input-origin`) are separate open work |
 | **Create and start a project** | Configured [scaffold-on-miss](#scaffolding-missing-projects) with named adapters and native generator options; literal startup argv/cwd; [initial window naming](#grouped-satellites-startup-argv-and-initial-directory) | Delivered; a future generator need is a new bounded ticket |
 | **Enter work on another host** | [SSH target-local observation](#ssh-targets) and real terminal handoff — the target needs tmux, not installed tta | Remote-carrier and socket-tunnel siblings are optional directions pending a consumer-grounded relevance decision, not requirements of shipped SSH |
-| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — pure supplied-facts launcher, optional runner, semantic plans; adopted by term-preserver with explicit caller grouping | The engine port and architecture review are complete; no further ticket exists just for visibility |
+| **Embed the same entry policy** | [Reusable Rust pieces](#reusable-pieces) — the owned entry attempt from context binding through effects, driven by the CLI, SSH and term-preserver's embedded call sites with explicit caller grouping | Old preparation loops behind those call sites are retired by the open cutover ticket's deletion landing; the entry protocol is the production owner as of the cutover checkpoint |
 | **Inspect and execute a launch plan** | [POSIX shell snapshots](#shell-output); literal command expressions; native/CLI [execution boundaries](#which-operations-use-tmax); [tracing](#endpoint-and-client-options) | Deferred workflow compilation remains a possible later commission, not a promise of `--print-shell` |
 
 Grouping, configuration, naming and matching are features within these

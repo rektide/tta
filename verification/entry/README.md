@@ -9,6 +9,8 @@ date: 2026-11-09
 sources:
   - resource: opencode://ses_e3d6e664fffewNf1Zskfd1w5gU
     title: Extend verification through machine-owned context, shared local/SSH interpreters, poison isolation and read-only catalogs
+  - resource: opencode://ses_e3d4bcd7dfferOAqdJlG648aqj
+    title: Add effect-lifecycle driver verification and cutover-stage loopback/real-terminal command coverage
   - resource: opencode://ses_e3d9d71bfffe3f2KznncOc1djO
     title: Implement and exercise the internal existing-work kernel without replay or legacy resolver calls
   - resource: opencode://ses_e3d8804a3ffez4iETRd6llQTnL
@@ -34,6 +36,7 @@ Run from the tta checkout:
 ```sh
 cargo nextest run -p tta-launcher --all-features -E 'test(entry::)'
 cargo nextest run -p tta-launcher --no-default-features -E 'test(entry::)'
+TTA_TEST_TMPDIR=.test-agent/entry-cutover cargo nextest run -p tta-runner --all-features --test entry_execute
 cargo clippy -p tta-launcher -p tta-runner --all-targets --all-features --no-deps -- -D warnings
 cargo fmt -p tta-launcher -p tta-runner --check
 python3 verification/entry/graph.py --check
