@@ -6,8 +6,10 @@ resource: /README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#xhigh
 date: 2026-10-19
-updated: { at: 2026-11-10, by: "model:zai-coding-plan/glm-5.3#max" }
+updated: { at: 2026-11-10, by: "model:openai/gpt-6-astra" }
 sources:
+  - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
+    title: Make the delivered backbone and session-resolution diagrams prominent and connected to executable detail
   - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
     title: Promote the guide's reusable API, matching diagram and capability map to the 0.8.0 owned-attempt interfaces
   - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
@@ -114,6 +116,43 @@ directly or render as POSIX shell.
 **Go deeper:** [Configuration](#environment-configuration) · [SSH](#ssh-targets) ·
 [Matching](#matching-and-failure-behavior) · [Shell plans](#shell-output) ·
 [Rust pieces](#reusable-pieces) · [Verification](#runtime-verification)
+
+**Architecture:** [Backbone](#architecture-at-a-glance) ·
+[Attempt lifecycle](doc/entry/README.md#backbone-lifecycle) ·
+[Resolve a unique session](doc/entry/README.md#guarded-session-resolution) ·
+[Full executable chart](doc/entry/attempt-graph.md)
+
+## Architecture at a glance
+
+**One retained attempt owns entry from discovery through terminal handoff.**
+The CLI and embedded callers drive the same protocol; local and SSH hosts answer
+its requests rather than running separate selection policies.
+
+```mermaid
+flowchart LR
+    callers["CLI / embedded callers"] --> attempt["EntryAttempt<br/>retained xmachines chart<br/>selection → plan → binding → effects"]
+    attempt -->|pure decisions| domain["Native Rust domain functions<br/>workspace / view / project"]
+    domain -->|typed results| attempt
+    attempt -->|correlated read requests| observers["Local / SSH observers"]
+    observers -->|facts or typed failures| attempt
+    attempt -->|started / finished effect protocol| executors["Local / SSH executors"]
+    executors -->|receipts or uncertainty| attempt
+    attempt --> result["Export / completion / delegation / stop"]
+    completion["Completion callers"] --> catalog["CatalogQuery<br/>separate read-only chart"]
+    catalog <-->|same observation vocabulary| observers
+```
+
+The chart owns **when**; native domain functions determine **what**; hosts perform
+**I/O**. Fresh binding checks the chosen work without selecting a replacement.
+Completion shares discovery but cannot dispatch mutations. Successful terminal
+`exec` replaces the process; it does not return proof of attachment to the machine.
+
+Read the [backbone lifecycle](doc/entry/README.md#backbone-lifecycle), then zoom into
+[unique-session resolution](doc/entry/README.md#guarded-session-resolution).
+The full [attempt](doc/entry/attempt-graph.md) and
+[catalog](doc/entry/catalog-graph.md) Mermaid charts are generated from their
+executable definitions and freshness-checked; these smaller overview diagrams
+explain ownership and progression.
 
 ## What tta can do
 

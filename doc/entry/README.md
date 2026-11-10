@@ -6,8 +6,10 @@ resource: /doc/entry/README.md
 status: implemented
 author: model:openai/gpt-6.1-sol#high
 date: 2026-11-06
-updated: {by: "model:zai-coding-plan/glm-5.3#max", at: 2026-11-10}
+updated: {by: "model:openai/gpt-6-astra", at: 2026-11-10}
 sources:
+  - resource: opencode://ses_e4e2be9c6ffe1NOXcKTwKGp6fj
+    title: Add a prominent lifecycle overview and diagram reading map; align resolution guards with their native owners
   - resource: opencode://ses_e3cf482d5ffeyD5hefdVDZGmbe
     title: Promote the maintained entry account to the 0.8.0 owned-attempt architecture with the guarded-resolution explanation and generated structural graphs
   - resource: opencode://ses_e3d19979bffe2Eu6JnXnb11i7H
@@ -54,6 +56,50 @@ observers perform its reads; executors interpret exactly the effect it dispatche
 Observers provide facts; selection and planning perform no I/O; execution alone
 crosses the mutation boundary. The literal input fragment is never rewritten
 into a guessed project name.
+
+**Diagram reading map:** [Backbone lifecycle](#backbone-lifecycle) →
+[Unique-session resolution](#guarded-session-resolution) →
+[Full generated attempt chart](attempt-graph.md).
+The [read-only catalog chart](catalog-graph.md) covers completion separately;
+the [main guide's ownership diagram](/README.md#architecture-at-a-glance) shows
+how callers, the machine, native domain functions and hosts fit together.
+
+## Backbone lifecycle
+
+This is a hand-maintained overview of the production chart, using its state
+names and collapsing internal reads/directives. The
+[generated chart](attempt-graph.md) expands every state and ordered transition.
+
+```mermaid
+flowchart TD
+    bind_target["bind_target<br/>Acquire context and registry; settle target policy"] --> sessions["select.sessions_read / sessions_rank<br/>Observe sessions; require unique match"]
+    sessions -->|unique workspace| prepare_view["prepare_view<br/>EnterView or OpenView"]
+    sessions -->|empty| projects["select.project_scope / projects_read / projects_rank<br/>Observe required roots; require unique physical project"]
+    projects -->|unique project| prepare_start["prepare_start<br/>StartProject"]
+    projects -->|empty| prepare_create["prepare_create<br/>Creation policy and absence guards<br/>Validate adapter → required defaults → materialize once"]
+    prepare_view --> planned["planned<br/>Semantic decision and provenance; no mutation"]
+    prepare_start --> planned
+    prepare_create --> planned
+    planned -->|Deliver: Export or Execute| bind_action["bind_action<br/>Fresh sessions and operation-specific identity/absence<br/>Check chosen target; bind action without reranking"]
+    bind_action -->|Export| exported["exported<br/>Frozen portable expression; no execution"]
+    bind_action -->|Execute| run["run<br/>Choose bound shape; dispatch effects<br/>requested → in-flight → result"]
+    run --> completed["completed<br/>Returned receipts"]
+    run -->|transfer undispatched terminal| delegated["delegated<br/>Caller owns terminal action"]
+    run -.->|failure / cancellation| stopped["stopped<br/>Typed cause and retained mutation knowledge"]
+```
+
+**Guards precede continuation.** Ambiguity or failed observation stops; neither
+is an empty result authorizing project creation. Errors/cancellation can end any
+active stage; the diagram shows the execution exit explicitly because prior
+effects may already have occurred. The generated graph exposes the shared exits
+and per-effect substates. Successful process replacement does not return a
+`completed` acknowledgement; no retry, rollback or automatic cleanup is implied.
+
+The resolution box is expanded in the [focused flowchart](#guarded-session-resolution).
+The [fresh-binding](#fresh-binding-and-delivery) and
+[effect-outcome](#effects-and-outcomes) sections explain the later boundaries.
+
+### Implementation and history
 
 The [approved redesign](/design/entry/redesign0.gpt6a.md) is this architecture;
 the [cutover receipt](/design/entry/cutover1.gpt61sol.md) records the coordinated
@@ -187,14 +233,15 @@ are ordinary Rust; the error guard finishes **before** the function emits
 
 ```mermaid
 flowchart TD
-    input["resolve_session(catalog, intent) -> Result&lt;Option&lt;WorkspaceMatch&gt;&gt;"] --> validate["Validate inventory: names, unique IDs/names, printable groups"]
-    validate --> literal{"Exact raw session name?"}
+    input["Complete session observation"] --> validate["WorkspaceCatalog::from_read<br/>Validate names, unique IDs/names, printable groups"]
+    validate --> resolve["resolve_session(catalog, intent)<br/>Result: optional WorkspaceMatch or typed error"]
+    resolve --> literal{"Exact raw session name?"}
     literal -->|yes| exact["workspace::select pins that view<br/>MatchReason::Literal"]
     literal -->|no| rank["workspace::select: literal substring filter over raw names<br/>plus one-step prefix aliases; minimum Unicode length"]
     rank --> collapse["Collapse tied winners by actual group / singleton identity;<br/>deterministic anchor by name then canonical ID"]
-    collapse --> guard{"Ambiguous?"}
-    guard -->|yes| error["Err(EntryError::Ambiguous { tied candidates })<br/>chart stops; neither unique nor empty is sent"]
-    guard -->|no| option{"Unique match present?"}
+    collapse --> guard["Uniqueness guard: reject tied distinct workspaces"]
+    guard -.->|ambiguous| error["Typed error; chart stops<br/>neither unique nor empty is sent"]
+    guard --> option{"Unique match present?"}
     option -->|yes| selected["WorkspaceMatch: work key, anchor fingerprint,<br/>view ref, matched_by, issuing request"]
     option -->|no| missing["Ok(None) -> chart continues to project scope"]
     exact --> selected
